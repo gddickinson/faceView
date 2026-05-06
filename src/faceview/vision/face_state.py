@@ -86,12 +86,14 @@ def face_state_to_params(s: FaceState) -> FaceParams:
     """Translate a FACS-based :class:`FaceState` into renderer-ready FaceParams.
 
     Mappings (informed by FACS interpretations):
-    - smile     = AU12 (corner pull) − AU15 (corner drop)
-                  + 0.3·AU20 (stretch widens mouth horizontally)
-                  − 0.5·AU22 (funneler tightens corners inward)
-    - jaw_open  = 0.35·AU25 (lips part, small) + AU26 (jaw drop)
-    - brow_raise = (AU1+AU2)/2 (raise) − AU4 (lower)
-    - eye_open   = 1 − blink_amount, then boosted by AU5 (lid raise)
+
+    - ``smile``  = AU12 (corner pull) − AU15 (corner drop) + 0.3·AU20 (stretch)
+    - ``jaw_open`` = 0.35·AU25 (lips part) + AU26 (jaw drop)
+    - ``brow_raise`` = (AU1+AU2)/2 − AU4 (master coarse fallback)
+    - ``eye_open``  = 1 − blink_amount, slightly boosted by AU5
+    - The AU-grade fields (``mouth_pucker``, ``cheek_raise``, …) carry the
+      full per-AU intensities through to the renderer for distinct viseme
+      shapes and expression cues.
     """
     smile = s.AU12 - s.AU15 + 0.3 * s.AU20 - 0.5 * s.AU22
     jaw_open = max(0.0, 0.35 * s.AU25 + s.AU26)
@@ -110,4 +112,14 @@ def face_state_to_params(s: FaceState) -> FaceParams:
         pupil_y=_clip(s.eye_look_y),
         skin_hue=s.skin_hue,
         background=s.background,
+        # AU-grade
+        mouth_pucker=max(0.0, min(1.0, s.AU22)),
+        mouth_stretch=max(0.0, min(1.0, s.AU20)),
+        cheek_raise=max(0.0, min(1.0, s.AU6)),
+        nose_wrinkle=max(0.0, min(1.0, s.AU9)),
+        upper_lid_raise=max(0.0, min(1.0, s.AU5)),
+        inner_brow_raise=max(0.0, min(1.0, s.AU1)),
+        outer_brow_raise=max(0.0, min(1.0, s.AU2)),
+        brow_lower=max(0.0, min(1.0, s.AU4)),
+        lip_corner_drop=max(0.0, min(1.0, s.AU15)),
     )
