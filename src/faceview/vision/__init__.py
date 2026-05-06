@@ -11,6 +11,10 @@ from faceview.vision.emotion import EmotionAnalyzer
 from faceview.vision.mouth import MouthAnalyzer
 from faceview.vision.sim_face import FaceParams, render_face
 from faceview.vision.sim_camera import SimCameraWorker
+from faceview.vision.face_state import AU_IDS, FaceState, face_state_to_params
+from faceview.vision.avatar import TalkingAvatar
+from faceview.vision.speech import SpeechEngine
+from faceview.vision.expressions import apply_expression, expression_names
 
 __all__ = [
     "CameraWorker",
@@ -21,4 +25,11 @@ __all__ = [
     "FaceParams",
     "render_face",
     "SimCameraWorker",
+    "FaceState",
+    "AU_IDS",
+    "face_state_to_params",
+    "TalkingAvatar",
+    "SpeechEngine",
+    "apply_expression",
+    "expression_names",
 ]

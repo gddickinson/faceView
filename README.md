@@ -27,9 +27,41 @@ What faceView actually ships under "lip reading" is **mouth-activity + viseme de
 
 The upgrade path to real VSR (Auto-AVSR converted to ONNX and run via `onnxruntime` CoreML EP) is documented in `INTERFACE.md` and is purely additive — drop in a new `vision/visual_asr.py` worker that subscribes to `FRAME` events.
 
-## The simulated face
+## Talking avatar — face for Claude
 
-So you can exercise the full pipeline without a webcam, faceView ships a parametric face renderer. `FaceParams` exposes `yaw`, `pitch`, `eye_open`, `jaw_open`, `smile`, `brow_raise`, `pupil_x`, `pupil_y`, `skin_hue`. A `SimCameraWorker` animates these and posts `FRAME` events identical in shape to the real `CameraWorker`'s output, plus matching `PRESENCE / MOUTH_ACTIVITY / EMOTION / IDENTITY` events.
+faceView ships a FACS-based talking avatar (`vision.avatar.TalkingAvatar`) that can be driven by any text. It's wired to the LLM so that when Claude finishes a reply, the avatar mouths the words. Set `FACEVIEW_AVATAR=1` and the camera panel becomes Claude's face.
+
+<p align="center">
+  <img src="docs/images/avatar_talking.gif" alt="avatar speaking" width="60%">
+</p>
+
+*Avatar saying "Hi! I'm faceView. I can see, hear, and talk." in real time. The mouth is driven by viseme targets from a phoneme timeline; idle blinks, breathing, and saccadic gaze drift run continuously.*
+
+<p align="center">
+  <img src="docs/images/avatar_strip.png" alt="avatar frame strip" width="100%">
+</p>
+
+*Six frames sampled across the same utterance — closed-mouth `PP / REST` between syllables, `AA` and `OH` vowels reach into open-mouth shapes.*
+
+<p align="center">
+  <img src="docs/images/avatar_monitor.png" alt="avatar shown in the GUI camera panel" width="100%">
+</p>
+
+*The GUI mid-utterance: avatar in the camera panel, the chat showing Claude's reply, status pills tracking emotion / viseme / presence. This is what `FACEVIEW_AVATAR=1 faceview` looks like during conversation.*
+
+### How it works
+
+1. **FACS Action Units** — 12 standard AUs (`AU1` Inner-brow-raise … `AU26` Jaw-drop) form the avatar's state. Adapted from [FaceForge](https://github.com/gddickinson/face_app)'s anatomy app, with `assets/config/expressions.json` providing 12 emotion presets (neutral, happy, sad, angry, surprised, fear, disgust, contempt, pout, kiss, pain, thinking).
+2. **Visemes** — a 15-class alphabet (`PP / FF / TH / DD / SS / SH / KK / RR / AA / EH / IH / OH / UH / WW / REST`) maps each phoneme to a small AU activation. Mouth AUs (25/26/22/20/12) only — the rest are left to the baseline expression, so a smiling speaker keeps smiling.
+3. **Speech engine** — text is tokenised into ARPAbet phonemes via a small bundled CMU pronouncing dictionary, with a letter-rule fallback for unknown words. Phonemes are timed at ~12/sec by default, producing a `TimedViseme` schedule the avatar plays back.
+4. **Idle behaviours** — `AutoBlink` (every 2.5–5 s), `AutoBreathing` (slow sinusoid biasing AU9 / AU25), `AutoSaccade` (gaze drift every 1.2–2.6 s). All run continuously, even mid-utterance.
+5. **Smoothing** — exponential approach (`rate × dt`) toward target AUs each tick. Produces visibly natural motion without per-AU velocity tracking.
+
+The whole avatar is render-agnostic: `TalkingAvatar.tick()` returns a `FaceParams`, and the same `render_face()` renderer paints it. Tests verify that `say(text)` produces real jaw motion, blinks fire within 6 seconds idle, and emotion changes flip the smile sign.
+
+## The simulated face — building blocks
+
+`FaceParams` is the renderer's input (yaw / pitch / eye_open / jaw_open / smile / brow_raise / pupil_x / pupil_y / skin_hue). `FaceState` is the animation pipeline's input (12 FACS AUs + head pose + gaze + blink). The bridge is `face_state_to_params()`. A `SimCameraWorker` posts `FRAME` events identical in shape to the real `CameraWorker`'s output, plus matching `PRESENCE / MOUTH_ACTIVITY / EMOTION / IDENTITY` events.
 
 <p align="center">
   <img src="docs/images/face_neutral.png" alt="neutral" width="24%">
@@ -120,6 +152,13 @@ python -m tools.run_headless
 # Re-capture all README screenshots
 python -m tools.capture_gui_screenshots
 
+# Render the talking-avatar GIF + frame strip + monitor PNG
+python -m tools.animate_talking
+python -m tools.animate_talking --text "Hello, world." --emotion happy --speed 1.0
+
+# Run the GUI in avatar mode (camera panel = Claude's animated face)
+FACEVIEW_AVATAR=1 faceview
+
 # Stdio MCP server (Claude Code launches this automatically once configured)
 python -m tools.run_mcp_server
 ```
@@ -167,7 +206,7 @@ Then a Claude Code session can call `send_chat`, `speak`, `camera_state`, `list_
 ## Testing
 
 ```bash
-pytest                # 17 tests, all green, <2 s
+pytest                # 31 tests, all green, <2 s
 ```
 
 Tests run fully offscreen (`QT_QPA_PLATFORM=offscreen` is set in `tests/conftest.py`) and require only the `[dev]` extra — no real ML model is loaded.

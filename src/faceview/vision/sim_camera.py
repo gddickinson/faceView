@@ -16,6 +16,7 @@ from typing import Optional
 
 from faceview.core.event_bus import get_bus
 from faceview.core.events import (
+    ChatMessage,
     Emotion,
     EventType,
     Identity,
@@ -23,6 +24,7 @@ from faceview.core.events import (
     Presence,
 )
 from faceview.core.logger import get_logger
+from faceview.vision.avatar import TalkingAvatar
 from faceview.vision.sim_face import FaceParams, render_face
 
 
@@ -42,15 +44,25 @@ class SimCameraWorker:
         size: tuple[int, int] = (640, 480),
         fps: int = 24,
         scenario: str = "talking",
+        *,
+        emotion: str = "neutral",
+        wire_to_llm: bool = False,
     ) -> None:
         self.size = size
         self.fps = fps
         self.scenario = scenario
+        self.wire_to_llm = wire_to_llm
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._params = FaceParams.neutral()
         self._t0 = 0.0
         self._last_emotion = ""
+
+        # The talking avatar is created up front so external callers can call
+        # ``worker.avatar.say(text)`` even before ``start()``.
+        self.avatar = TalkingAvatar(emotion=emotion, seed=42)
+        if wire_to_llm:
+            self._wire_llm_chat()
 
     # ── lifecycle ───────────────────────────────────────────────────
 
@@ -69,6 +81,21 @@ class SimCameraWorker:
 
     def set_params(self, params: FaceParams) -> None:
         self._params = params
+
+    def say(self, text: str, *, speed: float = 1.0) -> None:
+        """Drive the avatar to mouth ``text`` (only used in the avatar scenario)."""
+        self.avatar.say(text, speed=speed)
+
+    def _wire_llm_chat(self) -> None:
+        bus = get_bus()
+        # Mouth Claude's full reply when it's complete (one say() call so the
+        # mouth animation aligns with the text rather than per-token jitter).
+        bus.subscribe(EventType.LLM_REPLY, self._on_llm_reply)
+
+    def _on_llm_reply(self, msg) -> None:
+        text = getattr(msg, "content", "") if isinstance(msg, ChatMessage) else str(msg)
+        if text:
+            self.avatar.say(text)
 
     # ── loop ────────────────────────────────────────────────────────
 
@@ -125,6 +152,10 @@ class SimCameraWorker:
 
     def _scenario_params(self, t: float) -> FaceParams:
         s = self.scenario
+        # AU-based avatar — handles its own idle behaviour and any active
+        # utterance scheduled via avatar.say().
+        if s == "avatar":
+            return self.avatar.tick(t)
         if s == "neutral":
             return FaceParams.neutral()
         if s == "happy":

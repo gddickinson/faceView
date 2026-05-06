@@ -42,7 +42,19 @@ faceView/
 │   │   ├── emotion.py           DeepFace 7-class emotion (optional)
 │   │   ├── mouth.py             Mouth-activity + viseme from blendshapes
 │   │   ├── sim_face.py          Procedural face renderer (FaceParams)
-│   │   └── sim_camera.py        SimCameraWorker — synthetic frames + events
+│   │   ├── sim_camera.py        SimCameraWorker — synthetic frames + events
+│   │   ├── face_state.py        FACS FaceState (12 AUs) + → FaceParams bridge
+│   │   ├── expressions.py       Loads expression presets from JSON (FACS)
+│   │   ├── visemes.py           15-class viseme alphabet → AU targets
+│   │   ├── speech.py            Text → ARPAbet phonemes → timed visemes
+│   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
+│   │                            + lip-sync from text (SpeechEngine timeline)
+│   └── assets/
+│       ├── config/
+│       │   ├── au_definitions.json   12 FACS AU id→name map
+│       │   └── expressions.json      12 emotion presets (AU dicts)
+│       └── data/
+│           └── cmu_dict_compact.json 150-word CMU pronouncing dict
 │   ├── llm/
 │   │   ├── claude_client.py     anthropic SDK; demo fallback if no key
 │   │   └── conversation.py      Message-history dataclass + serialization
@@ -77,6 +89,9 @@ faceView/
 | `Screenshotter` | `gui/screenshotter.py` | `capture(widget, path)` works in live + offscreen modes |
 | `ClaudeClient` | `llm/claude_client.py` | `async stream(messages)` → token chunks; demo fallback |
 | `Service` | `server/service.py` | `send_chat`, `screenshot`, `camera_state`, `speak`, `list_events`. Used by both HTTP and MCP adapters. |
+| `FaceState` | `vision/face_state.py` | 12 FACS Action Units + head pose + gaze + blink. The animation pipeline's primary state. |
+| `TalkingAvatar` | `vision/avatar.py` | Owns FaceState; ticks combine baseline emotion + idle (blink/breath/saccade) + utterance lip-sync. |
+| `SpeechEngine` | `vision/speech.py` | Text → ARPAbet phonemes (CMU dict + letter rules) → timed visemes → AU targets. |
 | `FaceViewService (FastAPI app)` | `server/api.py` | Wraps `Service`; cross-thread via `QMetaObject.invokeMethod` / signals |
 
 ## Cross-module flow

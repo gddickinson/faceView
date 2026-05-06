@@ -13,6 +13,7 @@ Run with::
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Optional
 
@@ -64,11 +65,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         except Exception as exc:  # noqa: BLE001
             log.warning("api.start_failed", error=str(exc))
 
+    # Optional: avatar mode — talking head driven by Claude replies, shown
+    # in the camera panel. Toggle with ``FACEVIEW_AVATAR=1``.
+    avatar_worker = None
+    if os.environ.get("FACEVIEW_AVATAR", "").strip().lower() in {"1", "true", "yes", "on"}:
+        from faceview.vision.sim_camera import SimCameraWorker
+        avatar_worker = SimCameraWorker(scenario="avatar", emotion="happy", wire_to_llm=True)
+        avatar_worker.start()
+        log.info("avatar.started")
+
     log.info(
         "boot",
         headless=settings.headless,
         claude_key=settings.has_claude_key,
         camera_index=settings.camera_index,
+        avatar=avatar_worker is not None,
     )
 
     if not settings.headless:
