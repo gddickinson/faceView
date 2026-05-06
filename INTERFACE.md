@@ -46,13 +46,18 @@ faceView/
 │   │   ├── face_state.py        FACS FaceState (12 AUs) + → FaceParams bridge
 │   │   ├── expressions.py       Loads expression presets from JSON (FACS)
 │   │   ├── visemes.py           15-class viseme alphabet → AU targets
-│   │   ├── speech.py            Text → ARPAbet phonemes → timed visemes
+│   │   ├── speech.py            Text → ARPAbet phonemes → timed visemes;
+│   │   │                        viseme_blend_at coarticulation envelope
+│   │   ├── personas.py          Persona overlay (skin/hair/lip/bg) + loader
+│   │   ├── sim_face_parts.py    Brow/eye/cheek/nose/mouth helpers
 │   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
-│   │                            + lip-sync from text (SpeechEngine timeline)
+│   │                            + coarticulated lip-sync from text
+│   │                            + persona overlay applied per tick
 │   └── assets/
 │       ├── config/
 │       │   ├── au_definitions.json   12 FACS AU id→name map
-│       │   └── expressions.json      12 emotion presets (AU dicts)
+│       │   ├── expressions.json      12 emotion presets (AU dicts)
+│       │   └── personas.json         Bundled appearance presets
 │       └── data/
 │           └── cmu_dict_compact.json 150-word CMU pronouncing dict
 │   ├── llm/
@@ -75,9 +80,14 @@ faceView/
 └── tools/
     ├── run_headless.py          Offscreen launch + smoke screenshot
     ├── capture_gui_screenshots.py  Drives GUI states for README images
+    ├── animate_talking.py       Talking-avatar GIF + strip + monitor PNG
+    ├── render_personas.py       Persona contact sheet (docs/images/personas.png)
     ├── enroll_owner.py          One-time face-enrollment routine
     └── run_mcp_server.py        Standalone MCP entry for Claude Code config
 ```
+
+CI: `.github/workflows/test.yml` runs pytest + the headless smoke on
+every push, archiving the screenshot as a build artefact.
 
 ## Key types
 
@@ -88,7 +98,8 @@ faceView/
 | `MainWindow` | `gui/main_window.py` | Composes panels; calls `Screenshotter` |
 | `Screenshotter` | `gui/screenshotter.py` | `capture(widget, path)` works in live + offscreen modes |
 | `ClaudeClient` | `llm/claude_client.py` | `async stream(messages)` → token chunks; demo fallback |
-| `Service` | `server/service.py` | `send_chat`, `screenshot`, `camera_state`, `speak`, `list_events`. Used by both HTTP and MCP adapters. |
+| `Service` | `server/service.py` | `send_chat`, `screenshot`, `camera_state`, `speak`, `list_events`, plus avatar ops `set_emotion`, `set_persona`, `avatar_say`, `list_personas`. Used by both HTTP and MCP adapters. |
+| `Persona` | `vision/personas.py` | Static appearance overlay (skin_hue / hair / lip / background) applied to every `FaceParams` at render time. |
 | `FaceState` | `vision/face_state.py` | 12 FACS Action Units + head pose + gaze + blink. The animation pipeline's primary state. |
 | `TalkingAvatar` | `vision/avatar.py` | Owns FaceState; ticks combine baseline emotion + idle (blink/breath/saccade) + utterance lip-sync. |
 | `SpeechEngine` | `vision/speech.py` | Text → ARPAbet phonemes (CMU dict + letter rules) → timed visemes → AU targets. |

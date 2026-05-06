@@ -56,23 +56,28 @@ def main(argv: Optional[list[str]] = None) -> int:
         lambda msg: client.send_async(msg) if isinstance(msg, ChatMessage) and msg.role == "user" else None,
     )
 
-    # Optional control server (FastAPI on 127.0.0.1).
-    if settings.api_enabled and not settings.headless:
-        try:
-            from faceview.server.api import start_api_server
-            start_api_server(window)
-            log.info("api.started", url=settings.api_url)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("api.start_failed", error=str(exc))
-
     # Optional: avatar mode — talking head driven by Claude replies, shown
-    # in the camera panel. Toggle with ``FACEVIEW_AVATAR=1``.
+    # in the camera panel. Toggle with ``FACEVIEW_AVATAR=1``. Created before
+    # the API server so the Service can bind it for set_emotion / set_persona
+    # / avatar_say.
     avatar_worker = None
     if os.environ.get("FACEVIEW_AVATAR", "").strip().lower() in {"1", "true", "yes", "on"}:
         from faceview.vision.sim_camera import SimCameraWorker
         avatar_worker = SimCameraWorker(scenario="avatar", emotion="happy", wire_to_llm=True)
         avatar_worker.start()
         log.info("avatar.started")
+
+    # Optional control server (FastAPI on 127.0.0.1).
+    if settings.api_enabled and not settings.headless:
+        try:
+            from faceview.server.api import start_api_server
+            from faceview.server.service import get_service
+            start_api_server(window)
+            if avatar_worker is not None:
+                get_service().bind_camera_worker(avatar_worker)
+            log.info("api.started", url=settings.api_url)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("api.start_failed", error=str(exc))
 
     log.info(
         "boot",

@@ -34,6 +34,19 @@ class ScreenshotRequest(BaseModel):
     encode_b64: bool = False
 
 
+class EmotionRequest(BaseModel):
+    name: str
+
+
+class PersonaRequest(BaseModel):
+    name: str
+
+
+class AvatarSayRequest(BaseModel):
+    text: str
+    speed: float = 1.0
+
+
 def build_app(service: Service) -> FastAPI:
     app = FastAPI(title="faceView Control API", version="0.1.0")
 
@@ -60,6 +73,22 @@ def build_app(service: Service) -> FastAPI:
     @app.post("/screenshot")
     def screenshot(req: ScreenshotRequest) -> dict[str, Any]:
         return service.screenshot(req.name, encode_b64=req.encode_b64)
+
+    @app.post("/avatar/emotion")
+    def set_emotion(req: EmotionRequest) -> dict[str, Any]:
+        return service.set_emotion(req.name)
+
+    @app.post("/avatar/persona")
+    def set_persona(req: PersonaRequest) -> dict[str, Any]:
+        return service.set_persona(req.name)
+
+    @app.post("/avatar/say")
+    def avatar_say(req: AvatarSayRequest) -> dict[str, Any]:
+        return service.avatar_say(req.text, speed=req.speed)
+
+    @app.get("/avatar/personas")
+    def list_personas() -> dict[str, Any]:
+        return {"ok": True, "personas": service.list_personas()}
 
     return app
 

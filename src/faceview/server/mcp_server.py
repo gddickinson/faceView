@@ -108,6 +108,41 @@ def build_server():
                     },
                 },
             ),
+            Tool(
+                name="set_emotion",
+                description="Switch the avatar's baseline FACS expression (neutral, happy, sad, angry, surprised, fear, disgust, contempt, pout, kiss, pain, thinking).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            ),
+            Tool(
+                name="set_persona",
+                description="Switch the avatar's appearance preset (skin/hair/lip/background). Use list_personas to see options.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            ),
+            Tool(
+                name="avatar_say",
+                description="Drive the avatar's mouth to lip-sync the given text without invoking TTS audio.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "speed": {"type": "number", "default": 1.0},
+                    },
+                    "required": ["text"],
+                },
+            ),
+            Tool(
+                name="list_personas",
+                description="List bundled persona names.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
         ]
 
     @server.call_tool()
@@ -125,6 +160,17 @@ def build_server():
                 "name": arguments.get("name", "shot.png"),
                 "encode_b64": arguments.get("encode_b64", False),
             })
+        elif name == "set_emotion":
+            res = await _post("/avatar/emotion", {"name": arguments["name"]})
+        elif name == "set_persona":
+            res = await _post("/avatar/persona", {"name": arguments["name"]})
+        elif name == "avatar_say":
+            res = await _post("/avatar/say", {
+                "text": arguments["text"],
+                "speed": arguments.get("speed", 1.0),
+            })
+        elif name == "list_personas":
+            res = await _get("/avatar/personas")
         else:
             res = {"ok": False, "error": f"unknown tool: {name}"}
 

@@ -142,3 +142,54 @@ def viseme_at(timeline: list[TimedViseme], t: float) -> Optional[TimedViseme]:
         if tv.start_time <= t <= tv.end_time:
             return tv
     return None
+
+
+def _viseme_weight(tv: TimedViseme, t: float, attack: float, release: float) -> float:
+    """Triangular activation envelope around a viseme's [start, end] window.
+
+    Rises linearly over [start-attack, start], holds at 1 in [start, end],
+    falls linearly over [end, end+release]. Outside that window: 0.
+    """
+    if t <= tv.start_time - attack or t >= tv.end_time + release:
+        return 0.0
+    if t < tv.start_time:
+        return max(0.0, (t - (tv.start_time - attack)) / max(1e-6, attack))
+    if t > tv.end_time:
+        return max(0.0, 1.0 - (t - tv.end_time) / max(1e-6, release))
+    return 1.0
+
+
+def viseme_blend_at(
+    timeline: list[TimedViseme],
+    t: float,
+    *,
+    attack: float = 0.040,
+    release: float = 0.060,
+) -> dict[str, float]:
+    """Blend overlapping viseme activations into a single AU target dict.
+
+    Each viseme contributes during a triangular envelope around its slot.
+    For each AU touched by any active viseme we take the weighted max
+    (``weight * au_value``) — that produces a smooth crossfade between
+    adjacent visemes (the new one ramps up as the old ramps down) without
+    summing to unrealistic openings when both share an AU.
+
+    Returns ``{}`` when ``t`` is outside the timeline. AUs missing from the
+    returned dict should be treated as 0 by the caller (they are *released*).
+    """
+    if not timeline:
+        return {}
+    blend: dict[str, float] = {}
+    for tv in timeline:
+        if t <= tv.start_time - attack:
+            break  # timelines are monotonic — no later viseme can be active yet
+        if t >= tv.end_time + release:
+            continue
+        w = _viseme_weight(tv, t, attack, release)
+        if w <= 0.0:
+            continue
+        for au, val in tv.au_targets.items():
+            contrib = w * float(val)
+            if contrib > blend.get(au, 0.0):
+                blend[au] = contrib
+    return blend

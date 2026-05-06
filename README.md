@@ -59,6 +59,20 @@ faceView ships a FACS-based talking avatar (`vision.avatar.TalkingAvatar`) that 
 
 The whole avatar is render-agnostic: `TalkingAvatar.tick()` returns a `FaceParams`, and the same `render_face()` renderer paints it. Tests verify that `say(text)` produces real jaw motion, blinks fire within 6 seconds idle, and emotion changes flip the smile sign.
 
+### Personas
+
+Appearance is decoupled from animation. The dynamic AU state (mouth open, brow up, smile, gaze, blink) lives on `FaceState`; the static identity bits (skin tone, hair colour, lip colour, background) live in a `Persona` overlay applied to every rendered frame. Bundled presets are in `src/faceview/assets/config/personas.json` and a `Persona` switch is exposed via HTTP `POST /avatar/persona` and MCP `set_persona`.
+
+<p align="center">
+  <img src="docs/images/personas.png" alt="bundled personas" width="100%">
+</p>
+
+*Seven bundled personas at the same `happy` baseline — same animation pipeline, different appearance overlay.*
+
+### Coarticulation
+
+Visemes are not played as discrete steps. Each viseme contributes during a triangular envelope (40 ms attack, 60 ms release) around its phoneme slot, and `viseme_blend_at()` returns a per-AU weighted-max across active envelopes. The result is continuous AU trajectories: an outgoing viseme fades down as the incoming one ramps up, instead of snapping. The avatar's smoothing layer then sits on top.
+
 ## The simulated face — building blocks
 
 `FaceParams` is the renderer's input (yaw / pitch / eye_open / jaw_open / smile / brow_raise / pupil_x / pupil_y / skin_hue). `FaceState` is the animation pipeline's input (12 FACS AUs + head pose + gaze + blink). The bridge is `face_state_to_params()`. A `SimCameraWorker` posts `FRAME` events identical in shape to the real `CameraWorker`'s output, plus matching `PRESENCE / MOUTH_ACTIVITY / EMOTION / IDENTITY` events.
@@ -184,6 +198,15 @@ curl -X POST http://127.0.0.1:8765/speak -H 'content-type: application/json' \
 curl -X POST http://127.0.0.1:8765/screenshot -H 'content-type: application/json' \
      -d '{"name":"my_shot.png"}'
 
+# Avatar control (only effective when FACEVIEW_AVATAR=1)
+curl -X POST http://127.0.0.1:8765/avatar/emotion -H 'content-type: application/json' \
+     -d '{"name":"surprised"}'
+curl -X POST http://127.0.0.1:8765/avatar/persona -H 'content-type: application/json' \
+     -d '{"name":"claude"}'
+curl -X POST http://127.0.0.1:8765/avatar/say -H 'content-type: application/json' \
+     -d '{"text":"Hello there.","speed":1.0}'
+curl http://127.0.0.1:8765/avatar/personas
+
 curl http://127.0.0.1:8765/state    # camera state
 curl http://127.0.0.1:8765/events   # last 50 events
 ```
@@ -201,12 +224,12 @@ Add to your `~/.claude.json` (or run `claude mcp add ...`):
 }
 ```
 
-Then a Claude Code session can call `send_chat`, `speak`, `camera_state`, `list_events`, and `screenshot` as native tools. Both adapters wrap the same `Service` layer in `src/faceview/server/service.py`, so adding an op only takes one implementation.
+Then a Claude Code session can call `send_chat`, `speak`, `camera_state`, `list_events`, `screenshot`, `set_emotion`, `set_persona`, `avatar_say`, and `list_personas` as native tools. Both adapters wrap the same `Service` layer in `src/faceview/server/service.py`, so adding an op only takes one implementation.
 
 ## Testing
 
 ```bash
-pytest                # 31 tests, all green, <2 s
+pytest                # 48 tests, all green, <2 s
 ```
 
 Tests run fully offscreen (`QT_QPA_PLATFORM=offscreen` is set in `tests/conftest.py`) and require only the `[dev]` extra — no real ML model is loaded.

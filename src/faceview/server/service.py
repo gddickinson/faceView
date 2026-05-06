@@ -76,8 +76,18 @@ class Service:
         self.bus = get_bus()
         self.camera_state = CameraState()
         self.events: deque[EventLogEntry] = deque(maxlen=500)
+        self._camera_worker = None  # bound later if a SimCameraWorker is in use
 
         self._wire()
+
+    def bind_camera_worker(self, worker) -> None:
+        """Attach the running camera worker so avatar ops can reach it.
+
+        Currently only :class:`SimCameraWorker` exposes an ``avatar`` attribute
+        suitable for ``set_emotion`` / ``set_persona`` / ``say``. Real-camera
+        workers leave this unset and the avatar ops return a clean error.
+        """
+        self._camera_worker = worker
 
     def _wire(self) -> None:
         b = self.bus
@@ -100,6 +110,53 @@ class Service:
     def speak(self, text: str) -> dict[str, Any]:
         self.bus.publish(EventType.TTS_SPEAK, text)
         return {"ok": True, "queued": True}
+
+    # ── avatar ops ─────────────────────────────────────────────────
+
+    def _avatar(self):
+        worker = self._camera_worker
+        if worker is None:
+            return None
+        return getattr(worker, "avatar", None)
+
+    def set_emotion(self, name: str) -> dict[str, Any]:
+        """Switch the avatar's baseline expression to ``name``."""
+        avatar = self._avatar()
+        if avatar is None:
+            return {"ok": False, "error": "no avatar bound (set FACEVIEW_AVATAR=1)"}
+        try:
+            avatar.set_emotion(str(name))
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "emotion": str(name)}
+
+    def set_persona(self, name: str) -> dict[str, Any]:
+        """Switch the avatar's appearance preset to ``name``."""
+        avatar = self._avatar()
+        if avatar is None:
+            return {"ok": False, "error": "no avatar bound (set FACEVIEW_AVATAR=1)"}
+        try:
+            avatar.set_persona(str(name))
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "persona": str(name)}
+
+    def avatar_say(self, text: str, speed: float = 1.0) -> dict[str, Any]:
+        """Drive the avatar to mouth ``text`` (visemes only — no TTS audio)."""
+        if not text or not text.strip():
+            return {"ok": False, "error": "empty text"}
+        avatar = self._avatar()
+        if avatar is None:
+            return {"ok": False, "error": "no avatar bound (set FACEVIEW_AVATAR=1)"}
+        try:
+            u = avatar.say(str(text), speed=float(speed))
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "duration": u.duration, "phonemes": len(u.timeline)}
+
+    def list_personas(self) -> list[str]:
+        from faceview.vision.personas import list_personas as _ls
+        return _ls()
 
     def get_camera_state(self) -> dict[str, Any]:
         return asdict(self.camera_state)

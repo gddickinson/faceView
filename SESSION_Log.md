@@ -13,6 +13,60 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-06 — Session 4: Roadmap + personas + coarticulation + CI
+
+- Added `ROADMAP.md` — five tracks (R/L/A/S/X) covering reliability, the
+  real-time loop, avatar depth, server surface, and stretch goals. Marks
+  what's now in flight vs queued vs later.
+- New `vision/personas.py` + `assets/config/personas.json` — 7 bundled
+  appearance presets (default / claude / warm_tan / fair_blonde /
+  cool_pale / warm_dark / auburn). `Persona` is a static overlay
+  applied to every `FaceParams` after `face_state_to_params`, so
+  appearance is fully decoupled from the FACS animation.
+- Coarticulation in `vision/speech.py`: new `viseme_blend_at(timeline,
+  t, attack=0.04, release=0.06)` returns a per-AU weighted-max blend
+  across active viseme envelopes. `TalkingAvatar` now uses the blend
+  as its mouth-AU target instead of stepped `viseme_at`, giving
+  continuous trajectories across phoneme boundaries.
+- New Service ops `set_emotion`, `set_persona`, `avatar_say`,
+  `list_personas` reach the avatar through `Service.bind_camera_worker`.
+  Wired through HTTP (`POST /avatar/{emotion,persona,say}`,
+  `GET /avatar/personas`) and MCP (`set_emotion`, `set_persona`,
+  `avatar_say`, `list_personas` — total MCP tool count: 9).
+- New `tools/render_personas.py` produces `docs/images/personas.png`
+  (4-col contact sheet with persona name labels).
+- New `.github/workflows/test.yml` runs pytest + headless smoke on
+  every push and PR; uploads the headless smoke PNG as an artefact.
+- Tests: 31 → 48. New `test_personas.py` (6), `test_coarticulation.py`
+  (5), `test_service_avatar.py` (6). All green.
+
+## 2026-05-06 — Session 3: Richer renderer
+
+- User asked for a better renderer. Split `vision/sim_face.py` into
+  `sim_face.py` (303 lines, top-level layered draw) +
+  `sim_face_parts.py` (492 lines, brow/eye/cheek/nose/mouth helpers)
+  to stay under the 500-line budget.
+- Extended `FaceParams` with 9 AU-grade fields (mouth_pucker,
+  mouth_stretch, cheek_raise, nose_wrinkle, upper_lid_raise,
+  inner/outer_brow_raise, brow_lower, lip_corner_drop) so visemes
+  and expression presets reach the renderer with full per-AU
+  intensity instead of being collapsed into smile/jaw_open.
+- New layered drawing: background vignette → ears with inner shadow →
+  head skin (radial gradient + side shading + rim light) → AU6 cheek
+  apples → hair cap + fringe path with strand highlights → tangent-
+  aligned brow strokes (12 hairs + solid body) → almond eyes (radial
+  iris, eyelashes, AU6 lid crease) → nose bridge with AU9 wrinkle →
+  mouth with cupid's bow, asymmetric smile/frown, teeth strip with
+  vertical dividers, chin shadow.
+- Mouth geometry settled after several iterations: separate
+  `corner_dy` (capped) and `mid_dy` (asymmetric pos/neg) plus
+  `upper_h_scale` floor of 0.30 so frowns no longer wedge into
+  pointed triangles and smiles get a proper ∪ curve.
+- All 31 tests still pass. Re-rendered `docs/images/` (main, happy,
+  speaking, surprised, face_neutral/happy/sad/surprised, avatar
+  GIF + strip + monitor).
+- Committed as `84bd56b`. Push to remote pending user authorisation.
+
 ## 2026-05-06 — Session 2: FACS-based talking avatar
 
 - User pointed out the related `face_app/faceforge` project — pulled the

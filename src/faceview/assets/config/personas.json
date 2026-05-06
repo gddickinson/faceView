@@ -1,0 +1,44 @@
+{
+  "default": {
+    "skin_hue": 28.0,
+    "hair_color": "#2c1810",
+    "lip_color": "#a44a4a",
+    "background": "#0c0f14"
+  },
+  "claude": {
+    "skin_hue": 24.0,
+    "hair_color": "#3a2418",
+    "lip_color": "#c2604a",
+    "background": "#1a120c"
+  },
+  "warm_tan": {
+    "skin_hue": 26.0,
+    "hair_color": "#1f1208",
+    "lip_color": "#a44a4a",
+    "background": "#0e1014"
+  },
+  "fair_blonde": {
+    "skin_hue": 36.0,
+    "hair_color": "#b08040",
+    "lip_color": "#b85a5a",
+    "background": "#0a0d12"
+  },
+  "cool_pale": {
+    "skin_hue": 30.0,
+    "hair_color": "#1a1612",
+    "lip_color": "#9a3a3a",
+    "background": "#0a1218"
+  },
+  "warm_dark": {
+    "skin_hue": 22.0,
+    "hair_color": "#1a0e08",
+    "lip_color": "#7a3838",
+    "background": "#100a08"
+  },
+  "auburn": {
+    "skin_hue": 32.0,
+    "hair_color": "#5a2010",
+    "lip_color": "#b04a4a",
+    "background": "#0c0f14"
+  }
+}

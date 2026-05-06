@@ -32,8 +32,9 @@ from typing import Optional
 
 from faceview.vision.expressions import apply_expression
 from faceview.vision.face_state import AU_IDS, FaceState, face_state_to_params
+from faceview.vision.personas import Persona, apply_persona, load_persona
 from faceview.vision.sim_face import FaceParams
-from faceview.vision.speech import SpeechEngine, TimedViseme, viseme_at
+from faceview.vision.speech import SpeechEngine, TimedViseme, viseme_at, viseme_blend_at
 
 
 # ── Idle systems ─────────────────────────────────────────────────────────
@@ -144,6 +145,7 @@ class TalkingAvatar:
         self,
         *,
         emotion: str = "neutral",
+        persona: str | Persona = "default",
         seed: Optional[int] = None,
         speech_engine: Optional[SpeechEngine] = None,
         smoothing_rate: float = 12.0,
@@ -165,6 +167,7 @@ class TalkingAvatar:
         self._last_t: Optional[float] = None
         self._utterance: Optional[Utterance] = None
         self._emotion = emotion
+        self.persona: Persona = persona if isinstance(persona, Persona) else load_persona(persona)
 
     # ── public ──────────────────────────────────────────────────────
 
@@ -185,6 +188,9 @@ class TalkingAvatar:
         self._emotion = name
         self.baseline = FaceState()
         apply_expression(self.baseline, name)
+
+    def set_persona(self, name: str | Persona) -> None:
+        self.persona = name if isinstance(name, Persona) else load_persona(name)
 
     def say(self, text: str, *, speed: float = 1.0) -> Utterance:
         timeline = self.engine.generate_au_sequence(text, speed=speed)
@@ -210,14 +216,16 @@ class TalkingAvatar:
         # 1. Build a target FaceState from the baseline expression.
         self.target = self.baseline.copy()
 
-        # 2. Active utterance overrides only the mouth AUs.
+        # 2. Active utterance overrides only the mouth AUs. Use the
+        # coarticulation-aware blend so AUs ramp continuously across
+        # viseme boundaries instead of stepping.
         if self._utterance is not None:
             rel = t - self._utterance.start_t
-            tv = viseme_at(self._utterance.timeline, rel)
-            if tv is not None:
-                for au, val in tv.au_targets.items():
+            blend = viseme_blend_at(self._utterance.timeline, rel)
+            if blend:
+                for au, val in blend.items():
                     setattr(self.target, au, max(getattr(self.target, au), float(val)))
-            elif rel >= self._utterance.duration:
+            if rel >= self._utterance.duration + 0.05:
                 self._utterance = None
 
         # 3. Idle behaviours act on the *target*, not the rendered state, so
@@ -240,4 +248,5 @@ class TalkingAvatar:
         # Eye blink is animated directly by AutoBlink — copy through.
         self.state.blink_amount = self.target.blink_amount
 
-        return face_state_to_params(self.state)
+        params = face_state_to_params(self.state)
+        return apply_persona(params, self.persona)
