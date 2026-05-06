@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+env/
+.python-version
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+._*
+
+# Project state
+*.log
+logs/
+owner_data/*.npy
+owner_data/*.json
+.env
+.env.local
+
+# Generated screenshots — keep docs/images committed; ignore scratch shots
+shots/
+*.tmp.png
+
+# ML model caches (big)
+models/
+.cache/

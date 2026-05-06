@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "faceview"
+version = "0.1.0"
+description = "Multimodal face/voice/chat GUI for interacting with LLMs and Claude Code"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "George Dickinson" }]
+license = { text = "MIT" }
+keywords = ["llm", "claude", "gui", "speech", "face-recognition", "multimodal"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: MacOS X",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "PySide6>=6.6",
+    "anthropic>=0.39",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "numpy>=1.24",
+    "pillow>=10.0",
+    "structlog>=24.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-qt>=4.2",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+]
+speech = [
+    "sounddevice>=0.4.6",
+    "faster-whisper>=1.0",
+    "silero-vad>=5.0",
+    "pyttsx3>=2.90",
+]
+vision = [
+    "opencv-python>=4.9",
+    "mediapipe>=0.10.14",
+]
+identity = [
+    "insightface>=0.7",
+    "onnxruntime>=1.17",
+]
+emotion = [
+    "deepface>=0.0.90",
+]
+mcp = [
+    "mcp>=1.0",
+]
+full = [
+    "faceview[speech,vision,identity,emotion,mcp]",
+]
+
+[project.scripts]
+faceview = "faceview.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+qt_api = "pyside6"
