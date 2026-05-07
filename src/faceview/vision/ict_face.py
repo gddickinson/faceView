@@ -931,19 +931,21 @@ def _align_anatomy_to_ict(
     identity_weights: dict[str, float] | None = None,
     return_pixels: bool = False,
 ):
-    """Multi-landmark TPS warp: BP3D anatomy aligned to ICT features.
+    """Multi-landmark rigid (similarity) warp.
 
     Projects ICT + BP3D anchor sets to pixel space through each
-    renderer's MVP (using only the keys present in *both* dicts),
-    then runs a thin-plate-spline warp on the BP3D image so all
-    matched anchors overlay ICT's. The warp is fully non-rigid;
-    distant anchors deform their local region while preserving
-    smoothness elsewhere.
+    renderer's MVP (using keys present in both dicts), then fits an
+    LSQ similarity transform — uniform scale + rotation +
+    translation — over all matched anchors. Preserves BP3D mesh
+    proportions; eyes/mouth/jaw line up as closely as a rigid fit
+    allows without distorting individual structures.
 
     Returns the warped image. If ``return_pixels`` is True, also
     returns ``(ict_pix, bp3_pix, used_keys)`` for the assessment
     tool to overlay anchor markers.
     """
+    import cv2
+
     w, h = size
     bg_arr = np.array(bg_rgb, dtype=np.float32)
 
@@ -962,10 +964,18 @@ def _align_anatomy_to_ict(
     src = np.array([bp3_pix[k] for k in used], dtype=np.float32)
     dst = np.array([ict_pix[k] for k in used], dtype=np.float32)
 
-    warped = _tps_warp(
-        anatomy, src, dst, (h, w),
-        regularisation=15.0,
-        border_value=tuple(int(c) for c in bg_arr),
+    # Rigid SIMILARITY transform (uniform scale + rotation +
+    # translation, no shear). LSQ-fit over all 19 anchors via
+    # estimateAffinePartial2D — stable and preserves BP3D mesh
+    # proportions. (Tried TPS non-rigid: introduces visible mesh
+    # distortion that doesn't read as "anatomy".)
+    M, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.LMEDS)
+    if M is None:
+        M = cv2.getAffineTransform(src[:3], dst[:3])
+    warped = cv2.warpAffine(
+        anatomy, M, (w, h),
+        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+        borderValue=tuple(int(c) for c in bg_arr),
     )
     if return_pixels:
         return warped, (ict_pix, bp3_pix, used)
