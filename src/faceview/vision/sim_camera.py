@@ -102,14 +102,20 @@ class SimCameraWorker:
     # ── loop ────────────────────────────────────────────────────────
 
     def _loop(self) -> None:
+        from faceview.vision.effects_runtime import get_runtime
         bus = get_bus()
         period = 1.0 / max(1, self.fps)
+        rt = get_runtime()
         while not self._stop.is_set():
             t = time.time() - self._t0
             params = self._scenario_params(t)
             self._params = params
 
+            # PreFX + persistent sliders mutate FaceParams before render.
+            rt.apply_pre(params)
             frame = render_face(params, self.size)
+            # PostFX overlay on the rendered BGR.
+            frame = rt.apply_post(frame)
             bus.publish(EventType.FRAME, frame)
 
             # Post derived events so the status panel updates as if the

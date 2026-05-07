@@ -94,6 +94,21 @@ class MainWindow(QMainWindow):
         a_quit.triggered.connect(self.close)
         m_file.addAction(a_quit)
 
+        m_view = self.menuBar().addMenu("&View")
+        a_fx = QAction("Effects panel…", self)
+        a_fx.setShortcut(QKeySequence("Ctrl+E"))
+        a_fx.triggered.connect(self._open_effects_panel)
+        m_view.addAction(a_fx)
+
+    def _open_effects_panel(self) -> None:
+        # Lazy import so the GUI module doesn't depend on cv2 etc at boot.
+        from faceview.gui.effects_panel import EffectsPanel
+        if not hasattr(self, "_fx_panel") or self._fx_panel is None:
+            self._fx_panel = EffectsPanel(self)
+        self._fx_panel.show()
+        self._fx_panel.raise_()
+        self._fx_panel.activateWindow()
+
     # ── public helpers ──────────────────────────────────────────────
 
     def take_screenshot(self, name: str) -> "Path":

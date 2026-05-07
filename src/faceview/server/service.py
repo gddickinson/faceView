@@ -158,6 +158,45 @@ class Service:
         from faceview.vision.personas import list_personas as _ls
         return _ls()
 
+    # ── effects ─────────────────────────────────────────────────
+
+    def trigger_effect(
+        self, name: str, *,
+        intensity: float = 1.0,
+        duration: float | None = None,
+    ) -> dict[str, Any]:
+        """Trigger an avatar effect by name. Returns whether known."""
+        from faceview.vision.effects_runtime import get_runtime
+        ok = get_runtime().trigger(name, intensity=intensity, duration=duration)
+        return {"ok": ok, "name": name}
+
+    def list_effects(self) -> list[dict[str, Any]]:
+        from faceview.vision.effects_runtime import get_runtime
+        return get_runtime().list_specs()
+
+    def list_active_effects(self) -> list[dict[str, Any]]:
+        from faceview.vision.effects_runtime import get_runtime
+        return get_runtime().list_active()
+
+    def stop_effect(self, name: str) -> dict[str, Any]:
+        from faceview.vision.effects_runtime import get_runtime
+        n = get_runtime().stop(name)
+        return {"ok": True, "stopped": n}
+
+    def stop_all_effects(self) -> dict[str, Any]:
+        from faceview.vision.effects_runtime import get_runtime
+        n = get_runtime().stop_all()
+        return {"ok": True, "stopped": n}
+
+    def set_slider(self, key: str, value) -> dict[str, Any]:
+        from faceview.vision.effects_runtime import get_runtime
+        ok = get_runtime().set_slider(key, value)
+        return {"ok": ok, "key": key}
+
+    def get_sliders(self) -> dict[str, Any]:
+        from faceview.vision.effects_runtime import get_runtime
+        return get_runtime().get_sliders()
+
     def get_camera_state(self) -> dict[str, Any]:
         return asdict(self.camera_state)
 

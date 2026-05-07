@@ -42,6 +42,17 @@ class PersonaRequest(BaseModel):
     name: str
 
 
+class EffectRequest(BaseModel):
+    name: str
+    intensity: float = 1.0
+    duration: float | None = None
+
+
+class SliderRequest(BaseModel):
+    key: str
+    value: float | str
+
+
 class AvatarSayRequest(BaseModel):
     text: str
     speed: float = 1.0
@@ -89,6 +100,36 @@ def build_app(service: Service) -> FastAPI:
     @app.get("/avatar/personas")
     def list_personas() -> dict[str, Any]:
         return {"ok": True, "personas": service.list_personas()}
+
+    @app.get("/effects")
+    def list_effects() -> dict[str, Any]:
+        return {"ok": True, "effects": service.list_effects()}
+
+    @app.get("/effects/active")
+    def list_active_effects() -> dict[str, Any]:
+        return {"ok": True, "active": service.list_active_effects()}
+
+    @app.post("/effects/trigger")
+    def trigger_effect(req: EffectRequest) -> dict[str, Any]:
+        return service.trigger_effect(
+            req.name, intensity=req.intensity, duration=req.duration,
+        )
+
+    @app.post("/effects/stop")
+    def stop_effect(req: EffectRequest) -> dict[str, Any]:
+        return service.stop_effect(req.name)
+
+    @app.post("/effects/stop_all")
+    def stop_all_effects() -> dict[str, Any]:
+        return service.stop_all_effects()
+
+    @app.get("/effects/sliders")
+    def get_sliders() -> dict[str, Any]:
+        return {"ok": True, "sliders": service.get_sliders()}
+
+    @app.post("/effects/slider")
+    def set_slider(req: SliderRequest) -> dict[str, Any]:
+        return service.set_slider(req.key, req.value)
 
     return app
 
