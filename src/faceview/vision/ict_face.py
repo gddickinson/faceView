@@ -504,75 +504,183 @@ def _is_neck_muscle(name: str) -> bool:
     return any(tok in name for tok in _NECK_MUSCLE_TOKENS)
 
 
-def _align_anatomy_to_ict(
-    anatomy: np.ndarray, ict: np.ndarray, bg_rgb: tuple[int, int, int],
-) -> np.ndarray:
-    """Uniform-scale + centre BP3D anatomy onto ICT's head footprint.
+@lru_cache(maxsize=1)
+def _ict_feature_points_3d() -> dict[str, np.ndarray]:
+    """ICT eye-L / eye-R / mouth centroids in the model's local frame.
 
-    The two renderers normalise to their own bboxes so the rendered
-    head sizes differ. We measure each foreground bbox, compute a
-    single uniform scale factor (no aspect distortion) that matches
-    BP3D's bbox HEIGHT to ICT's bbox HEIGHT, then translate so the
-    bbox vertical *and* horizontal centres align. That keeps the
-    skull cap on the head crown, the eye sockets near the ICT eyes,
-    and the cervical spine centred on the neck.
+    Computed once from the neutral mesh + blendshape-derived region
+    masks: eyelid blendshapes localise the eye verts (split L/R by
+    sign of x); lips blendshapes localise the mouth verts. These
+    centroids are stable feature anchors used for cross-renderer
+    pixel-space alignment in jelly mode.
+    """
+    m = load_ict_model()
+    regions = _vertex_regions()
+    eyelid = regions["eyelid"]
+    lips = regions["lips"]
+    if not eyelid.any() or not lips.any():
+        return {}
+    verts = m.vertices
+    # ICT mesh: head-on, +X is the *subject's* left side from the
+    # camera's POV (so screen-right is X<0). Split eyelid verts by
+    # x sign for L/R.
+    eyelid_verts = verts[eyelid]
+    left = eyelid_verts[eyelid_verts[:, 0] > 0]
+    right = eyelid_verts[eyelid_verts[:, 0] < 0]
+    if not len(left) or not len(right):
+        return {}
+    return {
+        "eye_L": left.mean(axis=0).astype(np.float32),
+        "eye_R": right.mean(axis=0).astype(np.float32),
+        "mouth": verts[lips].mean(axis=0).astype(np.float32),
+    }
+
+
+@lru_cache(maxsize=1)
+def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
+    """BP3D eye-L / eye-R / mouth centroids in BP3D's local frame.
+
+    Eye-L / eye-R from Orbic. Oculi Orb. L/R muscle centroids (these
+    encircle the eye so their centroid sits on the eye centre).
+    Mouth from Orbicularis Oris (the lip ring muscle). Returns
+    None if any of the three meshes isn't on disk.
+    """
+    try:
+        from faceview.vision.anatomy_meshes import (
+            list_available_meshes, load_mesh,
+        )
+    except Exception:
+        return None
+    fma_eye_l = "FMA46783"
+    fma_eye_r = "FMA46782"
+    fma_mouth = "FMA46841"
+    avail = set(list_available_meshes())
+    if not all(f in avail for f in (fma_eye_l, fma_eye_r, fma_mouth)):
+        return None
+    return {
+        "eye_L": load_mesh(fma_eye_l).vertices.mean(axis=0).astype(np.float32),
+        "eye_R": load_mesh(fma_eye_r).vertices.mean(axis=0).astype(np.float32),
+        "mouth": load_mesh(fma_mouth).vertices.mean(axis=0).astype(np.float32),
+    }
+
+
+def _project_ict_to_pixel(
+    points_3d: dict[str, np.ndarray],
+    yaw: float, pitch: float, size: tuple[int, int],
+) -> dict[str, tuple[float, float]]:
+    """Project ICT model-space points through the same MVP the ICT
+    renderer uses, returning pixel coordinates.
+    """
+    m = load_ict_model()
+    verts = m.vertices
+    vmin = verts.min(axis=0)
+    vmax = verts.max(axis=0)
+    centre = (vmin + vmax) / 2.0
+    span = float(np.linalg.norm(vmax - vmin))
+    scale = 1.6 / max(span, 1e-6)
+
+    cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
+    cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
+    ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]],
+                    dtype=np.float32)
+    rx = np.array([[1, 0, 0], [0, cp_, -sp_], [0, sp_, cp_]],
+                    dtype=np.float32)
+    flip = np.diag([1.0, 1.0, -1.0]).astype(np.float32)
+    M = ry @ rx @ flip
+
+    w, h = size
+    out: dict[str, tuple[float, float]] = {}
+    for name, p in points_3d.items():
+        v = (p - centre) * scale
+        v = M @ v
+        # Orthographic to NDC then to pixel. Frag y was flipped via
+        # np.flipud after read → so screen y matches our negated y.
+        # We undo the flipud here: y_pix = (1 - (v.y + 1)/2) * h
+        x_pix = (v[0] + 1.0) / 2.0 * w
+        y_pix = (1.0 - (v[1] + 1.0) / 2.0) * h
+        out[name] = (float(x_pix), float(y_pix))
+    return out
+
+
+def _project_bp3d_to_pixel(
+    points_3d: dict[str, np.ndarray],
+    specs: list, yaw: float, pitch: float, size: tuple[int, int],
+) -> dict[str, tuple[float, float]]:
+    """Project BP3D model-space points through the gpu_renderer MVP."""
+    from faceview.vision.anatomy_meshes import load_mesh
+
+    rx0 = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=np.float32)
+    ry180 = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]], dtype=np.float32)
+    R_pre = ry180 @ rx0  # BP3D → screen reorientation (gpu_renderer)
+
+    bone_specs = [s for s in specs if s.category == "bone"]
+    ref = bone_specs if bone_specs else specs
+    all_verts: list[np.ndarray] = []
+    for s in ref:
+        m = load_mesh(s.fma)
+        all_verts.append(m.vertices @ R_pre.T)
+    verts_all = np.vstack(all_verts)
+    vmin = verts_all.min(axis=0)
+    vmax = verts_all.max(axis=0)
+    centre = (vmin + vmax) / 2.0
+    span = float(np.linalg.norm(vmax - vmin))
+    scale = 1.7 / max(span, 1e-6)
+
+    cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
+    cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
+    ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]],
+                    dtype=np.float32)
+    rx = np.array([[1, 0, 0], [0, cp_, -sp_], [0, sp_, cp_]],
+                    dtype=np.float32)
+
+    w, h = size
+    out: dict[str, tuple[float, float]] = {}
+    for name, p in points_3d.items():
+        v = R_pre @ p           # apply BP3D-screen pre-rotation
+        v = (v - centre) * scale
+        v = ry @ rx @ v
+        x_pix = (v[0] + 1.0) / 2.0 * w
+        y_pix = (1.0 - (v[1] + 1.0) / 2.0) * h
+        out[name] = (float(x_pix), float(y_pix))
+    return out
+
+
+def _align_anatomy_to_ict(
+    anatomy: np.ndarray, bg_rgb: tuple[int, int, int],
+    specs: list, yaw: float, pitch: float, size: tuple[int, int],
+) -> np.ndarray:
+    """Feature-anchor warp: BP3D anatomy aligned to ICT by projecting
+    the L-eye / R-eye / mouth centroids of each model through their
+    respective renderer MVPs and computing the affine transform that
+    maps BP3D's three pixel anchors onto ICT's. Eyes and mouth then
+    overlay exactly.
     """
     import cv2
 
-    h, w, _ = ict.shape
+    w, h = size
     bg_arr = np.array(bg_rgb, dtype=np.float32)
 
-    def fg_bbox(img: np.ndarray) -> tuple[int, int, int, int] | None:
-        diff = np.linalg.norm(img.astype(np.float32) - bg_arr[None, None, :],
-                                axis=2)
-        mask = diff > 20.0
-        ys, xs = np.where(mask)
-        if not len(xs):
-            return None
-        return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
-
-    a_box = fg_bbox(anatomy)
-    i_box = fg_bbox(ict)
-    if a_box is None or i_box is None:
+    ict_3d = _ict_feature_points_3d()
+    bp3_3d = _bp3d_feature_points_3d()
+    if not ict_3d or not bp3_3d:
         return anatomy
 
-    ax0, ay0, ax1, ay1 = a_box
-    ix0, iy0, ix1, iy1 = i_box
+    ict_pix = _project_ict_to_pixel(ict_3d, yaw, pitch, size)
+    bp3_pix = _project_bp3d_to_pixel(bp3_3d, specs, yaw, pitch, size)
 
-    # Width is the more reliable size cue once neck content is
-    # filtered out — both ICT and BP3D heads have similar ear-to-ear
-    # widths even when overall bbox heights differ. Slight downscale
-    # (0.96) keeps the anatomy *just inside* the ICT silhouette so
-    # the bloom halo around the ICT face frames it.
-    a_w = max(1, ax1 - ax0 + 1)
-    i_w = max(1, ix1 - ix0 + 1)
-    scale = (i_w / a_w) * 0.96
-
-    a_crop = anatomy[ay0:ay1 + 1, ax0:ax1 + 1]
-    new_w = max(1, int(round(a_crop.shape[1] * scale)))
-    new_h = max(1, int(round(a_crop.shape[0] * scale)))
-    a_resized = cv2.resize(a_crop, (new_w, new_h),
-                            interpolation=cv2.INTER_LINEAR)
-
-    # Target top-left so the resized bbox centre matches ICT centre.
-    icx = (ix0 + ix1) / 2.0
-    icy = (iy0 + iy1) / 2.0
-    tx = int(round(icx - new_w / 2.0))
-    ty = int(round(icy - new_h / 2.0))
-
-    out = np.zeros_like(ict)
-    out[:, :] = bg_arr.astype(np.uint8)
-    # Source/dest cropping for boundary handling.
-    sx0 = max(0, -tx)
-    sy0 = max(0, -ty)
-    dx0 = max(0, tx)
-    dy0 = max(0, ty)
-    cw = max(0, min(new_w - sx0, w - dx0))
-    ch = max(0, min(new_h - sy0, h - dy0))
-    if cw > 0 and ch > 0:
-        out[dy0:dy0 + ch, dx0:dx0 + cw] = a_resized[sy0:sy0 + ch,
-                                                       sx0:sx0 + cw]
-    return out
+    src = np.array([bp3_pix["eye_L"], bp3_pix["eye_R"], bp3_pix["mouth"]],
+                    dtype=np.float32)
+    dst = np.array([ict_pix["eye_L"], ict_pix["eye_R"], ict_pix["mouth"]],
+                    dtype=np.float32)
+    # Full affine (3-point) — captures uniform scale, shear-free
+    # rotation, and translation. Eyes line up; mouth line is
+    # vertically anchored so the lip muscles sit at ICT's lip line.
+    M = cv2.getAffineTransform(src, dst)
+    return cv2.warpAffine(
+        anatomy, M, (w, h),
+        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+        borderValue=tuple(int(c) for c in bg_arr),
+    )
 
 
 def _render_jelly_composite(params, size: tuple[int, int]) -> np.ndarray:
@@ -637,9 +745,12 @@ def _render_jelly_composite(params, size: tuple[int, int]) -> np.ndarray:
     except Exception:
         return ict_bgr
 
-    # Match BP3D head footprint to ICT head footprint with a uniform
-    # scale + centroid translation (no aspect-distorting bbox stretch).
-    anatomy_bgr = _align_anatomy_to_ict(anatomy_bgr, ict_bgr, bg_rgb)
+    # Feature-anchor warp: project ICT and BP3D eye-L/R + mouth
+    # centroids to pixel space through each renderer's MVP, then
+    # affine-warp BP3D so all three features overlay ICT's exactly.
+    anatomy_bgr = _align_anatomy_to_ict(
+        anatomy_bgr, bg_rgb, specs, yaw, pitch, size,
+    )
 
     # Cool-tint and brighten the anatomy so it reads as part of the
     # xray aesthetic instead of warm bone — crush warm channels hard
