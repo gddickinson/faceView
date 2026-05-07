@@ -383,5 +383,42 @@
     "render_mode": "ict_face_3d",
     "identity_weights": {},
     "style": "jelly"
+  },
+  "ict_jelly_young": {
+    "background": "#000810",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity000": 2.5,
+      "identity002": -2.0,
+      "identity005": 1.8,
+      "identity008": 1.5,
+      "identity012": -1.0
+    },
+    "style": "jelly"
+  },
+  "ict_jelly_female": {
+    "background": "#000810",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity000": -2.5,
+      "identity001": 1.8,
+      "identity003": 2.2,
+      "identity007": -1.8,
+      "identity013": 1.5
+    },
+    "style": "jelly"
+  },
+  "ict_jelly_elder": {
+    "background": "#000810",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity000": 1.5,
+      "identity001": -1.0,
+      "identity004": 2.5,
+      "identity009": -2.0,
+      "identity016": 1.8,
+      "identity021": 1.2
+    },
+    "style": "jelly"
   }
 }

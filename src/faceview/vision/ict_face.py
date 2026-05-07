@@ -504,15 +504,17 @@ def _is_neck_muscle(name: str) -> bool:
     return any(tok in name for tok in _NECK_MUSCLE_TOKENS)
 
 
-@lru_cache(maxsize=1)
-def _ict_feature_points_3d() -> dict[str, np.ndarray]:
-    """ICT eye-L / eye-R / mouth centroids in the model's local frame.
+def _ict_feature_points_3d_for(
+    identity_weights: dict[str, float] | None = None,
+) -> dict[str, np.ndarray]:
+    """ICT 5-point feature anchors in the model's local frame.
 
-    Computed once from the neutral mesh + blendshape-derived region
-    masks: eyelid blendshapes localise the eye verts (split L/R by
-    sign of x); lips blendshapes localise the mouth verts. These
-    centroids are stable feature anchors used for cross-renderer
-    pixel-space alignment in jelly mode.
+    Computed from the *deformed* mesh (neutral + identity PCA modes)
+    so that per-persona identity changes (smaller-faced young, wider
+    elder, etc.) re-anchor the alignment correctly. Eyelid /
+    lips blendshapes localise eyes + mouth; jaw_L / jaw_R derive
+    from M_Face vertices that sit below the mouth y plane and to
+    each side of x=0.
     """
     m = load_ict_model()
     regions = _vertex_regions()
@@ -520,30 +522,72 @@ def _ict_feature_points_3d() -> dict[str, np.ndarray]:
     lips = regions["lips"]
     if not eyelid.any() or not lips.any():
         return {}
-    verts = m.vertices
-    # ICT mesh: head-on, +X is the *subject's* left side from the
-    # camera's POV (so screen-right is X<0). Split eyelid verts by
-    # x sign for L/R.
+
+    # Apply identity-only deformation so feature centroids track
+    # the persona's head shape. Skip non-float entries (mh_target,
+    # etc.).
+    iw = {k: float(v) for k, v in (identity_weights or {}).items()
+          if isinstance(v, (int, float))}
+    if iw:
+        verts = apply_blendshapes(m, iw)
+    else:
+        verts = m.vertices
+
     eyelid_verts = verts[eyelid]
     left = eyelid_verts[eyelid_verts[:, 0] > 0]
     right = eyelid_verts[eyelid_verts[:, 0] < 0]
-    if not len(left) or not len(right):
+    lips_verts = verts[lips]
+    if not len(left) or not len(right) or not len(lips_verts):
         return {}
+    mouth_centre = lips_verts.mean(axis=0)
+
+    # Jaw-line anchors: M_Face vertices sitting below mouth Y.
+    face_mat_idx = next(
+        (i for i, n in enumerate(m.materials) if n == "M_Face"), -1,
+    )
+    if face_mat_idx >= 0:
+        face_v_mask = np.zeros(len(verts), dtype=bool)
+        for ti, mi in enumerate(m.tri_materials):
+            if mi == face_mat_idx:
+                for v in m.triangles[ti]:
+                    face_v_mask[v] = True
+        below = verts[face_v_mask & (verts[:, 1] < mouth_centre[1])]
+        if len(below) > 50:
+            jaw_l = below[below[:, 0] > 5].mean(axis=0)
+            jaw_r = below[below[:, 0] < -5].mean(axis=0)
+        else:
+            jaw_l = mouth_centre
+            jaw_r = mouth_centre
+    else:
+        jaw_l = mouth_centre
+        jaw_r = mouth_centre
+
     return {
         "eye_L": left.mean(axis=0).astype(np.float32),
         "eye_R": right.mean(axis=0).astype(np.float32),
-        "mouth": verts[lips].mean(axis=0).astype(np.float32),
+        "mouth": mouth_centre.astype(np.float32),
+        "jaw_L": jaw_l.astype(np.float32),
+        "jaw_R": jaw_r.astype(np.float32),
     }
 
 
 @lru_cache(maxsize=1)
-def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
-    """BP3D eye-L / eye-R / mouth centroids in BP3D's local frame.
+def _ict_feature_points_3d() -> dict[str, np.ndarray]:
+    """Neutral-mesh 5-point anchors (compat shim for callers without
+    identity weights).
+    """
+    return _ict_feature_points_3d_for(None)
 
-    Eye-L / eye-R from Orbic. Oculi Orb. L/R muscle centroids (these
-    encircle the eye so their centroid sits on the eye centre).
-    Mouth from Orbicularis Oris (the lip ring muscle). Returns
-    None if any of the three meshes isn't on disk.
+
+@lru_cache(maxsize=1)
+def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
+    """BP3D 5-point feature anchors in BP3D's local frame.
+
+    Eye-L / eye-R from Orbic. Oculi Orb. L/R (ring around the eye →
+    centroid sits on the eye centre). Mouth from Orbicularis Oris
+    (the lip ring muscle). Jaw-L / jaw-R from Masseter Sup. L/R
+    (sit on the mandibular angle / jaw line). Returns None if any
+    needed mesh isn't on disk.
     """
     try:
         from faceview.vision.anatomy_meshes import (
@@ -551,28 +595,38 @@ def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
         )
     except Exception:
         return None
-    fma_eye_l = "FMA46783"
-    fma_eye_r = "FMA46782"
-    fma_mouth = "FMA46841"
+    fma = {
+        "eye_L": "FMA46783",   # Orbic. Oculi Orb. L
+        "eye_R": "FMA46782",   # Orbic. Oculi Orb. R
+        "mouth": "FMA46841",   # Orbicularis Oris
+        "jaw_L": "FMA49002",   # Masseter Sup. L
+        "jaw_R": "FMA49001",   # Masseter Sup. R
+    }
     avail = set(list_available_meshes())
-    if not all(f in avail for f in (fma_eye_l, fma_eye_r, fma_mouth)):
+    if not all(f in avail for f in fma.values()):
         return None
     return {
-        "eye_L": load_mesh(fma_eye_l).vertices.mean(axis=0).astype(np.float32),
-        "eye_R": load_mesh(fma_eye_r).vertices.mean(axis=0).astype(np.float32),
-        "mouth": load_mesh(fma_mouth).vertices.mean(axis=0).astype(np.float32),
+        k: load_mesh(v).vertices.mean(axis=0).astype(np.float32)
+        for k, v in fma.items()
     }
 
 
 def _project_ict_to_pixel(
     points_3d: dict[str, np.ndarray],
     yaw: float, pitch: float, size: tuple[int, int],
+    identity_weights: dict[str, float] | None = None,
 ) -> dict[str, tuple[float, float]]:
     """Project ICT model-space points through the same MVP the ICT
     renderer uses, returning pixel coordinates.
+
+    When ``identity_weights`` are non-empty the renderer normalises
+    on the *deformed* bbox — we mirror that here so anchor pixels
+    actually land where the renderer drew them.
     """
     m = load_ict_model()
-    verts = m.vertices
+    iw = {k: float(v) for k, v in (identity_weights or {}).items()
+          if isinstance(v, (int, float))}
+    verts = apply_blendshapes(m, iw) if iw else m.vertices
     vmin = verts.min(axis=0)
     vmax = verts.max(axis=0)
     centre = (vmin + vmax) / 2.0
@@ -648,34 +702,50 @@ def _project_bp3d_to_pixel(
 def _align_anatomy_to_ict(
     anatomy: np.ndarray, bg_rgb: tuple[int, int, int],
     specs: list, yaw: float, pitch: float, size: tuple[int, int],
+    identity_weights: dict[str, float] | None = None,
 ) -> np.ndarray:
-    """Feature-anchor warp: BP3D anatomy aligned to ICT by projecting
-    the L-eye / R-eye / mouth centroids of each model through their
-    respective renderer MVPs and computing the affine transform that
-    maps BP3D's three pixel anchors onto ICT's. Eyes and mouth then
-    overlay exactly.
+    """5-point feature-anchor warp: eyes / mouth / jaw line up.
+
+    Projects ICT and BP3D anchors to pixel space through each
+    renderer's MVP, then computes a least-squares affine fit
+    (cv2.estimateAffine2D) that maps BP3D's 5 anchors onto ICT's.
+    Eyes overlay exactly; mouth + jaw stay at ICT's lip line and
+    mandibular angle, so the BP3D temporomandibular joint sits at
+    the ICT jaw and the masseter group reads behind ICT's cheeks.
+
+    ``identity_weights`` deforms the ICT mesh by its persona's
+    identity-PCA modes before measuring anchors, so a younger /
+    smaller-faced persona gets correspondingly closer eye spacing
+    and shorter jaw line.
     """
     import cv2
 
     w, h = size
     bg_arr = np.array(bg_rgb, dtype=np.float32)
 
-    ict_3d = _ict_feature_points_3d()
+    ict_3d = _ict_feature_points_3d_for(identity_weights)
     bp3_3d = _bp3d_feature_points_3d()
     if not ict_3d or not bp3_3d:
         return anatomy
 
-    ict_pix = _project_ict_to_pixel(ict_3d, yaw, pitch, size)
+    ict_pix = _project_ict_to_pixel(ict_3d, yaw, pitch, size,
+                                       identity_weights=identity_weights)
     bp3_pix = _project_bp3d_to_pixel(bp3_3d, specs, yaw, pitch, size)
 
-    src = np.array([bp3_pix["eye_L"], bp3_pix["eye_R"], bp3_pix["mouth"]],
-                    dtype=np.float32)
-    dst = np.array([ict_pix["eye_L"], ict_pix["eye_R"], ict_pix["mouth"]],
-                    dtype=np.float32)
-    # Full affine (3-point) — captures uniform scale, shear-free
-    # rotation, and translation. Eyes line up; mouth line is
-    # vertically anchored so the lip muscles sit at ICT's lip line.
-    M = cv2.getAffineTransform(src, dst)
+    keys = ["eye_L", "eye_R", "mouth", "jaw_L", "jaw_R"]
+    src = np.array([bp3_pix[k] for k in keys], dtype=np.float32)
+    dst = np.array([ict_pix[k] for k in keys], dtype=np.float32)
+    # Over-determined SIMILARITY transform — uniform scale + rotation
+    # + translation, no shear / non-uniform scale. Keeps BP3D's
+    # natural head proportions; eyes/mouth/jaw don't overlay
+    # *exactly* but they're as close as a rigid fit allows. (Full
+    # affine introduces vertical stretch when the chosen ICT
+    # persona's face proportions diverge from BP3D's medical-scan
+    # head — e.g. female / elder identities.)
+    M, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.LMEDS)
+    if M is None:
+        # Fall back to a 3-point affine on eyes + mouth.
+        M = cv2.getAffineTransform(src[:3], dst[:3])
     return cv2.warpAffine(
         anatomy, M, (w, h),
         flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
@@ -745,11 +815,17 @@ def _render_jelly_composite(params, size: tuple[int, int]) -> np.ndarray:
     except Exception:
         return ict_bgr
 
-    # Feature-anchor warp: project ICT and BP3D eye-L/R + mouth
-    # centroids to pixel space through each renderer's MVP, then
-    # affine-warp BP3D so all three features overlay ICT's exactly.
+    # Feature-anchor warp: project ICT (deformed by identity PCA)
+    # and BP3D eye-L/R + mouth + jaw-L/R centroids to pixel space
+    # through each renderer's MVP, then 5-point LSQ-affine warp BP3D
+    # so all anchors overlay ICT's. Identity-aware so young /
+    # elder personas get correctly-scaled anatomy.
+    iw_in = getattr(params, "identity_weights", None) or {}
+    iw = {k: float(v) for k, v in iw_in.items()
+          if isinstance(v, (int, float))}
     anatomy_bgr = _align_anatomy_to_ict(
         anatomy_bgr, bg_rgb, specs, yaw, pitch, size,
+        identity_weights=iw,
     )
 
     # Cool-tint and brighten the anatomy so it reads as part of the
