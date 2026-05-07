@@ -103,8 +103,22 @@ class ClaudeClient:
             )
             log.info("llm.engine", engine="anthropic", model=settings.anthropic_model)
         else:
-            self.engine = EchoEngine()
-            log.info("llm.engine", engine="demo")
+            # No Anthropic key — try local Ollama, then demo.
+            from faceview.llm.ollama_client import (
+                OllamaEngine, is_ollama_available, pick_default_model,
+            )
+            if is_ollama_available():
+                model = pick_default_model()
+                if model:
+                    self.engine = OllamaEngine(model=model)
+                    log.info("llm.engine", engine="ollama", model=model)
+                else:
+                    self.engine = EchoEngine()
+                    log.info("llm.engine", engine="demo",
+                              note="ollama running but no models")
+            else:
+                self.engine = EchoEngine()
+                log.info("llm.engine", engine="demo")
 
         self._q: queue.Queue[str | None] = queue.Queue()
         self._thread = threading.Thread(target=self._loop, name="claude-worker", daemon=True)

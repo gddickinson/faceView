@@ -42,6 +42,12 @@ class Persona:
     background: str = "#0c0f14"
     render_mode: str = "stylised"
     identity_weights: dict = field(default_factory=dict)
+    # Iris colour for realistic eyes (most common in humans is
+    # brown ≈ #5a3818; blue ~#4f6e85; green ~#5a7035; hazel ~#7a5530).
+    eye_color: str = "#5a3818"
+    # Skin saturation/value multipliers — tone down or tan up.
+    skin_saturation: float = 0.32
+    skin_value: float = 0.86
 
 
 @lru_cache(maxsize=1)
@@ -78,6 +84,9 @@ def load_persona(name: str) -> Persona:
         background=str(raw.get("background", "#0c0f14")),
         render_mode=str(raw.get("render_mode", "stylised")),
         identity_weights=norm_iw,
+        eye_color=str(raw.get("eye_color", "#5a3818")),
+        skin_saturation=float(raw.get("skin_saturation", 0.32)),
+        skin_value=float(raw.get("skin_value", 0.86)),
     )
 
 
@@ -91,6 +100,11 @@ def apply_persona(params: FaceParams, persona: Persona) -> FaceParams:
     # Identity coefficients for the ICT face renderer (no-op for
     # other modes).
     params.identity_weights = dict(persona.identity_weights)
+    # Forward extended persona fields onto FaceParams as attributes.
+    # ICT renderer reads these; other modes ignore them.
+    params._persona_eye_color = persona.eye_color
+    params._persona_skin_sat = persona.skin_saturation
+    params._persona_skin_val = persona.skin_value
     return params
 
 

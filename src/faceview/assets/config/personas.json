@@ -152,7 +152,10 @@
     "lip_color": "#a25048",
     "background": "#0a0d12",
     "render_mode": "makehuman_3d",
-    "identity_weights": {"mh_target": "male_young", "mh_target_weight": 1.0}
+    "identity_weights": {
+      "mh_target": "male_young",
+      "mh_target_weight": 1.0
+    }
   },
   "makehuman_female": {
     "skin_hue": 28.0,
@@ -160,14 +163,18 @@
     "lip_color": "#c25a4a",
     "background": "#0c0e14",
     "render_mode": "makehuman_3d",
-    "identity_weights": {"mh_target": "female_young", "mh_target_weight": 1.0}
+    "identity_weights": {
+      "mh_target": "female_young",
+      "mh_target_weight": 1.0
+    }
   },
   "ict_face_3d": {
     "skin_hue": 26.0,
     "hair_color": "#2a1808",
     "lip_color": "#a85248",
     "background": "#0a0d12",
-    "render_mode": "ict_face_3d"
+    "render_mode": "ict_face_3d",
+    "eye_color": "#5a3818"
   },
   "ict_male": {
     "skin_hue": 24.0,
@@ -176,9 +183,12 @@
     "background": "#0a0d12",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity000": 2.5, "identity002": -1.5, "identity005": 2.0,
+      "identity000": 2.5,
+      "identity002": -1.5,
+      "identity005": 2.0,
       "identity008": 1.2
-    }
+    },
+    "eye_color": "#3a2818"
   },
   "ict_female": {
     "skin_hue": 28.0,
@@ -187,9 +197,12 @@
     "background": "#0c0e14",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity000": -2.5, "identity001": 1.5, "identity003": 2.0,
+      "identity000": -2.5,
+      "identity001": 1.5,
+      "identity003": 2.0,
       "identity007": -1.5
-    }
+    },
+    "eye_color": "#4a6e85"
   },
   "ict_claude": {
     "skin_hue": 26.0,
@@ -198,9 +211,12 @@
     "background": "#1a120c",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity001": 1.8, "identity004": -1.2, "identity006": 1.5,
+      "identity001": 1.8,
+      "identity004": -1.2,
+      "identity006": 1.5,
       "identity009": 0.8
-    }
+    },
+    "eye_color": "#3a5848"
   },
   "ict_alt1": {
     "skin_hue": 24.0,
@@ -209,8 +225,11 @@
     "background": "#0a0d12",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity010": 2.0, "identity020": -1.5, "identity030": 1.8
-    }
+      "identity010": 2.0,
+      "identity020": -1.5,
+      "identity030": 1.8
+    },
+    "eye_color": "#6a4a28"
   },
   "ict_alt2": {
     "skin_hue": 30.0,
@@ -219,8 +238,11 @@
     "background": "#0a0d12",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity015": -2.0, "identity025": 2.0, "identity045": 1.5
-    }
+      "identity015": -2.0,
+      "identity025": 2.0,
+      "identity045": 1.5
+    },
+    "eye_color": "#3a4858"
   },
   "ict_male_young": {
     "skin_hue": 24.0,
@@ -229,9 +251,15 @@
     "background": "#0a0d12",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity000": 2.5, "identity002": -2.0, "identity005": 1.8,
-      "identity008": 1.5, "identity012": -1.0
-    }
+      "identity000": 2.5,
+      "identity002": -2.0,
+      "identity005": 1.8,
+      "identity008": 1.5,
+      "identity012": -1.0
+    },
+    "eye_color": "#5a3818",
+    "skin_saturation": 0.34,
+    "skin_value": 0.85
   },
   "ict_male_middle": {
     "skin_hue": 22.0,
@@ -240,9 +268,15 @@
     "background": "#0a0d12",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity000": 2.0, "identity003": 1.5, "identity007": -1.8,
-      "identity011": 2.2, "identity014": 1.0
-    }
+      "identity000": 2.0,
+      "identity003": 1.5,
+      "identity007": -1.8,
+      "identity011": 2.2,
+      "identity014": 1.0
+    },
+    "eye_color": "#4a3018",
+    "skin_saturation": 0.32,
+    "skin_value": 0.8
   },
   "ict_male_elder": {
     "skin_hue": 22.0,
@@ -251,9 +285,16 @@
     "background": "#0a0d12",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity000": 1.5, "identity001": -1.0, "identity004": 2.5,
-      "identity009": -2.0, "identity016": 1.8, "identity021": 1.2
-    }
+      "identity000": 1.5,
+      "identity001": -1.0,
+      "identity004": 2.5,
+      "identity009": -2.0,
+      "identity016": 1.8,
+      "identity021": 1.2
+    },
+    "eye_color": "#6a5040",
+    "skin_saturation": 0.26,
+    "skin_value": 0.78
   },
   "ict_female_young": {
     "skin_hue": 28.0,
@@ -262,9 +303,15 @@
     "background": "#0c0e14",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity000": -2.5, "identity001": 1.8, "identity003": 2.2,
-      "identity007": -1.8, "identity013": 1.5
-    }
+      "identity000": -2.5,
+      "identity001": 1.8,
+      "identity003": 2.2,
+      "identity007": -1.8,
+      "identity013": 1.5
+    },
+    "eye_color": "#4a6e85",
+    "skin_saturation": 0.3,
+    "skin_value": 0.92
   },
   "ict_female_middle": {
     "skin_hue": 30.0,
@@ -273,9 +320,15 @@
     "background": "#0c0e14",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity000": -2.0, "identity002": 1.5, "identity006": -1.0,
-      "identity010": 1.8, "identity017": 1.2
-    }
+      "identity000": -2.0,
+      "identity002": 1.5,
+      "identity006": -1.0,
+      "identity010": 1.8,
+      "identity017": 1.2
+    },
+    "eye_color": "#5a6e35",
+    "skin_saturation": 0.32,
+    "skin_value": 0.86
   },
   "ict_female_elder": {
     "skin_hue": 32.0,
@@ -284,8 +337,15 @@
     "background": "#0c0e14",
     "render_mode": "ict_face_3d",
     "identity_weights": {
-      "identity000": -1.8, "identity002": 1.2, "identity004": 2.0,
-      "identity009": -1.5, "identity018": 1.8, "identity024": 1.5
-    }
+      "identity000": -1.8,
+      "identity002": 1.2,
+      "identity004": 2.0,
+      "identity009": -1.5,
+      "identity018": 1.8,
+      "identity024": 1.5
+    },
+    "eye_color": "#604838",
+    "skin_saturation": 0.24,
+    "skin_value": 0.84
   }
 }

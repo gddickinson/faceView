@@ -13,6 +13,48 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-07 — Session 17: ICT polish (skin / eyes / hair) + Ollama fallback
+
+User asked for four targeted improvements after the live GUI test:
+1. Eye color was off → added persona-driven iris colour.
+2. Skin tone too pink → HSV-based skin colour from `persona.skin_hue`
+   plus tunable saturation/value, and toned-down SSS.
+3. Realistic hair → scalp-vertex hair-cap detection inside the
+   ICT mesh (no separate mesh needed; Y > top-28% + Z < median
+   triggers `M_HairCap` material with persona.hair_color).
+4. Ollama fallback when no Anthropic key.
+
+**Persona schema extended** (`vision/personas.py`)
+  * `eye_color`, `skin_saturation`, `skin_value` fields.
+  * Persona JSON updated for all 9 ICT presets — brown / blue /
+    green / hazel iris distribution; saturation drops with age,
+    value lighter for females.
+
+**ICT renderer per-persona palette** (`vision/ict_face.py`)
+  * `_material_palette(params)` builds skin from HSV(skin_hue, sat, val),
+    iris from persona eye_color, gums tinted from lip_color.
+  * `_per_vertex_colors_for(params)` rebuilds the per-vertex
+    array per-frame so persona switches take effect immediately.
+  * SSS tint reduced from (0.78, 0.46, 0.40) to (0.62, 0.36, 0.30)
+    plus narrower terminator band.
+  * Scalp hair cap: vertices with Y > 72% of head height AND
+    Z < median (back-of-head) get hair_color, with a smooth fade
+    at the forehead transition.
+
+**Ollama LLM fallback** (`llm/ollama_client.py`)
+  * `is_ollama_available()` pings localhost:11434/api/tags.
+  * `list_ollama_models()` and `pick_default_model()` for auto-
+    selection (FACEVIEW_OLLAMA_MODEL env var or first installed
+    llama/mistral/phi/qwen).
+  * `OllamaEngine` matches our existing engine protocol —
+    streaming chat via /api/chat, pure stdlib urllib + json.
+  * `ClaudeClient` chains: Anthropic → Ollama → Echo. Logs which
+    engine was selected at startup.
+
+Tests: 117 → 124. `test_ollama_bridge.py` covers reachability,
+model listing, default-model picking, OllamaEngine init, and the
+fallback chain (with patched detectors).
+
 ## 2026-05-07 — Session 16: ICT-only consolidation + persona library
 
 User pivoted to a single-solution focus: make ICT-FaceKit the

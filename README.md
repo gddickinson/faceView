@@ -373,11 +373,17 @@ FACEVIEW_AVATAR=1 faceview
 python -m tools.run_mcp_server
 ```
 
-Set `ANTHROPIC_API_KEY` to enable real Claude responses. Without it, the chat falls back to a deterministic echo so the GUI is fully usable.
+Set `ANTHROPIC_API_KEY` to enable real Claude responses. Without it, faceView automatically falls back to:
+
+1. **Local Ollama** if `ollama serve` is reachable on `127.0.0.1:11434` and any model is installed (e.g. `ollama pull llama3.1:8b`). Pick the model via `FACEVIEW_OLLAMA_MODEL=llama3.1:8b` or accept the auto-pick (first installed llama/mistral/phi/qwen).
+2. **Demo echo engine** as the last resort — keeps the GUI usable without any LLM at all.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-export FACEVIEW_MODEL=claude-sonnet-4-6     # default
+export FACEVIEW_MODEL=claude-sonnet-4-6        # default
+# OR
+ollama pull llama3.1:8b                         # local fallback
+export FACEVIEW_OLLAMA_MODEL=llama3.1:8b       # optional pin
 ```
 
 ## Driving the GUI from Claude Code

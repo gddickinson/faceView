@@ -51,23 +51,62 @@ class ICTModel:
 # warm flesh tone; teeth ivory; sclera bright; iris dark amber; lips
 # slightly redder than face. Tongue/gums dusky red.
 
-_MATERIAL_COLORS: dict[str, tuple[float, float, float]] = {
-    "M_Face":         (0.95, 0.82, 0.74),    # natural skin (less pink)
-    "M_BackHead":     (0.88, 0.76, 0.68),
-    "M_GumsTongue":   (0.62, 0.34, 0.34),    # dusky pink-red
-    "M_Teeth":        (0.96, 0.93, 0.86),    # ivory
-    "M_ScleraLeft":   (0.97, 0.94, 0.88),    # bright sclera
-    "M_ScleraRight":  (0.97, 0.94, 0.88),
-    "M_IrisLeft":     (0.30, 0.45, 0.55),    # blue-grey iris (visible)
-    "M_IrisRight":    (0.30, 0.45, 0.55),
-    "M_LacrimalFluid":(0.94, 0.88, 0.82),    # tear duct
-    "M_EyeBlend":     (0.92, 0.78, 0.70),    # eyelid skin (matches face)
-    "M_EyeOcclusion": (0.45, 0.30, 0.25),    # softer inner socket
-    "M_EyeLashes":    (0.10, 0.07, 0.05),
-}
+def _hsv_to_rgb(h_deg: float, s: float, v: float) -> tuple[float, float, float]:
+    """HSV (hue in degrees) → RGB tuple in [0, 1]."""
+    import colorsys
+    return colorsys.hsv_to_rgb((h_deg % 360) / 360.0, s, v)
 
-# Subsurface scattering colour — warm flesh tint, less aggressive red.
-_SSS_TINT = (0.78, 0.46, 0.40)
+
+def _hex_to_rgb_f(c: str) -> tuple[float, float, float]:
+    s = c.lstrip("#")
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    try:
+        return (int(s[0:2], 16) / 255.0,
+                int(s[2:4], 16) / 255.0,
+                int(s[4:6], 16) / 255.0)
+    except (ValueError, IndexError):
+        return 0.5, 0.5, 0.5
+
+
+def _material_palette(params) -> dict[str, tuple[float, float, float]]:
+    """Build a per-material colour palette driven by the persona.
+
+    Skin / eyelids derive from ``persona.skin_hue`` via HSV; iris
+    from ``persona.eye_color`` (default brown); lips from
+    ``persona.lip_color``; everything else fixed (teeth, sclera,
+    lashes etc.).
+    """
+    sat = float(getattr(params, "_persona_skin_sat", 0.32))
+    val = float(getattr(params, "_persona_skin_val", 0.86))
+    hue = float(getattr(params, "skin_hue", 28.0))
+    skin = _hsv_to_rgb(hue, sat, val)
+    skin_dark = _hsv_to_rgb(hue, sat * 1.15, val * 0.86)
+    eyelid = _hsv_to_rgb(hue, sat * 0.95, val * 0.94)
+    lip = _hex_to_rgb_f(getattr(params, "lip_color", "#a44a4a"))
+    iris = _hex_to_rgb_f(getattr(params, "_persona_eye_color", "#5a3818"))
+
+    return {
+        "M_Face":         skin,
+        "M_BackHead":     skin_dark,
+        "M_GumsTongue":   (lip[0] * 0.65, lip[1] * 0.45, lip[2] * 0.45),
+        "M_Teeth":        (0.96, 0.93, 0.86),
+        "M_ScleraLeft":   (0.96, 0.93, 0.86),
+        "M_ScleraRight":  (0.96, 0.93, 0.86),
+        "M_IrisLeft":     iris,
+        "M_IrisRight":    iris,
+        "M_LacrimalFluid":(0.94, 0.88, 0.82),
+        "M_EyeBlend":     eyelid,
+        "M_EyeOcclusion": (0.36, 0.24, 0.22),
+        "M_EyeLashes":    (0.08, 0.06, 0.05),
+        "M_HairCap":      _hex_to_rgb_f(
+            getattr(params, "hair_color", "#2a1808")),
+    }
+
+
+# Subsurface scattering colour — softer warm tint, scaled down so it
+# doesn't overwhelm the base skin.
+_SSS_TINT = (0.62, 0.36, 0.30)
 
 
 # Per-material specular intensity (A43). Eyes get high mirror-like
@@ -425,7 +464,7 @@ def _render_via_moderngl(
         verts=verts.astype(np.float32),
         normals=vert_norms.astype(np.float32),
         triangles=triangles.astype(np.uint32),
-        vert_colors=_per_vertex_colors().astype(np.float32),
+        vert_colors=_per_vertex_colors_for(params).astype(np.float32),
         vert_spec=_per_vertex_specular().astype(np.float32),
         centre=centre.astype(np.float32),
         scale=float(scale),
@@ -435,27 +474,73 @@ def _render_via_moderngl(
     )
 
 
-@lru_cache(maxsize=1)
-def _per_vertex_colors() -> np.ndarray:
-    """Return (N, 3) RGB float colors keyed off the OBJ's material tags.
+def _per_vertex_colors_for(params) -> np.ndarray:
+    """Return (N, 3) RGB colors keyed off the OBJ's material tags +
+    persona palette + scalp hair detection.
 
-    Vertex color = mean of the colors of every triangle that
-    references it. Vertices shared by face and non-face materials
-    end up blended, which gives a natural transition.
+    Vertices in the upper-back of the head (scalp area) get the
+    persona's hair_color, so the bald ICT mesh gets a believable
+    "hair cap" without a separate mesh.
     """
+    palette = _material_palette(params)
     m = load_ict_model()
     n_verts = len(m.vertices)
     accum = np.zeros((n_verts, 3), dtype=np.float64)
     counts = np.zeros(n_verts, dtype=np.int32)
-    fallback = _MATERIAL_COLORS.get("M_Face", (0.85, 0.7, 0.6))
+    fallback = palette["M_Face"]
+
+    # ── Scalp detection ────────────────────────────────────────
+    # Mesh comes in BP3D anatomical coords (Y up, head at +Y). The
+    # scalp is the highest part. Find the Y threshold above which we
+    # treat M_Face/M_BackHead vertices as hair. Hair_color comes from
+    # the persona — bald look = same as skin colour.
+    verts = m.vertices
+    y_min = verts[:, 1].min()
+    y_max = verts[:, 1].max()
+    y_span = y_max - y_min
+    # Top 28% of head goes to "hair cap" but only on the back side
+    # (positive Z is forward; we want negative Z = back-of-head).
+    hair_y_thresh = y_max - y_span * 0.28
+    z_thresh = float(np.median(verts[:, 2])) - y_span * 0.04
+    hair_color = palette["M_HairCap"]
+
     for ti, mat_idx in enumerate(m.tri_materials):
-        color = (_MATERIAL_COLORS.get(m.materials[mat_idx], fallback)
-                 if 0 <= mat_idx < len(m.materials) else fallback)
+        mat_name = (m.materials[mat_idx]
+                    if 0 <= mat_idx < len(m.materials) else "M_Face")
         for v in m.triangles[ti]:
+            color = palette.get(mat_name, fallback)
+            # Override with hair when the vertex is on the scalp.
+            if mat_name in ("M_Face", "M_BackHead"):
+                vy, vz = verts[v, 1], verts[v, 2]
+                if vy > hair_y_thresh and vz < z_thresh:
+                    color = hair_color
+                # Fade smoothly between hair and skin at the
+                # forehead transition to avoid a sharp seam.
+                elif vy > hair_y_thresh - y_span * 0.04 and vz < z_thresh:
+                    blend = (vy - (hair_y_thresh - y_span * 0.04)) / (y_span * 0.04)
+                    blend = float(np.clip(blend, 0.0, 1.0))
+                    color = (
+                        color[0] * (1 - blend) + hair_color[0] * blend,
+                        color[1] * (1 - blend) + hair_color[1] * blend,
+                        color[2] * (1 - blend) + hair_color[2] * blend,
+                    )
             accum[v] += color
             counts[v] += 1
     counts = np.maximum(counts, 1)
     return (accum / counts[:, None]).astype(np.float32)
+
+
+@lru_cache(maxsize=1)
+def _per_vertex_colors() -> np.ndarray:
+    """Compatibility shim for the default neutral palette."""
+    class _DefaultParams:
+        skin_hue = 28.0
+        lip_color = "#a44a4a"
+        hair_color = "#2a1808"
+        _persona_eye_color = "#5a3818"
+        _persona_skin_sat = 0.32
+        _persona_skin_val = 0.86
+    return _per_vertex_colors_for(_DefaultParams())
 
 
 @lru_cache(maxsize=1)
