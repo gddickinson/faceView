@@ -818,13 +818,16 @@ def _project_ict_to_pixel(
 
     w, h = size
     aspect = float(h) / float(w) if w > 0 else 1.0
+    # Diagonal "S" matching the renderer: scale all three axes by
+    # `scale`, then shrink X further by `aspect`. This must happen
+    # BEFORE rotation, exactly as the renderer's `model = ry @ rx
+    # @ flip @ S @ T` applies it.
+    S = np.diag([scale * aspect, scale, scale]).astype(np.float32)
     out: dict[str, tuple[float, float]] = {}
     for name, p in points_3d.items():
-        v = (p - centre) * scale
+        v = S @ (p - centre)
         v = M @ v
-        # Aspect-correct X to match the renderer's diag scale.
-        v_x = v[0] * aspect
-        x_pix = (v_x + 1.0) / 2.0 * w
+        x_pix = (v[0] + 1.0) / 2.0 * w
         y_pix = (1.0 - (v[1] + 1.0) / 2.0) * h
         out[name] = (float(x_pix), float(y_pix))
     return out
@@ -863,13 +866,15 @@ def _project_bp3d_to_pixel(
 
     w, h = size
     aspect = float(h) / float(w) if w > 0 else 1.0
+    # Aspect-correct S applied BEFORE rotation, matching the
+    # renderer order `model = ry @ rx @ S @ T`.
+    S = np.diag([scale * aspect, scale, scale]).astype(np.float32)
     out: dict[str, tuple[float, float]] = {}
     for name, p in points_3d.items():
         v = R_pre @ p           # apply BP3D-screen pre-rotation
-        v = (v - centre) * scale
+        v = S @ (v - centre)
         v = ry @ rx @ v
-        v_x = v[0] * aspect
-        x_pix = (v_x + 1.0) / 2.0 * w
+        x_pix = (v[0] + 1.0) / 2.0 * w
         y_pix = (1.0 - (v[1] + 1.0) / 2.0) * h
         out[name] = (float(x_pix), float(y_pix))
     return out
@@ -980,12 +985,18 @@ def _align_anatomy_to_ict(
     src = np.array([bp3_pix[k] for k in used], dtype=np.float32)
     dst = np.array([ict_pix[k] for k in used], dtype=np.float32)
 
-    # Rigid SIMILARITY transform (uniform scale + rotation +
-    # translation, no shear). LSQ-fit over all 19 anchors via
-    # estimateAffinePartial2D — stable and preserves BP3D mesh
-    # proportions. (Tried TPS non-rigid: introduces visible mesh
-    # distortion that doesn't read as "anatomy".)
-    M, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.LMEDS)
+    # Full AFFINE transform (uniform scale + rotation + non-uniform
+    # scale + shear + translation) — LSQ-fit over all 19 anchors.
+    # Similarity (rotation+uniform-scale only) couldn't reconcile
+    # eye-to-chin misalignment: BP3D eyes are ~56 px lower than ICT
+    # eyes but BP3D chin is ~16 px *higher* than ICT chin. A
+    # single uniform scale can't stretch the eye-chin span without
+    # also displacing the crown. Full affine adds Y-axis non-
+    # uniform scale that resolves it without introducing the per-
+    # region distortion that TPS does (still a single linear
+    # transform across the whole image, individual mesh features
+    # keep their shape).
+    M, _ = cv2.estimateAffine2D(src, dst, method=cv2.LMEDS)
     if M is None:
         M = cv2.getAffineTransform(src[:3], dst[:3])
     warped = cv2.warpAffine(
