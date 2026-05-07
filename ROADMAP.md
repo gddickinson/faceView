@@ -38,7 +38,16 @@ Track legend:
 | A24 | A | TMJ jaw rotation in landmark deformation pipeline | done |
 | A25 | A | Decimated BP3D skin head (real anatomy, vertex-cluster decimated) | done |
 | A26 | A | GPU path for `head_decimated_3d` (current CPU path is ~8 fps) | future |
-| A27 | A | Open-mouth texture variant for face_warp (blend by AU26) | future |
+| A27 | A | Open-mouth texture variant for face_warp (blend by AU26) | crude composite shipped, proper render via mandible rotation pending |
+| A28 | A | Multi-angle texture atlas (`face_warp_3d`) — 5 yaws blended | done |
+| A29 | A | ARKit 52-blendshape compatibility layer | done |
+| A30 | A | MakeHuman CC0 base mesh integration (`makehuman_3d`) | done |
+| A31 | A | USC ICT / ProductionCrate 150+ MIT-licensed blendshape pack — real mesh deltas | candidate, replaces synthetic FACS displacement vectors |
+| A32 | A | MetaHuman Head FBX (52 ARKit blendshapes, Gumroad CC) — drop-in better base | candidate |
+| A33 | A | Subsurface scattering / dual specular skin shader (per MetaHuman) | future GPU-only |
+| A34 | A | MediaPipe FaceLandmarker as live capture input — drive avatar from webcam | future |
+| A35 | A | CMU mocap library (BVH/ASF/AMC) for full-body avatar motion if scope expands | future, body-focused |
+| A36 | A | openFACS UDP bridge — emit our AU stream to an Unreal-rendered avatar | future bridge, MIT-licensed [phuselab/openFACS](https://github.com/phuselab/openFACS) |
 
 ## Next (clear winners, queued)
 

@@ -289,6 +289,12 @@ def render_face(params: FaceParams, size: tuple[int, int] = (640, 480)) -> np.nd
     if mode == "head_decimated_3d":
         from faceview.vision.head_decimated import render_face_decimated
         return render_face_decimated(params, size)
+    if mode == "face_warp_3d":
+        from faceview.vision.face_warp_atlas import render_face_warp_atlas
+        return render_face_warp_atlas(params, size)
+    if mode == "makehuman_3d":
+        from faceview.vision.makehuman_mesh import render_face_makehuman
+        return render_face_makehuman(params, size)
 
     from faceview.vision.sim_face_parts import (
         draw_brows,

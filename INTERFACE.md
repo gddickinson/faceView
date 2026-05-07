@@ -86,6 +86,13 @@ faceView/
 │   │   ├── head_decimated.py    BP3D skin mesh decimated via vertex
 │   │   │                        clustering; real anatomical head
 │   │   │                        topology at lite-3D polygon count
+│   │   ├── face_warp_atlas.py   5-yaw atlas blending — face_warp_3d
+│   │   │                        rotates AND deforms with FACS
+│   │   ├── makehuman_mesh.py    MakeHuman base.obj (CC0) loader +
+│   │   │                        decimation; render mode makehuman_3d
+│   │   ├── arkit_blendshapes.py 52 ARKit blendshapes (industry std,
+│   │   │                        used by MediaPipe / iOS / MetaHumans)
+│   │   │                        + two-way mapping to/from our 12 AUs
 │   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
 │   │                            + coarticulated lip-sync from text
 │   │                            + persona overlay applied per tick

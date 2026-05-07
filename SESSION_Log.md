@@ -13,6 +13,64 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-07 — Session 12: Atlas rotation + MakeHuman + ARKit + research
+
+User asked us to proceed with all 7 ranked next steps from the
+realism assessment + research game-industry techniques starting
+with MediaPipe and MakeHuman.
+
+**Research findings**
+
+  * MediaPipe FaceLandmarker outputs 478 3D landmarks + **52 ARKit-
+    compatible blendshapes** per frame. Industry standard.
+  * ARKit's 52-shape canonical set is FACS-derived, used by
+    MetaHumans, Ready Player Me, MediaPipe, iOS Face ID, etc.
+  * MetaHuman skin uses **subsurface scattering + dual specular
+    lobes + scanned topology** — well beyond CPU rasterisation.
+  * MakeHuman base mesh: 19K verts, **CC0 licensed**, proper
+    feature topology designed for character animation.
+  * USC ICT / ProductionCrate pack: **150+ MIT-licensed
+    blendshapes** (mesh deltas) — future integration path.
+
+**Multi-angle texture atlas** (`vision/face_warp_atlas.py`)
+  * Renders BP3D head at 5 yaws (-45° to +45°) via the GPU
+    pipeline → bundles in `assets/data/atlas/`.
+  * Per frame: pick the two nearest atlas textures, warp each
+    via FACS landmark deformation, crossfade by yaw distance.
+  * New render mode `face_warp_3d` — photo-real face that *both*
+    rotates and deforms with FACS.
+
+**ARKit 52-blendshape compatibility** (`vision/arkit_blendshapes.py`)
+  * Canonical 52-name list, two-way mapping to/from our 12 AUs.
+  * `ARKitFrame` dataclass for round-tripping captures.
+  * Lets external face-tracking (MediaPipe / iOS Face ID / etc)
+    drive our avatar via the standard vocabulary, and lets our
+    AU pipeline emit ARKit-compatible coefficients for rigging
+    Unity / Unreal / RPM avatars.
+
+**MakeHuman base mesh** (`vision/makehuman_mesh.py`)
+  * Bundled `assets/data/makehuman/base.obj` (CC0, 19K verts).
+  * `load_makehuman_head` parses, crops to head + neck, decimates
+    via vertex clustering. Renders via QPainter Z-sort.
+  * Cleaner topology than BP3D-skin-decimated for character work.
+  * New render mode `makehuman_3d`, persona of same name.
+
+**Comparison** (`docs/images/all_modes_compare.png`)
+  Seven modes side-by-side: anatomical 2D / anatomical refined /
+  decimated BP3D / MakeHuman / face_warp 2D / face_warp 3D atlas
+  / GPU lifelike (reference).
+
+**Tests**: 99 → 105 (new test_arkit_blendshapes covering canonical
+set, AU↔ARKit round-trip, edge cases).
+
+**Future integrations documented in roadmap**:
+  - USC ICT 150+ blendshape pack (MIT) — replace synthetic FACS
+    deltas with real mesh deltas.
+  - MetaHuman Head FBX (52 ARKit-compatible blendshapes from
+    Gumroad) — drop-in better mesh.
+  - Open-mouth texture variant — current crude composite is too
+    obvious; need proper jaw-rotation render via faceforge pipeline.
+
 ## 2026-05-07 — Session 11: TMJ jaw + decimated BP3D head + faceforge investigation
 
 User said the lite 3D didn't look like a face at all and asked us
