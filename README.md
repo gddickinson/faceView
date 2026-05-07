@@ -27,6 +27,14 @@ What faceView actually ships under "lip reading" is **mouth-activity + viseme de
 
 The upgrade path to real VSR (Auto-AVSR converted to ONNX and run via `onnxruntime` CoreML EP) is documented in `INTERFACE.md` and is purely additive — drop in a new `vision/visual_asr.py` worker that subscribes to `FRAME` events.
 
+## Live demo — full GUI + ICT avatar driven by HTTP
+
+<p align="center">
+  <img src="docs/images/live_gui_surprised.png" alt="live GUI — surprised ICT avatar" width="100%">
+</p>
+
+*Live `FACEVIEW_AVATAR=1 faceview` session. ICT-FaceKit head in the camera panel, real anatomical mouth open showing teeth and tongue from `POST /avatar/emotion {name: "surprised"}`. Status pills update in real time: `surprise 82% / mouth AA / owner 0.71`. Chat panel shows the conversation; the GUI also responds to `POST /chat`, `POST /avatar/say`, `POST /avatar/persona` and a stdio MCP server.*
+
 ## Talking avatar — Claude's face
 
 faceView ships an animated 3D head — the **ICT-FaceKit** photo-real avatar — driven by Claude's chat replies. Set `FACEVIEW_AVATAR=1` and the camera panel becomes Claude's face: smooth Phong-shaded skin, real ARKit blendshapes for expression, GPU-accelerated through Apple Metal.
