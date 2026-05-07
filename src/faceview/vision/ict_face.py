@@ -817,14 +817,14 @@ def _project_ict_to_pixel(
     M = ry @ rx @ flip
 
     w, h = size
+    aspect = float(h) / float(w) if w > 0 else 1.0
     out: dict[str, tuple[float, float]] = {}
     for name, p in points_3d.items():
         v = (p - centre) * scale
         v = M @ v
-        # Orthographic to NDC then to pixel. Frag y was flipped via
-        # np.flipud after read → so screen y matches our negated y.
-        # We undo the flipud here: y_pix = (1 - (v.y + 1)/2) * h
-        x_pix = (v[0] + 1.0) / 2.0 * w
+        # Aspect-correct X to match the renderer's diag scale.
+        v_x = v[0] * aspect
+        x_pix = (v_x + 1.0) / 2.0 * w
         y_pix = (1.0 - (v[1] + 1.0) / 2.0) * h
         out[name] = (float(x_pix), float(y_pix))
     return out
@@ -862,12 +862,14 @@ def _project_bp3d_to_pixel(
                     dtype=np.float32)
 
     w, h = size
+    aspect = float(h) / float(w) if w > 0 else 1.0
     out: dict[str, tuple[float, float]] = {}
     for name, p in points_3d.items():
         v = R_pre @ p           # apply BP3D-screen pre-rotation
         v = (v - centre) * scale
         v = ry @ rx @ v
-        x_pix = (v[0] + 1.0) / 2.0 * w
+        v_x = v[0] * aspect
+        x_pix = (v_x + 1.0) / 2.0 * w
         y_pix = (1.0 - (v[1] + 1.0) / 2.0) * h
         out[name] = (float(x_pix), float(y_pix))
     return out
@@ -1039,12 +1041,17 @@ def _render_jelly_composite(params, size: tuple[int, int]) -> np.ndarray:
         return ict_bgr
 
     avail = set(list_available_meshes())
-    raw_specs = [s for s in specs_for_layer_set("features") if s.fma in avail]
-    # Restrict to head-only meshes — drop cervical vertebrae and the
-    # neck-muscle group so the BP3D anatomy doesn't extend below the
-    # ICT chin/collar line.
-    specs = [s for s in raw_specs if s.category != "vertebra"
-             and not _is_neck_muscle(s.name)]
+    raw_specs = [s for s in specs_for_layer_set("all_head_neck")
+                  if s.fma in avail]
+    # Drop:
+    #  - eyebrows (renders as a dark stripe; brow structure
+    #    already shows through the Frontalis / Corrugator muscles).
+    #  - skin (a fully-opaque skin mesh would block everything
+    #    underneath; we want the muscle/bone anatomy visible).
+    # Keep: skull, jaw (mandible), cervical vertebrae (neck bones),
+    # all neck + face muscles, eyes, ears, nose, throat.
+    specs = [s for s in raw_specs
+              if s.category not in ("eyebrows", "skin")]
     if not specs:
         return ict_bgr
 
@@ -1749,8 +1756,12 @@ class _ICTRenderer:
                         [0, sp_, cp_, 0], [0, 0, 0, 1]], dtype=np.float32)
         T = np.eye(4, dtype=np.float32)
         T[:3, 3] = -centre
-        S = np.eye(4, dtype=np.float32) * scale
-        S[3, 3] = 1.0
+        # Aspect-correct the scale: viewport maps NDC X→[0,w] and
+        # Y→[0,h]. With uniform scale, a non-square framebuffer
+        # (e.g. 640×480) stretches X by w/h. Compensate by shrinking
+        # the X axis on the model side.
+        aspect = float(h) / float(w) if w > 0 else 1.0
+        S = np.diag([scale * aspect, scale, scale, 1.0]).astype(np.float32)
         # ICT mesh has +Y up (head at +Y) and +Z back. We need to
         # flip Y for screen and flip Z so the face points -Z (toward
         # camera).
