@@ -26,6 +26,9 @@ Track legend:
 | A10 | A | Layered illustrative anatomy (skull / brain / eyes / muscles / skin) — 6 modes | done |
 | A11 | A | Photo-anatomical via BodyParts3D STL meshes (faceforge_3d mode) | done |
 | A14 | A | Lift faceforge head catalog (145 STLs, per-mesh materials, lifelike skin) | done |
+| A15 | A | Lite 3D animatable head (~105 verts, Delaunay-tri, AU-deformable, ~55 fps CPU) | done |
+| A16 | A | GPU rendering via moderngl + Apple Metal (~36 fps lifelike on M1) | done |
+| A17 | A | BP3D-derived landmark refinement (measure anatomy off the skull) | infrastructure done; 2D template integration pending |
 
 ## Next (clear winners, queued)
 

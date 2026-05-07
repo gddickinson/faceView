@@ -110,5 +110,19 @@
     "lip_color": "#a85248",
     "background": "#0a0d12",
     "render_mode": "faceforge_3d"
+  },
+  "head_3d_lite": {
+    "skin_hue": 26.0,
+    "hair_color": "#2a1808",
+    "lip_color": "#a85248",
+    "background": "#0a0d12",
+    "render_mode": "head_3d_lite"
+  },
+  "faceforge_3d_gpu": {
+    "skin_hue": 26.0,
+    "hair_color": "#2a1808",
+    "lip_color": "#a85248",
+    "background": "#0a0d12",
+    "render_mode": "faceforge_3d_gpu"
   }
 }

@@ -13,6 +13,65 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-06 — Session 8: Three new 3D rendering tracks
+
+User asked for three things: (1) use the 3D model to improve other
+animations, (2) GPU-accelerate the lifelike head with Apple Metal,
+(3) build simplified animatable 3D models. All three shipped.
+
+**Lite 3D animatable head** (`vision/head_3d_lite.py`)
+- Existing 86 anatomical landmarks + ~19 back-of-head / scalp / neck
+  closure points = ~105 vertices total.
+- Hand-tuned Z depth per landmark group (nose tip protrudes, temples
+  recede, ears further back, scalp dome behind hairline, neck-front
+  flush, etc.).
+- SciPy Delaunay over the projected front face + hand-coded back
+  triangulation (~50 hand-tris) stitches the silhouette closed.
+- AU-driven landmark deformation reused from the 2D pipeline, so the
+  same FACS expressions / visemes drive both 2D and lite-3D.
+- Triangle colour rule: feature colour only when *all three*
+  vertices share the feature group; otherwise default to skin —
+  prevents Delaunay-spanning lip-coloured wedges.
+- Z-sorted painter's algorithm via QPainter. Per-triangle Phong
+  (Lambert diffuse + specular).
+- ~55 fps on a single CPU core. New render mode `head_3d_lite`,
+  persona of the same name.
+
+**GPU-accelerated lifelike head** (`vision/gpu_renderer.py`)
+- New optional dep `moderngl` (one-time `pip install moderngl`).
+- Standalone offscreen OpenGL 4.1 context. On Apple Silicon this is
+  served by Apple's Metal compatibility layer (`Apple M1 Max
+  Metal - 90.5`).
+- VBO upload per BP3D mesh, cached after first frame. Phong vertex
+  + fragment shaders. Per-mesh material uniforms (colour, opacity,
+  shininess) preserve the catalog appearance.
+- BP3D→screen reorientation moved on-CPU once at upload time so the
+  shader stays simple.
+- Renders the full 145-mesh head at **~36 fps** on M1 Max — the only
+  path that animates the lifelike anatomy in real time. New render
+  mode `faceforge_3d_gpu`.
+
+**BP3D-derived landmark refinement** (`vision/bp3d_landmarks.py`)
+- Measures anatomical reference points (chin, mandible angles, top
+  of skull, temples) directly off the BP3D skull bone meshes.
+- Returns a name → (x_norm, y_norm) override dict the 2D template
+  could opt into. Currently exposed as infrastructure; full
+  integration into the 2D landmark template is roadmap A15.
+
+Demos in `tools/animate_3d_modes.py`:
+- `head_3d_lite_emotions.png` — 6-emotion grid in lite 3D.
+- `head_3d_lite_talking.gif` — lite 3D head speaking + rotating.
+- `gpu_lifelike_rotate.gif` — full BP3D head rotating in real time.
+- `three_d_modes_compare.png` — stylised 2D / lite 3D / GPU
+  lifelike side-by-side at the same neutral pose.
+
+Three new personas in `personas.json`: `head_3d_lite`,
+`faceforge_3d_gpu` (and the existing `faceforge_3d`).
+
+Tests: 83 → 92. Coverage: lite-3D template + dispatch + rotation
++ emotion delta + persona-driven mode; GPU import gated on moderngl
++ render gated on BP3D meshes available.
+
 ## 2026-05-06 — Session 7: Lifelike photo-anatomical face
 
 - User asked for a *lifelike* 3D anatomical face leveraging the

@@ -71,9 +71,16 @@ faceView/
 │   │   ├── anatomy_catalog.py   Unified head-anatomy MeshSpec catalog
 │   │   │                        (20 bones / 100+ muscles / 8 features /
 │   │   │                        7 vertebrae / 1 skin) lifted from faceforge
-│   │   ├── faceforge_bridge.py  Photo-anatomical render entry; layer
-│   │   │                        sets: skull_only / muscles / features /
-│   │   │                        lifelike / xray / vertebrae
+│   │   ├── faceforge_bridge.py  Photo-anatomical render entry (CPU);
+│   │   │                        layer sets: skull_only / muscles /
+│   │   │                        features / lifelike / xray / vertebrae
+│   │   ├── gpu_renderer.py      Same head, Apple Metal-backed OpenGL
+│   │   │                        via moderngl. ~36 fps lifelike on M1.
+│   │   ├── head_3d_lite.py      ~105-vertex animatable 3D head;
+│   │   │                        Delaunay front + hand-tri back; AU-
+│   │   │                        deformable; ~55 fps on CPU.
+│   │   ├── bp3d_landmarks.py    Measure anatomical landmark positions
+│   │   │                        from the BP3D skull (refines 2D template)
 │   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
 │   │                            + coarticulated lip-sync from text
 │   │                            + persona overlay applied per tick
@@ -118,6 +125,8 @@ faceView/
     ├── animate_anatomical.py    Anatomical-mode GIFs + emotion grid
     ├── animate_anatomy_layers.py  Layered-anatomy grid + peel-away GIF +
     │                            BP3D rotating head (when meshes present)
+    ├── animate_3d_modes.py      Lite-3D talking GIF + emotion grid +
+    │                            three-modes comparison panel
     ├── copy_anatomy_meshes.py   Copy head+neck STLs from a BodyParts3D dump
     ├── render_personas.py       Persona contact sheet (docs/images/personas.png)
     ├── enroll_owner.py          One-time face-enrollment routine

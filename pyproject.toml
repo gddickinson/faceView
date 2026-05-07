@@ -49,6 +49,10 @@ vision = [
     "opencv-python>=4.9",
     "mediapipe>=0.10.14",
 ]
+gpu = [
+    "moderngl>=5.10",
+    "scipy>=1.10",
+]
 identity = [
     "insightface>=0.7",
     "onnxruntime>=1.17",
@@ -60,7 +64,7 @@ mcp = [
     "mcp>=1.0",
 ]
 full = [
-    "faceview[speech,vision,identity,emotion,mcp]",
+    "faceview[speech,vision,identity,emotion,mcp,gpu]",
 ]
 
 [project.scripts]

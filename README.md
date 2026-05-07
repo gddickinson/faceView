@@ -133,7 +133,43 @@ This copies ~145 head/neck STLs (~150 MB) into `src/faceview/assets/anatomy_mesh
   <img src="docs/images/anatomy_meshes_skull_rotate.gif" alt="rotating skull" width="40%">
 </p>
 
-*Skull + cervical vertebrae rotating live. The lifelike mode is too compute-heavy for animation on a CPU rasteriser — see roadmap A12/A13 for the OpenGL upgrade.*
+*Skull + cervical vertebrae rotating live (CPU). The full lifelike mode is too compute-heavy for animation on the CPU rasteriser — see GPU section below.*
+
+### GPU rendering — Apple Metal via OpenGL
+
+The `faceforge_3d_gpu` mode uploads the BP3D meshes once into VBOs and renders them through a Phong shader on Apple Silicon's Metal compatibility layer (via `moderngl`'s standalone OpenGL 4.1 context). On an M1 Max it runs at **~36 fps for the full 145-mesh head** — the only path that gets the lifelike anatomy into a real-time GIF.
+
+```bash
+pip install moderngl   # one-time
+```
+
+<p align="center">
+  <img src="docs/images/gpu_lifelike_rotate.gif" alt="GPU lifelike head rotating" width="48%">
+</p>
+
+*BP3D head rotating in real time on the GPU. Same mesh data + materials as the CPU `faceforge_3d` mode, just routed through Metal. Each frame ~28 ms after the one-time mesh upload.*
+
+### Head 3D lite — animatable middle ground
+
+The CPU lifelike renderer is too heavy to animate, and the stylised 2D path doesn't have depth. `head_3d_lite` sits between them: takes the existing 86 anatomical landmarks, adds hand-tuned Z depth per group (nose tip protrudes, temples recede, ears further back, scalp dome, neck-front), closes the silhouette with ~19 back-of-head and neck points, runs SciPy Delaunay over the front face, and z-sorts the result through QPainter. Result: a low-poly 3D head you can rotate **and** drive with FACS — at ~55 fps on a single CPU core.
+
+<p align="center">
+  <img src="docs/images/head_3d_lite_emotions.png" alt="lite 3D — six emotions" width="100%">
+</p>
+
+*Six FACS emotions in the lite 3D pipeline. Same `apply_expression()` → `face_state_to_params()` → AU-driven landmark deformation as the 2D anatomical mode — only the renderer differs. The mesh is shaded with a Phong-style per-triangle Lambert + specular term.*
+
+<p align="center">
+  <img src="docs/images/head_3d_lite_talking.gif" alt="lite 3D talking head" width="40%">
+</p>
+
+*Lite 3D head speaking, same SpeechEngine + viseme-blend pipeline as the rest of the avatar system, with a slow yaw oscillation. Real-time animation on CPU.*
+
+<p align="center">
+  <img src="docs/images/three_d_modes_compare.png" alt="three rendering tracks compared" width="100%">
+</p>
+
+*The three new render tracks side-by-side: **stylised 2D** (cartoony, fastest), **lite 3D** (animatable, low-poly with depth + rotation), **GPU lifelike** (photo-anatomical from real BP3D meshes, ~36 fps via Apple Metal).*
 
 ### Render-mode reference
 
@@ -151,7 +187,9 @@ Switchable at runtime via `POST /avatar/persona`:
 | `anatomy_muscles` | layered | Solid muscle masses + activation overlay. |
 | `anatomy_eyeballs` | layered | Full eye globes + optic nerves on faded skull. |
 | `anatomy_xray` | layered | All five layers translucent — see-through head. |
-| `faceforge_3d` | photo-anatomical | Real BodyParts3D STL meshes — 145 head/neck structures with per-mesh material + Phong shading. Layer sets: `skull_only`, `muscles`, `features`, `lifelike`, `xray`. |
+| `faceforge_3d` | photo-anatomical | Real BodyParts3D STL meshes — 145 head/neck structures with per-mesh material + Phong shading. Layer sets: `skull_only`, `muscles`, `features`, `lifelike`, `xray`. CPU rasteriser. |
+| `faceforge_3d_gpu` | photo-anatomical | Same as `faceforge_3d` but rendered through Apple Metal-backed OpenGL via `moderngl`. ~36 fps on M1 Max — the only path that animates the lifelike head in real time. Same layer sets. |
+| `head_3d_lite` | 3D animated | ~105-vertex Delaunay-triangulated mesh with hand-tuned Z depth per landmark + back-of-head closure. AU-driven deformation drives expression. Renders ~55 fps on CPU. The animatable middle ground between stylised 2D and photo-anatomical. |
 
 ## The simulated face — building blocks
 
@@ -309,7 +347,7 @@ Then a Claude Code session can call `send_chat`, `speak`, `camera_state`, `list_
 ## Testing
 
 ```bash
-pytest                # 83 tests, all green
+pytest                # 92 tests, all green
 ```
 
 Tests run fully offscreen (`QT_QPA_PLATFORM=offscreen` is set in `tests/conftest.py`) and require only the `[dev]` extra — no real ML model is loaded.

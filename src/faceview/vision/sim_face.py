@@ -277,6 +277,12 @@ def render_face(params: FaceParams, size: tuple[int, int] = (640, 480)) -> np.nd
     if mode == "faceforge_3d":
         from faceview.vision.faceforge_bridge import render_face_faceforge
         return render_face_faceforge(params, size)
+    if mode == "head_3d_lite":
+        from faceview.vision.head_3d_lite import render_face_3d_lite
+        return render_face_3d_lite(params, size)
+    if mode == "faceforge_3d_gpu":
+        from faceview.vision.gpu_renderer import render_face_faceforge_gpu
+        return render_face_faceforge_gpu(params, size)
 
     from faceview.vision.sim_face_parts import (
         draw_brows,
