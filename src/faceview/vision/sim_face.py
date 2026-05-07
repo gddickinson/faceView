@@ -268,6 +268,15 @@ def render_face(params: FaceParams, size: tuple[int, int] = (640, 480)) -> np.nd
     if mode in ("anatomical", "anatomy_overlay", "wireframe"):
         from faceview.vision.sim_face_anatomical import render_face_anatomical
         return render_face_anatomical(params, size, mode=mode)  # type: ignore[arg-type]
+    if mode.startswith("anatomy_") and mode in (
+        "anatomy_layers", "anatomy_skull", "anatomy_brain",
+        "anatomy_muscles", "anatomy_xray", "anatomy_eyeballs",
+    ):
+        from faceview.vision.sim_face_layered import render_face_layered
+        return render_face_layered(params, size, layers=mode)
+    if mode == "faceforge_3d":
+        from faceview.vision.faceforge_bridge import render_face_faceforge
+        return render_face_faceforge(params, size)
 
     from faceview.vision.sim_face_parts import (
         draw_brows,

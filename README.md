@@ -90,14 +90,55 @@ A second renderer is shipped alongside the stylised one. It is built on a hand-c
 
 *Left: anatomical talking avatar — same FACS / phoneme / viseme pipeline as the stylised version, just routed through the muscle-driven landmark deformation. Right: the **anatomy overlay** mode shows each muscle glowing in proportion to its current activation, fiber direction drawn as a tick. Watch zygomaticus light up on a smile, orbicularis oris contract for `OO`, mentalis fire when the jaw closes.*
 
-Three modes are exposed via a `Persona`'s `render_mode` field, switchable at runtime via `POST /avatar/persona`:
+### Anatomical layers (skull / brain / muscles / eyeballs / skin)
 
-| Mode | Use |
-|---|---|
-| `stylised` | Default — the layered cartoony pipeline. Cheap, expressive, persona-friendly. |
-| `anatomical` | Muscle-driven 2D portrait with shaded skin, real eye anatomy, cupid's bow, mentolabial sulcus. |
-| `anatomy_overlay` | Same as anatomical plus a translucent muscle-activation layer. Inspection / teaching / debugging emotion presets. |
-| `wireframe` | Landmark dots + group polylines on a dark background. Cheap, deterministic, shows the underlying template. |
+A second illustrative-anatomy track sits alongside the talking-head renderer. Each layer is a self-contained drawer, and the layered compositor stacks them back-to-front with per-layer alpha. Toggleable via `Persona.render_mode`.
+
+<p align="center">
+  <img src="docs/images/anatomy_layers_grid.png" alt="six anatomy layers" width="100%">
+</p>
+
+*Six anatomy layers, same pose. Skin (top-left) is the standard anatomical render. The others peel layers away — x-ray (translucent stack), muscle masses (43 expression muscles + AU activation tint), eyeballs (full sphere globes with optic nerves visible), brain (4 cerebral lobes + cerebellum + brainstem), skull (cranium, orbits, pyriform aperture, mandible + teeth).*
+
+<p align="center">
+  <img src="docs/images/anatomy_peel.gif" alt="peel-away animation" width="55%">
+</p>
+
+*Peel-away cycle: skin fades to muscles to skull to brain and back. All on the same FACS-driven landmark template, so you can run the animation while peeling.*
+
+### Photo-anatomical mode (BodyParts3D)
+
+For medical-imaging quality, faceView ships a small CPU rasteriser that renders the **head + neck STL subset** of [BodyParts3D](https://lifesciencedb.jp/bp3d/). The meshes are licensed separately and *not* committed to this repo — populate them once via:
+
+```bash
+python -m tools.copy_anatomy_meshes /path/to/bodyparts3D/stl
+```
+
+This copies ~28 head/neck STLs (~25 MB) into `src/faceview/assets/anatomy_meshes/`. After that, render mode `faceforge_3d` (or persona `faceforge_3d`) renders the real meshes via Z-sorted Lambert shading with yaw/pitch from `FaceParams`.
+
+<p align="center">
+  <img src="docs/images/anatomy_meshes_rotate.gif" alt="bodyparts3D head rotating" width="48%">
+</p>
+
+*BodyParts3D head + cervical vertebrae from the user's local mirror, rotating live in faceView. The mesh data is real medical anatomy; faceView only contributes the loader, projection, and rasteriser.*
+
+### Render-mode reference
+
+Switchable at runtime via `POST /avatar/persona`:
+
+| Mode | Track | Use |
+|---|---|---|
+| `stylised` | cartoony | Default — layered cartoony pipeline. Cheap, expressive. |
+| `anatomical` | 2D portrait | FACS-driven landmarks + shaded skin + real eye/lip/nose anatomy. |
+| `anatomy_overlay` | 2D portrait | Same plus translucent muscle activation layer. |
+| `wireframe` | 2D portrait | Landmark dots + group polylines. Debug. |
+| `anatomy_layers` | layered | Skin + muscles + eyeballs + brain + skull, semi-transparent. |
+| `anatomy_skull` | layered | Skull only (cranium, orbits, mandible, teeth). |
+| `anatomy_brain` | layered | Stylised cerebrum + cerebellum inside faded cranium. |
+| `anatomy_muscles` | layered | Solid muscle masses + activation overlay. |
+| `anatomy_eyeballs` | layered | Full eye globes + optic nerves on faded skull. |
+| `anatomy_xray` | layered | All five layers translucent — see-through head. |
+| `faceforge_3d` | photo-anatomical | Real BodyParts3D STL meshes (requires one-time copy). |
 
 ## The simulated face — building blocks
 
@@ -255,7 +296,7 @@ Then a Claude Code session can call `send_chat`, `speak`, `camera_state`, `list_
 ## Testing
 
 ```bash
-pytest                # 63 tests, all green, <2 s
+pytest                # 76 tests, all green, <2 s
 ```
 
 Tests run fully offscreen (`QT_QPA_PLATFORM=offscreen` is set in `tests/conftest.py`) and require only the `[dev]` extra — no real ML model is loaded.

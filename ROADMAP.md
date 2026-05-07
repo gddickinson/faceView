@@ -23,6 +23,8 @@ Track legend:
 | S1 | S | Service ops: `set_emotion`, `set_persona`, `avatar_say` (HTTP + MCP) | done |
 | R2 | R | Persona showcase render + README block | done |
 | A7 | A | Anatomical renderer (86 landmarks + 43 muscles, 4 render modes) | done |
+| A10 | A | Layered illustrative anatomy (skull / brain / eyes / muscles / skin) — 6 modes | done |
+| A11 | A | Photo-anatomical via BodyParts3D STL meshes (faceforge_3d mode) | done |
 
 ## Next (clear winners, queued)
 
@@ -49,6 +51,8 @@ Track legend:
 | A6 | A | Auto-AVSR ONNX VSR upgrade (true lip reading) | Keep current visemes path; add real VSR as opt-in. Heavy. |
 | A8 | A | True 3D head via QOpenGLWidget + faceforge STL meshes | Bring across BodyParts3D meshes + skinning. Multi-week. |
 | A9 | A | Per-muscle activation curves (not just max) for richer overlays | Replace `muscle_activation` max with weighted-sum + clip. |
+| A12 | A | Phong shading + skin/bone material differentiation in `faceforge_3d` | Real specular + per-mesh material; today's renderer is flat Lambert. |
+| A13 | A | AU-driven mesh deformation in `faceforge_3d` (skinning) | Lift faceforge's delta-matrix soft-tissue skinning. |
 | X1 | X | Local LLM backend (Ollama) | Pluggable client behind `llm.client` interface. |
 | X2 | X | Streaming TTS (Kokoro / Piper) | Replace pyttsx3 demo; keep pyttsx3 as fallback. |
 | X3 | X | Web UI mode (server + browser frontend) | Headless faceView, browser renders via WS. |

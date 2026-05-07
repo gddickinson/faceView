@@ -13,6 +13,43 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-06 — Session 6: Layered anatomy + photo-anatomical bridge
+
+- Added six new render modes spanning two tracks:
+  - **Stylised illustrative anatomy** — `anatomy_skull`, `anatomy_brain`,
+    `anatomy_eyeballs`, `anatomy_muscles`, `anatomy_xray`,
+    `anatomy_layers`. Five new modules: `anatomy_skull.py` (cranium +
+    orbits + pyriform aperture + mandible + teeth), `anatomy_brain.py`
+    (4 cerebral lobes + cerebellum + brainstem with gyri/sulci),
+    `anatomy_eyeballs.py` (full sphere globes + iris + optic nerve),
+    `anatomy_muscle_masses.py` (solid 43-muscle layer oriented along
+    fiber direction), `sim_face_layered.py` (compositor with per-layer
+    alpha and preset-name lookup).
+  - **Photo-anatomical** — `faceforge_3d`. New `anatomy_meshes.py`
+    parses BP3D binary STLs with NumPy + struct, computes per-tri
+    normals, applies BP3D→screen reorientation. New
+    `faceforge_bridge.py` exposes `render_face_faceforge()` and
+    `faceforge_status()`. Z-sorted Lambert with double-sided shading.
+- New `tools/copy_anatomy_meshes.py` copies the head + neck FMA subset
+  from a local BodyParts3D dump into `assets/anatomy_meshes/` (gitignored).
+  Tested with `/Volumes/GeorgeDrive/claude_test/face_app/bodyparts3D/stl`
+  — 22 of 28 expected STLs present (some FMA codes missing from this
+  particular BP3D mirror; the renderer adapts).
+- New `tools/animate_anatomy_layers.py` renders
+  `docs/images/anatomy_layers_grid.png` (6-panel grid),
+  `anatomy_peel.gif` (peel-away skin → muscles → skull → brain),
+  `anatomy_meshes_rotate.gif` (BP3D head rotating).
+- Persona JSON gains 7 new presets: `anatomy_layers`, `anatomy_skull`,
+  `anatomy_brain`, `anatomy_muscles`, `anatomy_xray`, `anatomy_eyeballs`,
+  `faceforge_3d`. All routed through the existing `render_face`
+  dispatcher — the talking-avatar pipeline picks them up via
+  `set_persona`.
+- `sim_face.render_face` dispatch now covers four families: stylised
+  (default), 2D anatomical, layered illustration, photo-anatomical.
+- Tests: 63 → 76. New `test_anatomy_layers.py` covers preset rendering,
+  dispatcher routing, layer-name validation, faceforge bridge fallback
+  + on-disk path.
+
 ## 2026-05-06 — Session 5: Anatomical renderer
 
 - Investigated faceforge (3D OpenGL anatomy app at

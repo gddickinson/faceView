@@ -57,6 +57,18 @@ faceView/
 │   │   │                        (skin/cheeks/brows/eyes/nose/mouth/hair)
 │   │   ├── sim_face_anatomy_overlay.py  Muscle activation overlay +
 │   │   │                        wireframe debug renderer
+│   │   ├── anatomy_skull.py     Stylised skull (cranium / orbits /
+│   │   │                        pyriform aperture / mandible / teeth)
+│   │   ├── anatomy_brain.py     Stylised cerebrum (4 lobes + cerebellum +
+│   │   │                        brainstem) with gyri/sulci texture
+│   │   ├── anatomy_eyeballs.py  Full eye globes + iris + optic nerve
+│   │   ├── anatomy_muscle_masses.py  Solid expression muscles (43)
+│   │   │                        oriented along fiber direction
+│   │   ├── sim_face_layered.py  Compositor: stack skull→brain→
+│   │   │                        eyeballs→muscles→skin with per-layer alpha
+│   │   ├── anatomy_meshes.py    BodyParts3D STL loader + Lambert raster
+│   │   ├── faceforge_bridge.py  Photo-anatomical render mode (uses
+│   │   │                        copied BP3D head+neck STL subset)
 │   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
 │   │                            + coarticulated lip-sync from text
 │   │                            + persona overlay applied per tick
@@ -91,6 +103,9 @@ faceView/
     ├── capture_gui_screenshots.py  Drives GUI states for README images
     ├── animate_talking.py       Talking-avatar GIF + strip + monitor PNG
     ├── animate_anatomical.py    Anatomical-mode GIFs + emotion grid
+    ├── animate_anatomy_layers.py  Layered-anatomy grid + peel-away GIF +
+    │                            BP3D rotating head (when meshes present)
+    ├── copy_anatomy_meshes.py   Copy head+neck STLs from a BodyParts3D dump
     ├── render_personas.py       Persona contact sheet (docs/images/personas.png)
     ├── enroll_owner.py          One-time face-enrollment routine
     └── run_mcp_server.py        Standalone MCP entry for Claude Code config
