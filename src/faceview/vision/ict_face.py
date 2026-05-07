@@ -37,11 +37,56 @@ def _data_path() -> Path:
 
 @dataclass
 class ICTModel:
-    vertices: np.ndarray   # (N, 3) float32 — neutral positions
-    triangles: np.ndarray  # (M, 3) int32
-    deltas: np.ndarray     # (B, N, 3) float32
-    names: list[str]       # (B,)
+    vertices: np.ndarray       # (N, 3) float32 — neutral positions
+    triangles: np.ndarray      # (M, 3) int32
+    deltas: np.ndarray         # (B, N, 3) float32
+    names: list[str]           # (B,)
     name_to_idx: dict[str, int]
+    tri_materials: np.ndarray  # (M,) int32 material-table index per tri
+    materials: list[str]       # material names from the OBJ usemtl tags
+
+
+# ── Per-material skin palette ──────────────────────────────────────
+# Hand-tuned base colors for the 12 ICT material regions. Skin gets
+# warm flesh tone; teeth ivory; sclera bright; iris dark amber; lips
+# slightly redder than face. Tongue/gums dusky red.
+
+_MATERIAL_COLORS: dict[str, tuple[float, float, float]] = {
+    "M_Face":         (0.95, 0.82, 0.74),    # natural skin (less pink)
+    "M_BackHead":     (0.88, 0.76, 0.68),
+    "M_GumsTongue":   (0.62, 0.34, 0.34),    # dusky pink-red
+    "M_Teeth":        (0.96, 0.93, 0.86),    # ivory
+    "M_ScleraLeft":   (0.97, 0.94, 0.88),    # bright sclera
+    "M_ScleraRight":  (0.97, 0.94, 0.88),
+    "M_IrisLeft":     (0.30, 0.45, 0.55),    # blue-grey iris (visible)
+    "M_IrisRight":    (0.30, 0.45, 0.55),
+    "M_LacrimalFluid":(0.94, 0.88, 0.82),    # tear duct
+    "M_EyeBlend":     (0.92, 0.78, 0.70),    # eyelid skin (matches face)
+    "M_EyeOcclusion": (0.45, 0.30, 0.25),    # softer inner socket
+    "M_EyeLashes":    (0.10, 0.07, 0.05),
+}
+
+# Subsurface scattering colour — warm flesh tint, less aggressive red.
+_SSS_TINT = (0.78, 0.46, 0.40)
+
+
+# Per-material specular intensity (A43). Eyes get high mirror-like
+# specular for the wet-eye look; teeth a moderate gloss; skin
+# subtle; lashes/inner-mouth near zero.
+_MATERIAL_SPECULAR: dict[str, float] = {
+    "M_Face":         0.30,    # subtle skin sheen
+    "M_BackHead":     0.20,
+    "M_GumsTongue":   0.55,    # wet inner mouth
+    "M_Teeth":        0.65,    # enamel gloss
+    "M_ScleraLeft":   0.95,    # wet eye
+    "M_ScleraRight":  0.95,
+    "M_IrisLeft":     0.90,    # iris under tear film
+    "M_IrisRight":    0.90,
+    "M_LacrimalFluid":1.00,    # pure liquid
+    "M_EyeBlend":     0.40,    # eyelid skin
+    "M_EyeOcclusion": 0.10,    # dark inner socket
+    "M_EyeLashes":    0.05,    # matte
+}
 
 
 @lru_cache(maxsize=1)
@@ -58,12 +103,18 @@ def load_ict_model() -> ICTModel:
         )
     data = np.load(path)
     names = data["names"].tolist()
+    materials = data["materials"].tolist() if "materials" in data.files else []
+    tri_mats = (data["tri_materials"].astype(np.int32)
+                if "tri_materials" in data.files
+                else np.zeros(len(data["triangles"]), dtype=np.int32))
     return ICTModel(
         vertices=data["vertices"].astype(np.float32),
         triangles=data["triangles"].astype(np.int32),
         deltas=data["deltas"].astype(np.float32),
         names=names,
         name_to_idx={n: i for i, n in enumerate(names)},
+        tri_materials=tri_mats,
+        materials=materials,
     )
 
 
@@ -160,13 +211,145 @@ def render_face_ict(
     model = load_ict_model()
     au_values = face_params_to_au_values(params)
     arkit_coefs = au_to_arkit_values(au_values)
-    verts = apply_blendshapes(model, arkit_coefs)
+
+    # Layer identity (PCA) coefficients on top of the expression
+    # coefficients — identity reshapes the underlying head, expression
+    # animates it. ``identity_weights`` lives on FaceParams (set by
+    # apply_persona) and is keyed by ICT identity names like
+    # ``identity001``.
+    identity_w = dict(getattr(params, "identity_weights", {}) or {})
+    full_coefs = {**arkit_coefs, **identity_w}
+    verts = apply_blendshapes(model, full_coefs)
 
     yaw = float(getattr(params, "yaw", 0.0)) * 0.6
     pitch = float(getattr(params, "pitch", 0.0)) * 0.4
 
-    return _render_via_moderngl(verts, model.triangles, size,
+    bgr = _render_via_moderngl(verts, model.triangles, size,
                                   yaw, pitch, params)
+
+    # 2D hair overlay so the head doesn't read as bald. The mesh
+    # itself doesn't include hair, so we draw a simple cap through
+    # QPainter on top of the rendered output. Persona.hair_color
+    # drives the colour.
+    if not getattr(params, "_no_hair", False):
+        bgr = _composite_hair_overlay(bgr, params, yaw)
+    return bgr
+
+
+def _composite_hair_overlay(bgr: np.ndarray, params, yaw: float) -> np.ndarray:
+    """Draw a simple hair cap on top of the rendered ICT head.
+
+    Approach: detect the head silhouette top via background mask,
+    then paint an opaque hair cap above the brow line with strand
+    highlights. Cheap CPU work, ~1 ms.
+    """
+    from PIL import Image
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import (
+        QBrush, QColor, QImage, QPainter, QPainterPath, QPen,
+    )
+
+    h, w, _ = bgr.shape
+    rgb = bgr[:, :, ::-1].copy()
+    img = Image.fromarray(rgb)
+
+    # Find the top-most non-background pixel per column to follow the
+    # head silhouette.
+    bg_mask = (rgb.sum(axis=2) < 60)   # near-black background
+    fg_mask = ~bg_mask
+    cols_with_face = np.any(fg_mask, axis=0)
+    top_y = np.full(w, -1, dtype=np.int32)
+    if np.any(cols_with_face):
+        for x in range(w):
+            if cols_with_face[x]:
+                top_y[x] = np.argmax(fg_mask[:, x])
+
+    # Find left/right extents (head width).
+    fg_xs = np.where(cols_with_face)[0]
+    if len(fg_xs) < 4:
+        return bgr
+    left, right = int(fg_xs[0]), int(fg_xs[-1])
+
+    # Convert PIL → QImage for QPainter drawing.
+    qimg = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
+    p = QPainter(qimg)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    hair_hex = getattr(params, "hair_color", "#2a1808")
+    hair = QColor(hair_hex)
+    hair_light = hair.lighter(140)
+
+    # Build a hair cap from the top silhouette: above each top_y
+    # pixel, pad upward by a fraction of head height so the cap
+    # extends above the skull.
+    head_h = max(1, int((right - left) * 1.2))
+    cap_pad = int(0.08 * head_h)
+
+    cap_path = QPainterPath()
+    started = False
+    # Trace top silhouette left → right, slightly above the head.
+    for x in range(left, right + 1):
+        ty = top_y[x]
+        if ty < 0:
+            continue
+        y = max(0, ty - 4)
+        if not started:
+            cap_path.moveTo(QPointF(x, y))
+            started = True
+        else:
+            cap_path.lineTo(QPointF(x, y))
+    # Close above the head.
+    cap_path.lineTo(QPointF(right, max(0, top_y[right] - cap_pad)))
+    cap_path.lineTo(QPointF((left + right) // 2,
+                              max(0, int(top_y[(left + right) // 2]) - 2 * cap_pad)))
+    cap_path.lineTo(QPointF(left, max(0, top_y[left] - cap_pad)))
+    cap_path.closeSubpath()
+
+    p.setBrush(QBrush(hair))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawPath(cap_path)
+
+    # Side fringe — darker streaks down past temples.
+    fringe = QPainterPath()
+    fringe.moveTo(QPointF(left + 0.05 * (right - left),
+                            top_y[left] if top_y[left] >= 0 else 0))
+    fringe.cubicTo(
+        QPointF(left + 0.20 * (right - left), top_y[left + (right - left) // 4] + 4),
+        QPointF(left + 0.45 * (right - left), top_y[(left + right) // 2] - 2),
+        QPointF(left + 0.55 * (right - left), top_y[(left + right) // 2] + 4),
+    )
+    fringe.cubicTo(
+        QPointF(left + 0.45 * (right - left), top_y[(left + right) // 2] - 8),
+        QPointF(left + 0.20 * (right - left), top_y[left + (right - left) // 4] - 8),
+        QPointF(left + 0.05 * (right - left),
+                 (top_y[left] if top_y[left] >= 0 else 0) - 4),
+    )
+    fringe.closeSubpath()
+    p.drawPath(fringe)
+
+    # Strand highlights.
+    pen = QPen(hair_light, 1.4)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    n_strands = 7
+    for i in range(n_strands):
+        f = (i + 0.5) / n_strands
+        x0 = int(left + f * (right - left))
+        y0 = max(0, top_y[x0] - 4)
+        x1 = x0 + 14
+        y1 = y0 - 16
+        p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+
+    p.end()
+
+    # QImage → numpy → BGR
+    out = qimg.convertToFormat(QImage.Format.Format_RGB888)
+    ptr = out.constBits()
+    if ptr is None:
+        return bgr
+    arr = np.frombuffer(ptr, dtype=np.uint8, count=h * w * 3).reshape(h, w, 3)
+    return arr[:, :, ::-1].copy()
 
 
 def _render_via_moderngl(
@@ -208,6 +391,8 @@ def _render_via_moderngl(
         verts=verts.astype(np.float32),
         normals=vert_norms.astype(np.float32),
         triangles=triangles.astype(np.uint32),
+        vert_colors=_per_vertex_colors().astype(np.float32),
+        vert_spec=_per_vertex_specular().astype(np.float32),
         centre=centre.astype(np.float32),
         scale=float(scale),
         yaw=yaw, pitch=pitch,
@@ -216,37 +401,130 @@ def _render_via_moderngl(
     )
 
 
+@lru_cache(maxsize=1)
+def _per_vertex_colors() -> np.ndarray:
+    """Return (N, 3) RGB float colors keyed off the OBJ's material tags.
+
+    Vertex color = mean of the colors of every triangle that
+    references it. Vertices shared by face and non-face materials
+    end up blended, which gives a natural transition.
+    """
+    m = load_ict_model()
+    n_verts = len(m.vertices)
+    accum = np.zeros((n_verts, 3), dtype=np.float64)
+    counts = np.zeros(n_verts, dtype=np.int32)
+    fallback = _MATERIAL_COLORS.get("M_Face", (0.85, 0.7, 0.6))
+    for ti, mat_idx in enumerate(m.tri_materials):
+        color = (_MATERIAL_COLORS.get(m.materials[mat_idx], fallback)
+                 if 0 <= mat_idx < len(m.materials) else fallback)
+        for v in m.triangles[ti]:
+            accum[v] += color
+            counts[v] += 1
+    counts = np.maximum(counts, 1)
+    return (accum / counts[:, None]).astype(np.float32)
+
+
+@lru_cache(maxsize=1)
+def _per_vertex_specular() -> np.ndarray:
+    """Per-vertex specular intensity (A43): eyes wet, skin matte."""
+    m = load_ict_model()
+    n_verts = len(m.vertices)
+    accum = np.zeros(n_verts, dtype=np.float64)
+    counts = np.zeros(n_verts, dtype=np.int32)
+    fallback = _MATERIAL_SPECULAR.get("M_Face", 0.30)
+    for ti, mat_idx in enumerate(m.tri_materials):
+        s = (_MATERIAL_SPECULAR.get(m.materials[mat_idx], fallback)
+             if 0 <= mat_idx < len(m.materials) else fallback)
+        for v in m.triangles[ti]:
+            accum[v] += s
+            counts[v] += 1
+    counts = np.maximum(counts, 1)
+    return (accum / counts).astype(np.float32)
+
+
 _VERT_SHADER = """
 #version 330
 uniform mat4 u_mvp;
 uniform mat3 u_norm_mat;
 in vec3 in_pos;
 in vec3 in_norm;
+in vec3 in_color;
+in float in_spec;
 out vec3 v_norm;
+out vec3 v_color;
+out float v_spec;
 void main() {
     gl_Position = u_mvp * vec4(in_pos, 1.0);
     v_norm = u_norm_mat * in_norm;
+    v_color = in_color;
+    v_spec = in_spec;
 }
 """
 
+# Subsurface-scattering Phong skin shader.
+# Components:
+#   1. Wrap diffuse — soft falloff (Lambert × 0.5 + 0.5) instead of hard.
+#   2. Subsurface tint — warm flesh colour bleeds through when light
+#      hits the back of the surface, simulating light penetration.
+#   3. Fresnel rim — thin areas (ear edge, nostril, neck) glow warm.
+#   4. Sky-tinted ambient — cool from below, warm from above for
+#      natural environment lighting.
+#   5. Dual-lobe specular — broad soft highlight + tight glint, the
+#      MetaHuman trick for skin sheen.
+# All cheap per-pixel — fits in our 88-fps budget.
 _FRAG_SHADER = """
 #version 330
 uniform vec3 u_light_dir;
-uniform vec3 u_skin;
+uniform vec3 u_sss_tint;
 uniform float u_ambient;
 uniform float u_specular;
 uniform float u_shininess;
 in vec3 v_norm;
+in vec3 v_color;
+in float v_spec;
 out vec4 frag;
 void main() {
     vec3 n = normalize(v_norm);
     vec3 l = normalize(-u_light_dir);
-    float diff = abs(dot(n, l));
     vec3 view = vec3(0, 0, 1);
+
+    // Wrap diffuse — soft Lambert.
+    float ndl = dot(n, l);
+    float wrap = clamp(ndl * 0.5 + 0.5, 0.0, 1.0);
+
+    // Subsurface tint: only visible at the *transition* between lit
+    // and shadow (terminator), not on fully back-lit surfaces. Use a
+    // narrow band around ndl=0 to localise the bleed.
+    float back_lit = clamp(-ndl, 0.0, 1.0);
+    float terminator = smoothstep(0.0, 0.5, back_lit) *
+                        (1.0 - smoothstep(0.5, 1.0, back_lit));
+    vec3 sss = u_sss_tint * terminator * 0.35;
+
+    // Sky-tinted ambient: warmer from above (n.y > 0), cooler below.
+    float sky_amount = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 sky_warm = vec3(1.05, 0.95, 0.85);
+    vec3 sky_cool = vec3(0.80, 0.85, 1.00);
+    vec3 ambient_tint = mix(sky_cool, sky_warm, sky_amount);
+
+    // Dual-lobe specular: broad soft + narrow glint, scaled by the
+    // per-vertex material intensity (eyes get a wet glint, skin is
+    // subtle, lashes are matte).
     vec3 half_v = normalize(l + view);
-    float spec = pow(max(0.0, abs(dot(n, half_v))), u_shininess) * u_specular;
-    float shade = clamp(u_ambient + diff * (1.0 - u_ambient) + spec, 0.0, 1.6);
-    frag = vec4(u_skin * shade, 1.0);
+    float ndh = max(0.0, dot(n, half_v));
+    float spec_broad = pow(ndh, max(2.0, u_shininess * 0.30)) * 0.20;
+    float spec_tight = pow(ndh, u_shininess) * u_specular;
+    float spec = (spec_broad + spec_tight) * v_spec;
+
+    // Fresnel rim — visible at grazing angles for thin features.
+    // Tighter falloff than SSS since this is meant to be subtle.
+    float fresnel = pow(1.0 - max(0.0, dot(n, view)), 5.0) * 0.20;
+    vec3 rim = u_sss_tint * fresnel;
+
+    vec3 ambient = u_ambient * ambient_tint * v_color;
+    vec3 diffuse = (1.0 - u_ambient) * wrap * v_color;
+    vec3 col = ambient + diffuse + sss + spec + rim;
+
+    frag = vec4(col, 1.0);
 }
 """
 
@@ -280,6 +558,8 @@ class _ICTRenderer:
         verts: np.ndarray,
         normals: np.ndarray,
         triangles: np.ndarray,
+        vert_colors: np.ndarray,
+        vert_spec: np.ndarray,
         centre: np.ndarray,
         scale: float,
         yaw: float,
@@ -316,22 +596,28 @@ class _ICTRenderer:
         self.prog["u_mvp"].write(model.T.tobytes())
         self.prog["u_norm_mat"].write(norm_mat.T.tobytes())
         self.prog["u_light_dir"].value = (-0.4, -0.3, -0.7)
-        self.prog["u_skin"].value = (0.86, 0.74, 0.65)
-        self.prog["u_ambient"].value = 0.30
+        self.prog["u_sss_tint"].value = _SSS_TINT
+        self.prog["u_ambient"].value = 0.32
         self.prog["u_specular"].value = 0.30
-        self.prog["u_shininess"].value = 16.0
+        self.prog["u_shininess"].value = 22.0
 
         vbo = self.ctx.buffer(verts.tobytes())
         nbo = self.ctx.buffer(normals.tobytes())
+        cbo = self.ctx.buffer(vert_colors.tobytes())
+        sbo = self.ctx.buffer(vert_spec.tobytes())
         ibo = self.ctx.buffer(triangles.tobytes())
         vao = self.ctx.vertex_array(self.prog, [
             (vbo, "3f", "in_pos"),
             (nbo, "3f", "in_norm"),
+            (cbo, "3f", "in_color"),
+            (sbo, "1f", "in_spec"),
         ], ibo)
         vao.render(self.mgl.TRIANGLES)
         vao.release()
         vbo.release()
         nbo.release()
+        cbo.release()
+        sbo.release()
         ibo.release()
 
         data = self._fbo.read(components=3)

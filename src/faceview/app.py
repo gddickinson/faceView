@@ -63,7 +63,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     avatar_worker = None
     if os.environ.get("FACEVIEW_AVATAR", "").strip().lower() in {"1", "true", "yes", "on"}:
         from faceview.vision.sim_camera import SimCameraWorker
-        avatar_worker = SimCameraWorker(scenario="avatar", emotion="happy", wire_to_llm=True)
+        # Default to the most realistic mode (ICT-FaceKit) when its
+        # data is present; fall back to stylised 2D otherwise.
+        from faceview.vision.ict_face import _data_path as _ict_data
+        default_persona = "ict_claude" if _ict_data().exists() else "claude"
+        avatar_worker = SimCameraWorker(
+            scenario="avatar", emotion="happy", persona=default_persona,
+            wire_to_llm=True,
+        )
         avatar_worker.start()
         log.info("avatar.started")
 

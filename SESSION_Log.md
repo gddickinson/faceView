@@ -13,6 +13,68 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-07 — Session 14: SSS shader + cleanup + roadmap completion
+
+User asked for A42 (skin texture + SSS), README cleanup, removal
+of redundant modes, then to plan + implement all remaining
+roadmap items.
+
+**A42 — SSS skin shader on ICT face** (`vision/ict_face.py`)
+  * Build tool now extracts per-triangle material tags from the
+    OBJ's `usemtl` directives (12 materials: face / back-head /
+    teeth / gums / sclera-L/R / iris-L/R / lacrimal-fluid /
+    eye-blend / occlusion / lashes).
+  * Per-vertex colour computed from the material table (skin warm,
+    teeth ivory, sclera bright, iris dark amber, etc.) — vertices
+    on material seams blend naturally.
+  * Upgraded GLSL fragment shader with five components:
+    1. Wrap-diffuse (Lambert × 0.5 + 0.5) for soft falloff
+    2. Subsurface tint at the terminator only (warm flesh bleed)
+    3. Sky-tinted ambient (warm above, cool below)
+    4. Dual-lobe specular (broad + tight)
+    5. Fresnel rim glow on thin features
+
+**A43 — Eye-specific specular** (`vision/ict_face.py`)
+  * Per-vertex specular intensity from the material table — sclera
+    + lacrimal fluid get high gloss (~0.9-1.0), teeth moderate
+    (0.65), skin subtle (0.30), lashes matte (0.05). Wet-eye look.
+
+**A26 — GPU path for `head_decimated_3d`** (`vision/head_decimated.py`)
+  * New `render_face_decimated_gpu` routes through moderngl with a
+    Phong shader, replacing the 8 fps QPainter path.
+
+**A12 — Phong on CPU faceforge_3d** (already vectorised in
+`vision/anatomy_meshes.py` from session 7) — verified.
+
+**A36 — openFACS UDP bridge** (`vision/openfacs_bridge.py`)
+  * Pure-stdlib socket + JSON. `OpenFACSBridge.send(au_values)`
+    emits one packet on UDP localhost:5000 in phuselab/openFACS'
+    expected format. `attach_to_avatar(avatar)` wraps the
+    avatar's tick so every rendered frame also streams.
+
+**A34 — MediaPipe FaceLandmarker capture** (`vision/mediapipe_capture.py`)
+  * `MediaPipeCapture(camera_index=0).next_frame_blendshapes()`
+    returns 52 ARKit-named coefficients per webcam frame; chains
+    cleanly into `arkit_to_au_values()` to drive any of our
+    avatar render modes.
+
+**Cleanup**
+  * Removed deprecated `vision/head_3d_lite.py` + tests + persona
+    + dispatcher entry. The Delaunay-over-86-points spider-web
+    was deprecated since session 11; cleared away now.
+  * README mode table restructured: ICT at top, modes grouped by
+    realism tier, deprecated entries removed.
+  * INTERFACE updated with new modules.
+
+Tests: 109 → 107 (removed 4 head_3d_lite tests, added 4 new ones).
+All green.
+
+Roadmap: A12, A26, A34, A36, A42, A43 marked done. Remaining
+candidates documented (A32 MetaHuman FBX, A38 FLAME PyTorch,
+A39 BFM via eos-py, A40 FaceScape, A41 Ready Player Me, A44 DECA)
+require heavy ML deps or non-commercial licensing — deferred to
+future sessions when the use case demands them.
+
 ## 2026-05-07 — Session 13: ICT-FaceKit integration — biggest realism jump yet
 
 User asked us to research all the candidate face resources and ship

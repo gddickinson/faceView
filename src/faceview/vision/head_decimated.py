@@ -126,16 +126,159 @@ def _project(verts: np.ndarray, yaw: float, pitch: float) -> np.ndarray:
     return verts @ (ry @ rx).T
 
 
+def render_face_decimated_gpu(
+    params,
+    size: tuple[int, int] = (480, 480),
+    *,
+    grid: int = 28,
+) -> np.ndarray:
+    """A26: GPU path through moderngl — replaces the 8 fps CPU path."""
+    try:
+        import moderngl  # noqa: F401
+    except ImportError as exc:
+        from faceview.core.errors import MissingDependency
+        raise MissingDependency("moderngl", "gpu") from exc
+    verts, tris, _ = decimated_skin(grid)
+    yaw = float(getattr(params, "yaw", 0.0)) * 0.6
+    pitch = float(getattr(params, "pitch", 0.0)) * 0.4
+    bg = _hex_to_rgb_dec(getattr(params, "background", "#0a0d12"))
+    return _gpu_decim_renderer().render_decimated(
+        verts.astype(np.float32),
+        tris.astype(np.uint32),
+        size,
+        yaw=yaw, pitch=pitch, bg=bg,
+    )
+
+
+def _hex_to_rgb_dec(c: str) -> tuple[int, int, int]:
+    s = c.lstrip("#")
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    try:
+        return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+    except (ValueError, IndexError):
+        return 10, 12, 16
+
+
+from functools import lru_cache as _lru_cache
+
+
+@_lru_cache(maxsize=1)
+def _gpu_decim_renderer():
+    """Lazy-create a moderngl renderer for the decimated head."""
+    import moderngl
+    return _DecimatedGpuRenderer(moderngl)
+
+
+class _DecimatedGpuRenderer:
+    _VS = """#version 330
+        uniform mat4 u_mvp;
+        uniform mat3 u_norm_mat;
+        in vec3 in_pos;
+        in vec3 in_norm;
+        out vec3 v_norm;
+        void main() {
+            gl_Position = u_mvp * vec4(in_pos, 1.0);
+            v_norm = u_norm_mat * in_norm;
+        }
+    """
+    _FS = """#version 330
+        uniform vec3 u_skin;
+        uniform vec3 u_light;
+        in vec3 v_norm;
+        out vec4 frag;
+        void main() {
+            vec3 n = normalize(v_norm);
+            vec3 l = normalize(-u_light);
+            float wrap = clamp(dot(n, l) * 0.5 + 0.5, 0.0, 1.0);
+            float spec = pow(max(0.0, dot(n, normalize(l + vec3(0,0,1)))), 24.0) * 0.25;
+            frag = vec4(u_skin * (0.30 + 0.70 * wrap) + spec, 1.0);
+        }
+    """
+
+    def __init__(self, mgl) -> None:
+        self.mgl = mgl
+        self.ctx = mgl.create_context(standalone=True, require=330)
+        self.ctx.enable(mgl.DEPTH_TEST)
+        self.prog = self.ctx.program(vertex_shader=self._VS, fragment_shader=self._FS)
+        self._fbo = None
+        self._fbo_size: tuple[int, int] | None = None
+
+    def _ensure_fbo(self, w, h) -> None:
+        if self._fbo_size == (w, h) and self._fbo is not None:
+            return
+        if self._fbo is not None:
+            self._fbo.release()
+        col = self.ctx.texture((w, h), 4)
+        depth = self.ctx.depth_renderbuffer((w, h))
+        self._fbo = self.ctx.framebuffer(color_attachments=[col],
+                                           depth_attachment=depth)
+        self._fbo_size = (w, h)
+
+    def render_decimated(self, verts, tris, size, *, yaw, pitch, bg):
+        w, h = size
+        self._ensure_fbo(w, h)
+        self._fbo.use()
+        self.ctx.viewport = (0, 0, w, h)
+        self.ctx.clear(bg[0] / 255.0, bg[1] / 255.0, bg[2] / 255.0, 1.0)
+
+        # Per-vertex normals.
+        v0 = verts[tris[:, 0]]; v1 = verts[tris[:, 1]]; v2 = verts[tris[:, 2]]
+        tri_n = np.cross(v1 - v0, v2 - v0)
+        tri_n /= np.maximum(np.linalg.norm(tri_n, axis=1, keepdims=True), 1e-9)
+        vn = np.zeros_like(verts)
+        np.add.at(vn, tris[:, 0], tri_n)
+        np.add.at(vn, tris[:, 1], tri_n)
+        np.add.at(vn, tris[:, 2], tri_n)
+        vn /= np.maximum(np.linalg.norm(vn, axis=1, keepdims=True), 1e-9)
+
+        # Centre + scale.
+        centre = (verts.min(axis=0) + verts.max(axis=0)) / 2
+        span = float(np.linalg.norm(verts.max(axis=0) - verts.min(axis=0)))
+        scale = 1.6 / max(span, 1e-6)
+
+        cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
+        cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
+        ry = np.array([[cy_, 0, sy_, 0], [0, 1, 0, 0],
+                        [-sy_, 0, cy_, 0], [0, 0, 0, 1]], dtype=np.float32)
+        rx = np.array([[1, 0, 0, 0], [0, cp_, -sp_, 0],
+                        [0, sp_, cp_, 0], [0, 0, 0, 1]], dtype=np.float32)
+        T = np.eye(4, dtype=np.float32); T[:3, 3] = -centre
+        S = np.eye(4, dtype=np.float32) * scale; S[3, 3] = 1.0
+        flip = np.diag([1.0, -1.0, 1.0, 1.0]).astype(np.float32)
+        model = ry @ rx @ flip @ S @ T
+
+        self.prog["u_mvp"].write(model.T.tobytes())
+        self.prog["u_norm_mat"].write(model[:3, :3].T.tobytes())
+        self.prog["u_skin"].value = (0.86, 0.74, 0.65)
+        self.prog["u_light"].value = (-0.4, -0.3, -0.7)
+
+        vbo = self.ctx.buffer(verts.tobytes())
+        nbo = self.ctx.buffer(vn.astype(np.float32).tobytes())
+        ibo = self.ctx.buffer(tris.tobytes())
+        vao = self.ctx.vertex_array(self.prog, [
+            (vbo, "3f", "in_pos"), (nbo, "3f", "in_norm"),
+        ], ibo)
+        vao.render(self.mgl.TRIANGLES)
+        vao.release(); vbo.release(); nbo.release(); ibo.release()
+
+        data = self._fbo.read(components=3)
+        arr = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3)
+        arr = np.flipud(arr).copy()
+        return arr[:, :, ::-1].copy()
+
+
 def render_face_decimated(
     params,
     size: tuple[int, int] = (480, 480),
     *,
     grid: int = 28,
 ) -> np.ndarray:
-    """Render the decimated BP3D skin mesh via QPainter Z-sort.
+    """Render the decimated BP3D skin mesh via QPainter Z-sort (CPU).
 
     ``grid`` controls the cell count for vertex clustering — higher
     is finer. ``28`` produces a ~3000-tri mesh that paints in ~50ms.
+    For animation use ``head_decimated_3d_gpu`` (60+ fps).
     """
     from PySide6.QtCore import QPointF, Qt
     from PySide6.QtGui import (

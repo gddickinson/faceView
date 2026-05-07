@@ -13,7 +13,7 @@ Bundled presets live in ``assets/config/personas.json``. Additional presets
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
@@ -27,9 +27,13 @@ class Persona:
     """Static appearance overlay for the procedural face.
 
     ``render_mode`` selects the renderer family (``stylised`` /
-    ``anatomical`` / ``anatomy_overlay`` / ``wireframe``). The default
-    stays on ``stylised`` so existing tests and personas keep their
-    look.
+    ``anatomical`` / ``ict_face_3d`` / etc).
+
+    ``identity_weights`` is an optional dict of ICT-FaceKit identity
+    PCA coefficients (e.g. ``{"identity001": 2.0, "identity002": -1.5}``)
+    used by the ``ict_face_3d`` renderer to vary the base face shape
+    away from the neutral mean — different combinations give
+    different individuals.
     """
     name: str
     skin_hue: float = 28.0
@@ -37,6 +41,7 @@ class Persona:
     lip_color: str = "#a44a4a"
     background: str = "#0c0f14"
     render_mode: str = "stylised"
+    identity_weights: dict = field(default_factory=dict)
 
 
 @lru_cache(maxsize=1)
@@ -55,6 +60,7 @@ def load_persona(name: str) -> Persona:
     """Load a bundled persona by name. Falls back to ``default`` if missing."""
     data = _load_personas_json()
     raw = data.get(name) or data.get("default") or {}
+    iw = raw.get("identity_weights", {}) or {}
     return Persona(
         name=name,
         skin_hue=float(raw.get("skin_hue", 28.0)),
@@ -62,6 +68,7 @@ def load_persona(name: str) -> Persona:
         lip_color=str(raw.get("lip_color", "#a44a4a")),
         background=str(raw.get("background", "#0c0f14")),
         render_mode=str(raw.get("render_mode", "stylised")),
+        identity_weights={k: float(v) for k, v in iw.items()},
     )
 
 
@@ -72,6 +79,9 @@ def apply_persona(params: FaceParams, persona: Persona) -> FaceParams:
     params.lip_color = persona.lip_color
     params.background = persona.background
     params.render_mode = persona.render_mode
+    # Identity coefficients for the ICT face renderer (no-op for
+    # other modes).
+    params.identity_weights = dict(persona.identity_weights)
     return params
 
 

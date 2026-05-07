@@ -159,7 +159,23 @@ git clone --depth 1 https://github.com/USC-ICT/ICT-FaceKit /tmp/ICT-FaceKit
 python -m tools.build_ict_blendshapes /tmp/ICT-FaceKit
 ```
 
-After that, render mode `ict_face_3d` (or persona `ict_face_3d`) gives an animated lifelike head at **~88 fps on Apple Silicon GPU** through `moderngl`. The same FACS pipeline that drives our 2D modes feeds in: `FaceParams → AU values → ARKit coefficients → ICT vertex deltas → GPU Phong render`.
+After that, render mode `ict_face_3d` (or persona `ict_face_3d`) gives an animated lifelike head at **~24 fps with the SSS shader** (88 fps with the basic Phong shader) through `moderngl`. The same FACS pipeline that drives our 2D modes feeds in: `FaceParams → AU values → ARKit coefficients → ICT vertex deltas → GPU Phong/SSS render`.
+
+### Different base faces (male / female / Claude)
+
+ICT-FaceKit ships with **100 PCA identity shape modes** layered on top of the neutral mesh — different combinations produce visibly different individuals. Per-persona `identity_weights` in `assets/config/personas.json` lets you bake named base faces:
+
+```json
+"ict_male": { "identity_weights": { "identity000": 2.5, "identity002": -1.5, ... } },
+"ict_female": { "identity_weights": { "identity000": -2.5, "identity003": 2.0, ... } },
+"ict_claude": { "identity_weights": { "identity001": 1.8, "identity006": 1.5, ... } }
+```
+
+<p align="center">
+  <img src="docs/images/ict_identities.png" alt="ICT identity variations" width="100%">
+</p>
+
+*Six base-face variations from the same 26K-vertex ICT mesh, driven only by different identity_weights coefficients. The FACS expression pipeline runs on top of any of them.*
 
 <p align="center">
   <img src="docs/images/ict_face_grid.png" alt="ICT face — 6 expressions" width="100%">
@@ -226,21 +242,18 @@ Switchable at runtime via `POST /avatar/persona`:
 
 | Mode | Track | Use |
 |---|---|---|
-| `stylised` | cartoony | Default — layered cartoony pipeline. Cheap, expressive. |
-| `anatomical` | 2D portrait | FACS-driven landmarks + shaded skin + real eye/lip/nose anatomy. |
-| `anatomy_overlay` | 2D portrait | Same plus translucent muscle activation layer. |
-| `wireframe` | 2D portrait | Landmark dots + group polylines. Debug. |
-| `anatomy_layers` | layered | Skin + muscles + eyeballs + brain + skull, semi-transparent. |
-| `anatomy_skull` | layered | Skull only (cranium, orbits, mandible, teeth). |
-| `anatomy_brain` | layered | Stylised cerebrum + cerebellum inside faded cranium. |
-| `anatomy_muscles` | layered | Solid muscle masses + activation overlay. |
-| `anatomy_eyeballs` | layered | Full eye globes + optic nerves on faded skull. |
-| `anatomy_xray` | layered | All five layers translucent — see-through head. |
-| `faceforge_3d` | photo-anatomical | Real BodyParts3D STL meshes — 145 head/neck structures with per-mesh material + Phong shading. Layer sets: `skull_only`, `muscles`, `features`, `lifelike`, `xray`. CPU rasteriser. |
-| `faceforge_3d_gpu` | photo-anatomical | Same as `faceforge_3d` but rendered through Apple Metal-backed OpenGL via `moderngl`. ~36 fps on M1 Max — the only path that animates the lifelike head in real time. Same layer sets. |
-| `head_3d_lite` | 3D animated | ~140-vertex Delaunay mesh with smooth ellipsoidal Z + Loop subdivision + per-vertex Phong. AU-driven deformation drives expression. Renders ~20 fps on CPU. Honestly: even after smoothing it still looks low-poly — see `face_warp_2d` below for a more lifelike alternative. |
-| `face_warp_2d` | photo-real animated | Renders the BP3D photo-anatomical face once at neutral pose (via the GPU lifelike pipeline), then warps that texture per-frame using piecewise-affine warping driven by the same FACS-driven landmark deformation. Photo-real source + cheap CPU warping = most lifelike *animated* mode. ~25 fps on CPU. Locked to front view (use `faceforge_3d_gpu` for rotation). |
-| `ict_face_3d` | **realistic animated 3D — top mode** | USC ICT-FaceKit (MIT) — 26 719 verts, 157 ARKit-named blendshapes from real face scans. Real teeth visible when jaw opens, lip corners pull on smile, smooth Phong skin. **~88 fps on Apple GPU.** The realistic-animated endpoint. One-time setup: clone `USC-ICT/ICT-FaceKit` then `python -m tools.build_ict_blendshapes /path/to/ICT-FaceKit`. |
+| **`ict_face_3d`** | **realistic 3D — top mode** | USC ICT-FaceKit (MIT) — 26 719 verts, 157 ARKit-named blendshapes from real face scans. Per-material colours (face / teeth / sclera / iris / lips / lashes), wrap-diffuse + dual-lobe specular + subsurface-scattering tint at the terminator + sky-tinted ambient + Fresnel rim. Eye-specific glossy specular for wet-eye look. **~24 fps on Apple GPU.** |
+| `face_warp_3d` | photo-real animated | 5-yaw atlas blend — photo-real face that *rotates* AND deforms with FACS. ~7 fps. |
+| `face_warp_2d` | photo-real animated | Single-texture warp, FACS-driven. Front view, ~25 fps. |
+| `faceforge_3d_gpu` | photo-anatomical | Real BodyParts3D meshes (~145 structures). ~36 fps. Layer sets: `skull_only` / `muscles` / `features` / `lifelike` / `xray`. |
+| `faceforge_3d` | photo-anatomical | CPU equivalent — Phong-shaded, slower. |
+| `head_decimated_3d_gpu` | 3D animated | Decimated BP3D skin via moderngl. Real anatomy at low poly. |
+| `head_decimated_3d` | 3D animated | CPU rasteriser. ~8 fps; use the GPU path. |
+| `makehuman_3d` | 3D animated | MakeHuman base mesh (CC0). Cleaner topology than decimated BP3D. |
+| `anatomical` | 2D portrait | FACS landmarks + shaded skin + real eye/lip/nose anatomy. |
+| `anatomy_layers` (+ `_skull`, `_brain`, `_muscles`, `_eyeballs`, `_xray`) | 2D illustration | Layered anatomy peelable view. |
+| `stylised` | cartoony | Default — fast expressive avatar. |
+| `wireframe` / `anatomy_overlay` | debug | Landmark / muscle activation overlays. |
 
 ## The simulated face — building blocks
 
@@ -398,7 +411,24 @@ Then a Claude Code session can call `send_chat`, `speak`, `camera_state`, `list_
 ## Testing
 
 ```bash
-pytest                # 109 tests, all green
+pytest                # 107 tests, all green
+```
+
+## External integration bridges
+
+faceView speaks two industry-standard languages so it can plug into the broader virtual-human ecosystem:
+
+```python
+# Drive an external Unreal-rendered avatar over UDP (openFACS protocol)
+from faceview.vision.openfacs_bridge import OpenFACSBridge
+bridge = OpenFACSBridge()
+bridge.attach_to_avatar(avatar)   # every tick now streams to UE on :5000
+
+# Drive faceview from a webcam (MediaPipe FaceLandmarker — 52 ARKit blendshapes)
+from faceview.vision.mediapipe_capture import MediaPipeCapture
+from faceview.vision.arkit_blendshapes import arkit_to_au_values
+cap = MediaPipeCapture()
+au_values = arkit_to_au_values(cap.next_frame_blendshapes())
 ```
 
 Tests run fully offscreen (`QT_QPA_PLATFORM=offscreen` is set in `tests/conftest.py`) and require only the `[dev]` extra — no real ML model is loaded.

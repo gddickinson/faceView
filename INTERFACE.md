@@ -95,8 +95,14 @@ faceView/
 │   │   │                        + two-way mapping to/from our 12 AUs
 │   │   ├── ict_face.py          USC ICT-FaceKit blendshape head —
 │   │   │                        26K verts, 157 ARKit-aligned shapes,
-│   │   │                        ~88 fps GPU. The realistic-animated
+│   │   │                        per-material colours + SSS shader +
+│   │   │                        eye specular. Realistic-animated
 │   │   │                        endpoint of the project.
+│   │   ├── openfacs_bridge.py   UDP bridge: emit our AU stream as
+│   │   │                        JSON to a phuselab/openFACS Unreal
+│   │   │                        instance.
+│   │   ├── mediapipe_capture.py MediaPipe FaceLandmarker live capture —
+│   │   │                        webcam frames → 52 ARKit blendshapes.
 │   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
 │   │                            + coarticulated lip-sync from text
 │   │                            + persona overlay applied per tick

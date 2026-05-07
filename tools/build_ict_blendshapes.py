@@ -26,21 +26,38 @@ from pathlib import Path
 import numpy as np
 
 
-def _parse_obj(path: Path) -> tuple[np.ndarray, np.ndarray]:
+def _parse_obj(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Parse OBJ + record per-triangle material name.
+
+    Returns ``(verts, tris, tri_materials)`` where ``tri_materials``
+    is a (M,) int32 array of material-table indices and the material
+    table is captured as a side-effect attribute on ``_parse_obj``.
+    """
     verts: list[tuple[float, float, float]] = []
     tris: list[tuple[int, int, int]] = []
+    tri_mats: list[int] = []
+    materials: list[str] = []
+    current_mat = -1
     with path.open() as f:
         for line in f:
             if line.startswith("v "):
                 p = line.split()
                 verts.append((float(p[1]), float(p[2]), float(p[3])))
+            elif line.startswith("usemtl "):
+                name = line.strip().split(maxsplit=1)[1]
+                if name not in materials:
+                    materials.append(name)
+                current_mat = materials.index(name)
             elif line.startswith("f "):
                 p = line.split()[1:]
                 idxs = [int(t.split("/")[0]) - 1 for t in p]
                 for i in range(1, len(idxs) - 1):
                     tris.append((idxs[0], idxs[i], idxs[i + 1]))
+                    tri_mats.append(current_mat)
+    _parse_obj.materials = materials  # type: ignore[attr-defined]
     return (np.asarray(verts, dtype=np.float32),
-            np.asarray(tris, dtype=np.int32))
+            np.asarray(tris, dtype=np.int32),
+            np.asarray(tri_mats, dtype=np.int32))
 
 
 def main() -> int:
@@ -65,15 +82,17 @@ def main() -> int:
         return 2
 
     print(f"reading neutral from {neutral_path}")
-    base_verts, tris = _parse_obj(neutral_path)
-    print(f"  {len(base_verts)} verts, {len(tris)} tris")
+    base_verts, tris, tri_mats = _parse_obj(neutral_path)
+    materials = list(_parse_obj.materials)  # type: ignore[attr-defined]
+    print(f"  {len(base_verts)} verts, {len(tris)} tris, "
+          f"{len(materials)} materials: {materials}")
 
     deltas: list[np.ndarray] = []
     names: list[str] = []
     for obj in sorted(fxm.glob("*.obj")):
         if obj.name == "generic_neutral_mesh.obj":
             continue
-        bs_verts, _ = _parse_obj(obj)
+        bs_verts, _, _ = _parse_obj(obj)
         if bs_verts.shape != base_verts.shape:
             print(f"  SKIP {obj.name} — shape mismatch", file=sys.stderr)
             continue
@@ -91,6 +110,8 @@ def main() -> int:
         triangles=tris,
         deltas=delta_arr,
         names=np.array(names),
+        tri_materials=tri_mats,
+        materials=np.array(materials),
     )
     print(f"saved {args.out}  (size: {args.out.stat().st_size / 1e6:.1f} MB)")
     return 0

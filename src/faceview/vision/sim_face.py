@@ -64,6 +64,10 @@ class FaceParams:
     # ``vision.sim_face_anatomical.render_face_anatomical`` instead.
     render_mode: str = "stylised"
 
+    # ICT-FaceKit identity coefficients (PCA modes that vary base
+    # face shape). Empty dict = use the neutral mean face.
+    identity_weights: dict = None
+
     # AU-grade detail (all 0..1, defaults 0 → ignored by old call-sites)
     mouth_pucker: float = 0.0       # AU22 lip funneler — pulls lips inward and forward
     mouth_stretch: float = 0.0      # AU20 lip stretch — widens the mouth horizontally
@@ -277,9 +281,6 @@ def render_face(params: FaceParams, size: tuple[int, int] = (640, 480)) -> np.nd
     if mode == "faceforge_3d":
         from faceview.vision.faceforge_bridge import render_face_faceforge
         return render_face_faceforge(params, size)
-    if mode == "head_3d_lite":
-        from faceview.vision.head_3d_lite import render_face_3d_lite
-        return render_face_3d_lite(params, size)
     if mode == "faceforge_3d_gpu":
         from faceview.vision.gpu_renderer import render_face_faceforge_gpu
         return render_face_faceforge_gpu(params, size)
@@ -289,6 +290,9 @@ def render_face(params: FaceParams, size: tuple[int, int] = (640, 480)) -> np.nd
     if mode == "head_decimated_3d":
         from faceview.vision.head_decimated import render_face_decimated
         return render_face_decimated(params, size)
+    if mode == "head_decimated_3d_gpu":
+        from faceview.vision.head_decimated import render_face_decimated_gpu
+        return render_face_decimated_gpu(params, size)
     if mode == "face_warp_3d":
         from faceview.vision.face_warp_atlas import render_face_warp_atlas
         return render_face_warp_atlas(params, size)
