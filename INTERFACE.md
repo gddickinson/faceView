@@ -66,9 +66,14 @@ faceView/
 │   │   │                        oriented along fiber direction
 │   │   ├── sim_face_layered.py  Compositor: stack skull→brain→
 │   │   │                        eyeballs→muscles→skin with per-layer alpha
-│   │   ├── anatomy_meshes.py    BodyParts3D STL loader + Lambert raster
-│   │   ├── faceforge_bridge.py  Photo-anatomical render mode (uses
-│   │   │                        copied BP3D head+neck STL subset)
+│   │   ├── anatomy_meshes.py    BodyParts3D STL loader + Phong raster
+│   │   │                        with per-mesh materials and draw-order
+│   │   ├── anatomy_catalog.py   Unified head-anatomy MeshSpec catalog
+│   │   │                        (20 bones / 100+ muscles / 8 features /
+│   │   │                        7 vertebrae / 1 skin) lifted from faceforge
+│   │   ├── faceforge_bridge.py  Photo-anatomical render entry; layer
+│   │   │                        sets: skull_only / muscles / features /
+│   │   │                        lifelike / xray / vertebrae
 │   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
 │   │                            + coarticulated lip-sync from text
 │   │                            + persona overlay applied per tick
@@ -77,8 +82,16 @@ faceView/
 │       │   ├── au_definitions.json     12 FACS AU id→name map
 │       │   ├── expressions.json        12 emotion presets (AU dicts)
 │       │   ├── expression_muscles.json 43 expression muscles + AU maps
-│       │   │                            (lifted from faceforge)
-│       │   └── personas.json           Bundled appearance presets
+│       │   ├── personas.json           Bundled appearance presets
+│       │   └── anatomy/                Faceforge head-anatomy configs
+│       │       ├── skull_bones.json    20 cranial bones + colors
+│       │       ├── face_features.json  Eyes / ears / nose / eyebrows
+│       │       ├── expression_muscles.json (catalog form, with FMA)
+│       │       ├── jaw_muscles.json    22 mastication muscles
+│       │       ├── neck_muscles.json   38 neck muscles
+│       │       ├── cervical_vertebrae.json  C1-C7
+│       │       ├── eye_colors.json     Brown/blue/green/hazel/grey
+│       │       └── skin.json           Face skin (FMA7163)
 │       └── data/
 │           └── cmu_dict_compact.json   150-word CMU pronouncing dict
 │   ├── llm/

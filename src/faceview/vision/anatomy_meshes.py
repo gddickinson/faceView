@@ -191,12 +191,17 @@ def project_orthographic(
     convention). That's a fixed −90° rotation around X applied first.
     """
     # Fixed BP3D → screen reorientation.
+    # BP3D: +Z up, +Y anatomical-forward, +X right.
+    # Screen: +Y up, -Z toward camera, +X right.
+    # Rotation chain: -90° around X (Z up → Y up), then 180° around Y so
+    # the face points toward the camera (BP3D +Y becomes screen -Z).
     rx0 = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=np.float32)
+    ry180 = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]], dtype=np.float32)
     cy, sy = np.cos(yaw), np.sin(yaw)
     cp, sp = np.cos(pitch), np.sin(pitch)
     rx = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]], dtype=np.float32)
     ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], dtype=np.float32)
-    R = ry @ rx @ rx0
+    R = ry @ rx @ ry180 @ rx0
     return verts @ R.T
 
 
@@ -206,14 +211,25 @@ def render_meshes(
     *,
     yaw: float = 0.0,
     pitch: float = 0.0,
-    light_dir: tuple[float, float, float] = (0.5, -0.7, -0.5),
+    light_dir: tuple[float, float, float] = (-0.4, -0.5, -0.7),
     bg_color: tuple[int, int, int] = (10, 12, 16),
     base_colour: tuple[int, int, int] = (220, 210, 195),
+    materials: list | None = None,
+    ambient: float = 0.30,
+    specular_strength: float = 0.35,
 ) -> np.ndarray:
-    """Render a list of meshes at the same scale via Z-sorted lambert shading."""
+    """Render meshes with optional per-mesh materials.
+
+    ``materials`` is an optional list aligned with ``meshes`` providing
+    ``MeshSpec`` records (color / opacity / shininess). When omitted,
+    all meshes share ``base_colour`` and ``shininess=6``. Lighting is
+    Phong (ambient + diffuse + specular) with a single key light. The
+    rasteriser is CPU-only Z-sorted polygon paint via QPainter — there
+    is no per-pixel shading, only per-triangle.
+    """
     from PySide6.QtCore import QPointF, Qt
     from PySide6.QtGui import (
-        QBrush, QColor, QImage, QPainter, QPainterPath, QPen,
+        QBrush, QColor, QImage, QPainter, QPainterPath,
     )
 
     w, h = size
@@ -223,50 +239,77 @@ def render_meshes(
     if not meshes:
         return _qimage_to_bgr(img)
 
-    # Compute combined bbox so all meshes share a consistent scale.
-    vmin = np.min([m.vertices.min(axis=0) for m in meshes], axis=0)
-    vmax = np.max([m.vertices.max(axis=0) for m in meshes], axis=0)
+    # Choose the scale reference: prefer "bone" meshes if any are present
+    # (so the head fills the frame even when a full-body skin mesh is in
+    # the list). Otherwise use everything.
+    if materials is not None and any(s.category == "bone" for s in materials):
+        ref_meshes = [m for m, s in zip(meshes, materials) if s.category == "bone"]
+    else:
+        ref_meshes = meshes
+    vmin = np.min([m.vertices.min(axis=0) for m in ref_meshes], axis=0)
+    vmax = np.max([m.vertices.max(axis=0) for m in ref_meshes], axis=0)
     centre = (vmin + vmax) / 2.0
     span = float(np.linalg.norm(vmax - vmin))
-    scale = 0.7 * min(w, h) / max(span, 1e-6)
+    scale = 0.85 * min(w, h) / max(span, 1e-6)
 
-    # Centre + rotate + project all triangles.
-    all_tris: list[tuple[float, np.ndarray, float]] = []  # (avg_z, [(x,y)x3], shade)
     light = np.asarray(light_dir, dtype=np.float32)
     light /= max(1e-9, np.linalg.norm(light))
+    view = np.array([0, 0, -1], dtype=np.float32)
+    half = light + view
+    half /= max(1e-9, np.linalg.norm(half))
 
-    for m in meshes:
+    # Build a flat list of (avg_z, pts2d, color, alpha, draw_order).
+    all_tris: list[tuple[float, int, np.ndarray, QColor]] = []
+
+    for mi, m in enumerate(meshes):
+        spec = materials[mi] if materials is not None else None
+        if spec is not None:
+            col_r, col_g, col_b = spec.color
+            opacity = spec.opacity
+            shininess = max(1.0, float(spec.shininess))
+            order = spec.draw_order
+        else:
+            col_r, col_g, col_b = base_colour
+            opacity = 1.0
+            shininess = 6.0
+            order = 100
+
         v = m.vertices - centre
         v3 = project_orthographic(v, yaw=yaw, pitch=pitch)
         normals = project_orthographic(m.normals, yaw=yaw, pitch=pitch)
         x = v3[:, 0] * scale + w / 2
-        y = -v3[:, 1] * scale + h / 2  # flip y for screen coords
+        y = -v3[:, 1] * scale + h / 2
         z = v3[:, 2]
+        # Vectorised shading.
+        n_dot_l = np.abs(normals @ light)
+        diffuse = np.maximum(0.0, n_dot_l)
+        n_dot_h = np.abs(normals @ half)
+        specular = np.power(np.clip(n_dot_h, 0.0, 1.0), shininess) * specular_strength
+        shade = np.clip(ambient + diffuse * (1.0 - ambient) + specular, 0.0, 1.6)
+
         for ti in range(len(m.triangles)):
             i0, i1, i2 = m.triangles[ti]
-            x0, y0 = x[i0], y[i0]
-            x1, y1 = x[i1], y[i1]
-            x2, y2 = x[i2], y[i2]
             avg_z = (z[i0] + z[i1] + z[i2]) / 3.0
-            # Lambert with double-sided shading (BP3D normals are not
-            # consistently outward-facing).
-            n = normals[ti]
-            shade = max(0.25, abs(float(n @ light)))
-            all_tris.append((float(avg_z), np.array([
-                [x0, y0], [x1, y1], [x2, y2]
-            ]), shade))
+            sh = float(shade[ti])
+            r = min(255, int(col_r * sh))
+            g = min(255, int(col_g * sh))
+            b = min(255, int(col_b * sh))
+            qc = QColor(r, g, b)
+            qc.setAlphaF(opacity)
+            pts2d = np.array([[x[i0], y[i0]], [x[i1], y[i1]], [x[i2], y[i2]]])
+            all_tris.append((float(avg_z), int(order), pts2d, qc))
 
-    # Sort back-to-front (smaller z = closer to camera in our convention; keep
-    # front triangles drawn LAST so they cover those behind).
-    all_tris.sort(key=lambda t: t[0], reverse=True)
+    # Sort: primarily by draw_order (bones first), secondary by z (back to front).
+    all_tris.sort(key=lambda t: (t[1], t[0]), reverse=False)
+    # Want back-to-front *within* each draw_order: re-sort within groups.
+    # Simpler — sort by (order, -z) so larger z (back) draws first.
+    all_tris.sort(key=lambda t: (t[1], -t[0]))
 
     p = QPainter(img)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     p.setPen(Qt.PenStyle.NoPen)
-    base_r, base_g, base_b = base_colour
-    for avg_z, pts2d, shade in all_tris:
-        c = QColor(int(base_r * shade), int(base_g * shade), int(base_b * shade))
-        p.setBrush(QBrush(c))
+    for _avg_z, _order, pts2d, qc in all_tris:
+        p.setBrush(QBrush(qc))
         path = QPainterPath()
         path.moveTo(QPointF(pts2d[0, 0], pts2d[0, 1]))
         path.lineTo(QPointF(pts2d[1, 0], pts2d[1, 1]))

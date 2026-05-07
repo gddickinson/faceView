@@ -20,7 +20,10 @@ import shutil
 import sys
 from pathlib import Path
 
-from faceview.vision.anatomy_meshes import HEAD_NECK_FMAS, mesh_dir
+from faceview.vision.anatomy_catalog import head_neck_fmas
+from faceview.vision.anatomy_meshes import mesh_dir
+
+HEAD_NECK_FMAS = head_neck_fmas()
 
 
 def main() -> int:

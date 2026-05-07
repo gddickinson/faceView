@@ -108,19 +108,32 @@ A second illustrative-anatomy track sits alongside the talking-head renderer. Ea
 
 ### Photo-anatomical mode (BodyParts3D)
 
-For medical-imaging quality, faceView ships a small CPU rasteriser that renders the **head + neck STL subset** of [BodyParts3D](https://lifesciencedb.jp/bp3d/). The meshes are licensed separately and *not* committed to this repo — populate them once via:
+For medical-imaging quality, faceView ships a small CPU rasteriser that renders the **head + neck STL subset** of [BodyParts3D](https://lifesciencedb.jp/bp3d/). The full catalogue is lifted from the [FaceForge](https://github.com/gddickinson/face_app) anatomy app — 20 skull bones, 7 cervical vertebrae, 43 expression muscles, 22 jaw muscles, 38 neck muscles, 8 face features (eyes / ears / nose cartilages / eyebrows), and 1 face skin mesh — each with its own FMA identifier, colour, opacity, shininess, and draw order. Populate the meshes once with:
 
 ```bash
 python -m tools.copy_anatomy_meshes /path/to/bodyparts3D/stl
 ```
 
-This copies ~28 head/neck STLs (~25 MB) into `src/faceview/assets/anatomy_meshes/`. After that, render mode `faceforge_3d` (or persona `faceforge_3d`) renders the real meshes via Z-sorted Lambert shading with yaw/pitch from `FaceParams`.
+This copies ~145 head/neck STLs (~150 MB) into `src/faceview/assets/anatomy_meshes/` (gitignored). After that, render mode `faceforge_3d` renders them via Phong (ambient + diffuse + specular) lighting with per-mesh materials, draw-order layering (bones → muscles → skin), Z-sorted polygon paint, and yaw/pitch from `FaceParams`.
 
 <p align="center">
-  <img src="docs/images/anatomy_meshes_rotate.gif" alt="bodyparts3D head rotating" width="48%">
+  <img src="docs/images/anatomy_meshes_grid.png" alt="bodyparts3D anatomy layers" width="100%">
 </p>
 
-*BodyParts3D head + cervical vertebrae from the user's local mirror, rotating live in faceView. The mesh data is real medical anatomy; faceView only contributes the loader, projection, and rasteriser.*
+*Four layer sets at the same neutral pose: **skull_only** (cranium + cervical spine), **muscles** (~100 muscle masses with skull faintly behind), **features** (muscles + eyeballs + ears + nose cartilages), **lifelike** (everything plus translucent face skin on top). All from the same `render_face` dispatcher with `Persona.render_mode = "faceforge_3d"`.*
+
+<p align="center">
+  <img src="docs/images/anatomy_meshes_lifelike_front.png" alt="lifelike face front" width="48%">
+  <img src="docs/images/anatomy_meshes_lifelike_three_quarter.png" alt="lifelike face 3/4 view" width="48%">
+</p>
+
+*The lifelike preset at front and 3/4 view — real BP3D skin mesh over the underlying anatomy, with Phong specular highlighting the cheekbone and brow ridge. No textures, just per-mesh materials and CPU rasterisation.*
+
+<p align="center">
+  <img src="docs/images/anatomy_meshes_skull_rotate.gif" alt="rotating skull" width="40%">
+</p>
+
+*Skull + cervical vertebrae rotating live. The lifelike mode is too compute-heavy for animation on a CPU rasteriser — see roadmap A12/A13 for the OpenGL upgrade.*
 
 ### Render-mode reference
 
@@ -138,7 +151,7 @@ Switchable at runtime via `POST /avatar/persona`:
 | `anatomy_muscles` | layered | Solid muscle masses + activation overlay. |
 | `anatomy_eyeballs` | layered | Full eye globes + optic nerves on faded skull. |
 | `anatomy_xray` | layered | All five layers translucent — see-through head. |
-| `faceforge_3d` | photo-anatomical | Real BodyParts3D STL meshes (requires one-time copy). |
+| `faceforge_3d` | photo-anatomical | Real BodyParts3D STL meshes — 145 head/neck structures with per-mesh material + Phong shading. Layer sets: `skull_only`, `muscles`, `features`, `lifelike`, `xray`. |
 
 ## The simulated face — building blocks
 
@@ -296,7 +309,7 @@ Then a Claude Code session can call `send_chat`, `speak`, `camera_state`, `list_
 ## Testing
 
 ```bash
-pytest                # 76 tests, all green, <2 s
+pytest                # 83 tests, all green
 ```
 
 Tests run fully offscreen (`QT_QPA_PLATFORM=offscreen` is set in `tests/conftest.py`) and require only the `[dev]` extra — no real ML model is loaded.

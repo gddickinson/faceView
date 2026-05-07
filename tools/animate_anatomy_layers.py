@@ -128,7 +128,8 @@ def render_peel(out: Path, size: tuple[int, int], fps: int = 18,
 
 
 def render_meshes_rotate(out: Path, size: tuple[int, int], fps: int = 18,
-                          loop_seconds: float = 4.0) -> Path | None:
+                          loop_seconds: float = 4.0,
+                          layer_set: str = "lifelike") -> Path | None:
     if not meshes_available():
         log.warning("anim.meshes_skip", reason="no STLs in assets/anatomy_meshes")
         return None
@@ -137,9 +138,9 @@ def render_meshes_rotate(out: Path, size: tuple[int, int], fps: int = 18,
     p = FaceParams.neutral()
     for i in range(n):
         f = i / n
-        p.yaw = math.sin(f * math.tau) * 0.7
-        p.pitch = math.cos(f * math.tau) * 0.15
-        bgr = render_face_faceforge(p, size, layer_set="all_head_neck")
+        p.yaw = math.sin(f * math.tau) * 0.6
+        p.pitch = math.cos(f * math.tau) * 0.10
+        bgr = render_face_faceforge(p, size, layer_set=layer_set)
         frames.append(Image.fromarray(bgr[:, :, ::-1]))
     delay = max(40, int(1000 / fps))
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -148,6 +149,57 @@ def render_meshes_rotate(out: Path, size: tuple[int, int], fps: int = 18,
         duration=delay, loop=0, optimize=False, disposal=2,
     )
     log.info("anim.meshes_saved", path=str(out), frames=len(frames))
+    return out
+
+
+def render_meshes_grid(out: Path, size: tuple[int, int]) -> Path:
+    """4-panel grid: skull / muscles / features / lifelike at front view."""
+    if not meshes_available():
+        log.warning("anim.meshes_skip", reason="no STLs")
+        return None
+    p = FaceParams.neutral()
+    panels = {}
+    for label, ls in [
+        ("skull only", "skull_only"),
+        ("muscles", "muscles"),
+        ("features", "features"),
+        ("lifelike", "lifelike"),
+    ]:
+        bgr = render_face_faceforge(p, size, layer_set=ls)
+        panels[label] = Image.fromarray(bgr[:, :, ::-1])
+    sheet = _grid(panels, size, cols=4)
+    sheet.save(out)
+    log.info("anim.mesh_grid_saved", path=str(out))
+    return out
+
+
+def render_meshes_peel(out: Path, size: tuple[int, int], fps: int = 16,
+                        loop_seconds: float = 6.0) -> Path | None:
+    """Peel-away through the BP3D meshes: lifelike → features → muscles → skull."""
+    if not meshes_available():
+        return None
+    sequence = ["lifelike", "features", "muscles", "skull_only",
+                "muscles", "features", "lifelike"]
+    hold_frames = int(0.6 * fps)
+    transition_frames = int(0.6 * fps)
+    p = FaceParams.neutral()
+    p.yaw = 0.15
+    frames: list[Image.Image] = []
+    for layer_set in sequence:
+        bgr = render_face_faceforge(p, size, layer_set=layer_set)
+        im = Image.fromarray(bgr[:, :, ::-1])
+        for _ in range(hold_frames):
+            frames.append(im)
+        # crude crossfade not needed — renderer is fast enough to just step
+        for _ in range(transition_frames):
+            frames.append(im)
+    delay = max(40, int(1000 / fps))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    frames[0].save(
+        out, save_all=True, append_images=frames[1:],
+        duration=delay, loop=0, optimize=False, disposal=2,
+    )
+    log.info("anim.mesh_peel_saved", path=str(out), frames=len(frames))
     return out
 
 
@@ -163,13 +215,33 @@ def main() -> int:
     images = docs_image_dir()
     grid = render_grid(images / "anatomy_layers_grid.png", tuple(args.size))
     peel = render_peel(images / "anatomy_peel.gif", tuple(args.peel_size))
-    meshes = render_meshes_rotate(images / "anatomy_meshes_rotate.gif",
-                                    tuple(args.peel_size))
+
+    # Lightweight BP3D renders. The full-body skin mesh + 145 STLs makes
+    # multi-frame GIFs CPU-bound, so we ship still portraits + a low-res
+    # skull rotation that covers the "real anatomy rotates" demo.
+    mesh_grid = render_meshes_grid(images / "anatomy_meshes_grid.png",
+                                    tuple(args.size))
+    skull_gif = render_meshes_rotate(
+        images / "anatomy_meshes_skull_rotate.gif",
+        (300, 300), fps=14, loop_seconds=2.5, layer_set="skull_only",
+    )
+    if meshes_available():
+        from faceview.vision.faceforge_bridge import render_face_faceforge
+        from faceview.vision.sim_face import FaceParams
+        for tag, yaw in [("front", 0.0), ("three_quarter", 0.4)]:
+            p = FaceParams.neutral()
+            p.yaw = yaw
+            bgr = render_face_faceforge(p, (480, 480), layer_set="lifelike")
+            Image.fromarray(bgr[:, :, ::-1]).save(
+                images / f"anatomy_meshes_lifelike_{tag}.png"
+            )
+        log.info("anim.lifelike_stills_saved")
 
     print("anatomy demos saved:")
-    print(f"  grid:  {grid}")
-    print(f"  peel:  {peel}")
-    print(f"  meshes:{meshes if meshes else '(skipped — no STLs)'}")
+    print(f"  grid:        {grid}")
+    print(f"  peel:        {peel}")
+    print(f"  mesh_grid:   {mesh_grid if mesh_grid else '(skipped — no STLs)'}")
+    print(f"  skull GIF:   {skull_gif if skull_gif else '(skipped — no STLs)'}")
     return 0
 
 

@@ -13,6 +13,41 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-06 — Session 7: Lifelike photo-anatomical face
+
+- User asked for a *lifelike* 3D anatomical face leveraging the
+  faceforge head pipeline. Investigation found ~145 STLs needed (full
+  head+neck catalog), not the 28 we'd been using. Lifted faceforge's
+  bundled JSON catalog directly:
+  `assets/config/anatomy/{skull_bones, face_features, expression_muscles,
+  jaw_muscles, neck_muscles, cervical_vertebrae, skin, eye_colors}.json`.
+- New `vision/anatomy_catalog.py` unifies the 8 configs into one
+  `MeshSpec` list (color, opacity, shininess, draw_order, category)
+  exposing `load_catalog()`, `specs_by_category()`, and named layer-set
+  resolution. `lifelike` makes skin opaque on top; `xray` keeps it
+  translucent; `muscles`, `features`, `skull_only`, `vertebrae` are
+  subsets.
+- Renderer upgraded: per-mesh material (color/opacity/shininess), Phong
+  lighting (ambient + diffuse + specular), draw-order layering so bones
+  draw first and skin last, NumPy-vectorised per-triangle shading,
+  alpha-aware QPainter blending. BP3D coordinate transform extended
+  with a 180° Y-flip so the face points toward the camera.
+- Renderer auto-scales to the *bone* bbox (skull) when bones are
+  present in the layer set. Stops the full-body skin mesh from zooming
+  the head out to a tiny ant in the frame.
+- copy_anatomy_meshes now reads the unified catalog → copies all
+  ~145 STLs from a BodyParts3D dump. Exercised against the user's
+  `/Volumes/GeorgeDrive/.../bodyparts3D/stl` mirror — 143 of 145 STLs
+  present in that snapshot.
+- Demos: 4-panel `anatomy_meshes_grid.png` (skull / muscles / features /
+  lifelike) plus front + 3/4 view stills of the lifelike face. Skull
+  rotation GIF kept; full-mesh GIFs deferred to the OpenGL upgrade
+  (CPU rasteriser is too slow at 145 meshes × 5000 tris/frame).
+- Tests: 76 → 83. `test_anatomy_catalog.py` covers load, layer sets,
+  opacity rules, color shape, unknown-set error path. Existing
+  `test_anatomy_layers.py` continues to verify the dispatcher routes
+  `faceforge_3d` correctly when meshes are present.
+
 ## 2026-05-06 — Session 6: Layered anatomy + photo-anatomical bridge
 
 - Added six new render modes spanning two tracks:

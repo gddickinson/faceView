@@ -22,33 +22,21 @@ import math
 import numpy as np
 
 from faceview.core.errors import MissingDependency
+from faceview.vision.anatomy_catalog import (
+    head_neck_fmas,
+    specs_for_layer_set,
+)
 from faceview.vision.anatomy_meshes import (
     list_available_meshes,
     load_mesh,
     mesh_dir,
     meshes_available,
     render_meshes,
-    HEAD_NECK_FMAS,
 )
 
 
-# ── default layer presets ───────────────────────────────────────────
-
-
-_PRESET_LAYERS: dict[str, list[str]] = {
-    # FMA codes; loaded from disk if present.
-    "skull_bones": [
-        "FMA46565",  # skull
-        "FMA52748",  # mandible
-        "FMA52747",  # zygomatic bone
-    ],
-    "vertebrae": [
-        "FMA12519", "FMA12520", "FMA12521", "FMA12522",
-        "FMA12523", "FMA12524", "FMA12525",
-    ],
-    "expression_muscles": [],   # filled at load time from the catalogue
-    "all_head_neck": list(HEAD_NECK_FMAS.keys()),
-}
+# Cache the FMA list (read-only after first call).
+HEAD_NECK_FMAS = head_neck_fmas()
 
 
 def _resolve_present(names: list[str]) -> list[str]:
@@ -64,18 +52,39 @@ def _params_to_pose(params) -> tuple[float, float]:
     return yaw, pitch
 
 
+# Mapping from human-friendly layer set names to catalog presets.
+_LAYER_ALIASES = {
+    "skull_bones": "skull_only",
+    "skull_only": "skull_only",
+    "vertebrae": "vertebrae",
+    "muscles": "muscles",
+    "features": "features",
+    "lifelike": "lifelike",
+    "xray": "xray",
+    "all_head_neck": "all_head_neck",
+}
+
+
 def render_face_faceforge(
     params,
     size: tuple[int, int] = (640, 480),
     *,
-    layer_set: str = "skull_bones",
+    layer_set: str = "lifelike",
 ) -> np.ndarray:
-    """Render the BP3D head + neck subset at the given pose.
+    """Render the BodyParts3D head + neck meshes at the given pose.
 
-    ``layer_set`` selects which structures to include
-    (``skull_bones`` | ``vertebrae`` | ``expression_muscles`` |
-    ``all_head_neck``). When the mesh dir is empty this raises
-    :class:`MissingDependency` with the populate hint.
+    ``layer_set`` selects which structures and which materials to use:
+
+    - ``lifelike`` — full opaque skin over muscles + bones (default).
+      Looks like a 3D portrait when meshes are present.
+    - ``xray`` — same content, skin translucent (~0.35 opacity).
+    - ``muscles`` — bones + muscles, no skin.
+    - ``skull_only`` — bones + vertebrae only.
+    - ``features`` — bones + muscles + eyes + ears + nose cartilages.
+    - ``vertebrae`` — cervical spine only.
+    - ``all_head_neck`` — every catalog mesh (synonym for ``xray``).
+
+    Raises :class:`MissingDependency` when the mesh directory is empty.
     """
     if not meshes_available():
         raise MissingDependency(
@@ -88,31 +97,29 @@ def render_face_faceforge(
             ),
         )
 
-    names = _PRESET_LAYERS.get(layer_set, ["skull_bones"])
-    if layer_set == "all_head_neck":
-        names = _resolve_present(list(HEAD_NECK_FMAS.keys()))
-    elif not names:  # e.g. expression_muscles — derive from catalogue
-        names = _resolve_present(list(HEAD_NECK_FMAS.keys()))
-    else:
-        names = _resolve_present(names)
+    catalog_name = _LAYER_ALIASES.get(layer_set, layer_set)
+    specs = specs_for_layer_set(catalog_name)
+    avail = set(list_available_meshes())
+    specs = [s for s in specs if s.fma in avail]
 
-    if not names:
+    if not specs:
         raise MissingDependency(
             "BodyParts3D STL meshes",
             install_hint=(
-                "Mesh directory is present but empty. Copy STLs via "
-                "`python -m tools.copy_anatomy_meshes "
-                "/path/to/bodyparts3D/stl`."
+                f"No STLs matched layer set '{layer_set}' in {mesh_dir()}. "
+                "Run `python -m tools.copy_anatomy_meshes "
+                "/path/to/bodyparts3D/stl` to populate."
             ),
         )
 
-    meshes = [load_mesh(n) for n in names]
+    meshes = [load_mesh(s.fma) for s in specs]
     yaw, pitch = _params_to_pose(params)
     bg = getattr(params, "background", "#0a0d12")
     bg_rgb = _hex_to_rgb(bg)
     return render_meshes(
         meshes, size,
         yaw=yaw, pitch=pitch, bg_color=bg_rgb,
+        materials=specs,
     )
 
 

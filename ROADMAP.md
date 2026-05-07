@@ -25,6 +25,7 @@ Track legend:
 | A7 | A | Anatomical renderer (86 landmarks + 43 muscles, 4 render modes) | done |
 | A10 | A | Layered illustrative anatomy (skull / brain / eyes / muscles / skin) — 6 modes | done |
 | A11 | A | Photo-anatomical via BodyParts3D STL meshes (faceforge_3d mode) | done |
+| A14 | A | Lift faceforge head catalog (145 STLs, per-mesh materials, lifelike skin) | done |
 
 ## Next (clear winners, queued)
 
