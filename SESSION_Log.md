@@ -13,6 +13,47 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-07 — Session 20: Sci-fi color profiles
+
+User asked for stylised color profiles: "transparent, neon, cyberpunk
+xray". Built four `style` presets that flip the ICT material palette
+and shader uniforms wholesale. Each is selectable as a persona.
+
+**Implementation**
+
+* `Persona.style` (default `"natural"`) added; `load_persona` /
+  `apply_persona` propagate it to `params._persona_style`.
+* `vision/ict_face.py`:
+  * `_SCIFI_PALETTES` — RGB tuples per ICT material name for each
+    of the four styles.
+  * `_shader_overrides_for_style` — per-style ambient / specular /
+    shininess / sss_tint dict. Xray boosts ambient + drops specular
+    for that flat medical-glow look. Neon flattens SSS + cranks
+    specular for plastic sheen.
+  * `_material_palette` returns the sci-fi palette wholesale when
+    style is non-natural; otherwise the natural HSV-derived skin
+    palette.
+  * `_per_vertex_colors_for` short-circuits the lip / brow / cheek
+    post-processing for sci-fi styles — those flourishes only make
+    sense on natural skin tones.
+  * `_ICTRenderer.render` reads `self._style_uniforms.get(...)`
+    rather than hardcoding shader values.
+* `personas.json`: 4 new entries (`ict_neon`, `ict_transparent`,
+  `ict_cyberpunk`, `ict_xray`) — each picks a black/dark background
+  to make the stylised palette pop.
+
+**Visual verification**
+
+Live-captured all four through `POST /avatar/persona` — round-trips
+cleanly. Showcase grid in `docs/images/ict_scifi_styles.png`:
+- neon: hot magenta skin, glowing cyan eyes, electric green crown
+- transparent: ghost pale-blue, ethereal
+- cyberpunk: cool teal skin, magenta hair
+- xray: dim cyan-bone with bright bone-white teeth/sclera
+
+Committed as `26ee828`. Push to origin blocked by no-direct-to-main
+policy — branch + PR needed.
+
 ## 2026-05-07 — Session 18: ICT polish v2 + Ollama bug-fix + live integration
 
 After running the live GUI in session 17, user pointed out several
