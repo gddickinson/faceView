@@ -13,6 +13,56 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-07 — Session 18: ICT polish v2 + Ollama bug-fix + live integration
+
+After running the live GUI in session 17, user pointed out several
+issues that needed fixing:
+
+1. Default happy expression had AU25=0.3 → mouth open showing teeth.
+   Closed-mouth happy is more natural.
+2. No eyebrows visible.
+3. Lips weren't tinted differently from skin.
+4. Skin tone was uniform — no blood-flow variation.
+5. Hair cap was uniform / didn't extend over the top.
+
+Also: Ollama integration was broken (`'method' object is not iterable`).
+
+**Fixes**
+
+  * `expressions.json`: happy.AU25 0.3 → 0.0, AU12 0.9 → 0.75,
+    AU6 0.7 → 0.6. Smile without dropping the jaw.
+
+  * `ict_face.py` `_per_vertex_colors_for(params)` rewritten as a
+    fully vectorised NumPy pipeline:
+    - Hair cap: top 32% of head Y, ALL sides (no z-back filter
+      anymore — the previous logic excluded the front of the
+      crown). Per-vertex hair noise (~±10% multiplicative) so it
+      doesn't look uniform.
+    - Eyebrows: thin band 2.5-5.5% of head height above the eye
+      mean Y, front-facing only, painted with hair_color * 0.9.
+    - Lips: blend lip_color at 60% with underlying skin (lips
+      read as redder skin, not paint stripe).
+    - Cheek blush: ~10% blend toward warm pink at the cheek apple
+      area (was 30% — looked like rouge).
+    - Subtle whole-face per-vertex luminance noise (~±2.5%).
+
+  * `llm/ollama_client.py`:
+    - Fixed `'method' object is not iterable` —
+      `Conversation.messages` is a method, not an attribute.
+      Now calls `conv.messages()` properly.
+    - `pick_default_model` skips `*-vision` and `*llava*` variants
+      (they expect multimodal inputs we don't supply, return 500).
+
+**Live integration test**
+  GUI booted with `FACEVIEW_AVATAR=1`; sent "Hi, say hello briefly"
+  via `POST /chat` with no ANTHROPIC_API_KEY set. Ollama (llama3
+  installed locally) replied "Hello! It's nice to chat with you
+  today!" through the streaming /api/chat endpoint. Status pills
+  read `happy 78% / mouth silent` (closed-mouth smile correct).
+  Hair cap visible, subtle eyebrows + cheek blush, skin variation.
+
+Tests stay at 124 green.
+
 ## 2026-05-07 — Session 17: ICT polish (skin / eyes / hair) + Ollama fallback
 
 User asked for four targeted improvements after the live GUI test:

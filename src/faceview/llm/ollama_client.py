@@ -54,19 +54,27 @@ def list_ollama_models(host: str = DEFAULT_HOST, timeout: float = 1.0) -> list[s
 
 
 def pick_default_model(host: str = DEFAULT_HOST) -> Optional[str]:
-    """Pick a sensible default model — env-var override, then first installed."""
+    """Pick a sensible default model — env-var override, then first installed.
+
+    Prefers text-only chat models (skips ``-vision`` / ``llava`` variants
+    whose chat endpoint expects multimodal input we don't supply).
+    """
     env = os.environ.get("FACEVIEW_OLLAMA_MODEL")
     if env:
         return env
     models = list_ollama_models(host)
     if not models:
         return None
-    # Prefer chat-tuned llama variants first.
-    for needle in ("llama3", "llama2", "mistral", "phi", "qwen"):
-        for m in models:
+    # Prefer text-only chat-tuned models. Skip vision / llava variants.
+    candidates = [m for m in models
+                  if "vision" not in m.lower() and "llava" not in m.lower()]
+    if not candidates:
+        candidates = models
+    for needle in ("llama3", "llama2", "qwen", "mistral", "phi", "gemma"):
+        for m in candidates:
             if needle in m.lower():
                 return m
-    return models[0]
+    return candidates[0]
 
 
 class OllamaEngine:
@@ -88,7 +96,10 @@ class OllamaEngine:
         messages: list[dict] = []
         if getattr(conv, "system", None):
             messages.append({"role": "system", "content": conv.system})
-        for m in getattr(conv, "messages", []):
+        # Conversation.messages() is a method that returns a list copy.
+        msg_list = conv.messages() if callable(getattr(conv, "messages", None)) \
+                   else getattr(conv, "_messages", [])
+        for m in msg_list:
             messages.append({
                 "role": "user" if m.role == "user" else "assistant",
                 "content": m.content,
