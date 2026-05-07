@@ -1,13 +1,11 @@
-"""Sample views for the ict_jelly_middle persona.
+"""Sample views for the default Claude avatar persona (ict_xray_young).
 
 Outputs:
-- ict_jelly_middle_emotions.png — neutral / happy / angry / sad /
-  fear / jaw_open emotion grid.
-- ict_jelly_middle_rotation.png — yaw -30°…30° in 7 frames.
-- ict_jelly_middle_talking.gif — animated talking head with
-  subtle sway, ~60 frames.
-- ict_xray_young_default.png — preview of the new default Claude
-  persona (no anatomy, dynamic sci-fi).
+- ict_xray_young_emotions.png — neutral / happy / angry / sad /
+  fear / jaw_open emotion grid showing mood-driven skin tints.
+- ict_xray_young_rotation.png — yaw -30°…30° in 7 frames.
+- ict_xray_young_talking.gif — animated talking head with the
+  subtle yaw/pitch/roll sway, ~60 frames.
 """
 from __future__ import annotations
 
@@ -22,8 +20,7 @@ from faceview.vision.sim_face import FaceParams
 
 
 SIZE = (360, 360)
-JELLY = "ict_jelly_middle"
-DEFAULT = "ict_xray_young"
+PERSONA = "ict_xray_young"
 
 
 def _label(img: np.ndarray, text: str) -> np.ndarray:
@@ -32,7 +29,7 @@ def _label(img: np.ndarray, text: str) -> np.ndarray:
     return img
 
 
-def emotion_grid(persona: str, out_path: str) -> None:
+def emotion_grid(out_path: str) -> None:
     cases = [
         ("neutral", FaceParams()),
         ("happy", FaceParams(smile=0.85, cheek_raise=0.7)),
@@ -45,30 +42,26 @@ def emotion_grid(persona: str, out_path: str) -> None:
     ]
     cells = []
     for label, p in cases:
-        apply_persona(p, load_persona(persona))
-        img = render_face_ict(p, size=SIZE)
-        cells.append(_label(img, label))
+        apply_persona(p, load_persona(PERSONA))
+        cells.append(_label(render_face_ict(p, size=SIZE), label))
     rows = [np.hstack(cells[i:i + 3]) for i in range(0, len(cells), 3)]
-    grid = np.vstack(rows)
-    cv2.imwrite(out_path, grid)
+    cv2.imwrite(out_path, np.vstack(rows))
     print(f"wrote {out_path}")
 
 
-def rotation_strip(persona: str, out_path: str) -> None:
-    yaws = np.linspace(-0.55, 0.55, 7)
+def rotation_strip(out_path: str) -> None:
     cells = []
-    for yaw in yaws:
+    for yaw in np.linspace(-0.55, 0.55, 7):
         p = FaceParams(yaw=float(yaw))
-        apply_persona(p, load_persona(persona))
+        apply_persona(p, load_persona(PERSONA))
         img = render_face_ict(p, size=SIZE)
         cells.append(_label(img, f"{int(math.degrees(yaw * 0.6))}°"))
     cv2.imwrite(out_path, np.hstack(cells))
     print(f"wrote {out_path}")
 
 
-def talking_gif(persona: str, out_path: str) -> None:
-    """Animated talking head — driven by TalkingAvatar.tick so the
-    real talking-sway code path runs."""
+def talking_gif(out_path: str) -> None:
+    """Talking head with the avatar's built-in sway."""
     try:
         import imageio.v2 as imageio
     except Exception:
@@ -76,13 +69,12 @@ def talking_gif(persona: str, out_path: str) -> None:
         return
     from faceview.vision.avatar import TalkingAvatar
 
-    av = TalkingAvatar(persona=persona, emotion="happy")
-    av.say("Hello — let me show you the talking head sway in this jelly mode "
-            "while I speak naturally.")
-
-    frames = []
+    av = TalkingAvatar(persona=PERSONA, emotion="happy")
+    av.say("Hello — let me show you the talking head sway and the "
+            "mood-driven skin tones in this xray mode.")
     n = 60
     fps = 20
+    frames = []
     for i in range(n):
         t = av._t0 + i / fps
         params = av.tick(t)
@@ -93,11 +85,9 @@ def talking_gif(persona: str, out_path: str) -> None:
 
 
 def main() -> None:
-    emotion_grid(JELLY, "docs/images/ict_jelly_middle_emotions.png")
-    rotation_strip(JELLY, "docs/images/ict_jelly_middle_rotation.png")
-    talking_gif(JELLY, "docs/images/ict_jelly_middle_talking.gif")
-    emotion_grid(DEFAULT, "docs/images/ict_xray_young_emotions.png")
-    talking_gif(DEFAULT, "docs/images/ict_xray_young_talking.gif")
+    emotion_grid("docs/images/ict_xray_young_emotions.png")
+    rotation_strip("docs/images/ict_xray_young_rotation.png")
+    talking_gif("docs/images/ict_xray_young_talking.gif")
 
 
 if __name__ == "__main__":

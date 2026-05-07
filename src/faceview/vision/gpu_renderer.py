@@ -89,14 +89,7 @@ class _GpuMesh:
 
 
 class _GpuRenderer:
-    """Persistent moderngl context + cached mesh VBOs.
-
-    If ``ctx`` is provided we share an existing moderngl context
-    (e.g. the ICT renderer's). moderngl 5.x has no API for switching
-    between two standalone contexts in the same thread — so when a
-    caller (the jelly composite) needs both ICT and BP3D rendering,
-    it must hand its context in here so we don't try to alternate.
-    """
+    """Persistent moderngl context + cached mesh VBOs."""
 
     def __init__(self, ctx=None) -> None:
         try:
