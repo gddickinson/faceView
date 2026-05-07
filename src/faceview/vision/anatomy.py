@@ -68,116 +68,115 @@ def _arc(group: str, prefix: str, cx: float, cy: float,
 
 
 def _build_template() -> list[Landmark]:
-    """Generate the canonical landmark template programmatically.
+    """Canonical landmark template at BP3D-measured proportions.
 
-    ~110 points — enough to render a face with proper anatomy, sparse
-    enough to deform cheaply. Coordinates use the rule of thirds:
-    forehead-to-brow ≈ brow-to-nose ≈ nose-to-chin.
+    Y positions adjusted (session 8) to match the proportional anatomy
+    measured off the BodyParts3D skull mesh — eye line at the vertical
+    midpoint of the cranium, nose tip near the lower third, mouth at
+    the three-quarter mark. The face is also slightly narrower (head
+    ratio ~1:1.45 height:width matches average human anatomy) than
+    the original cartoony 1:1.18 oval.
     """
     L: list[Landmark] = []
 
-    # Face oval (jaw + temple + forehead) — 17 points clockwise from chin.
+    # Face oval — narrower / taller silhouette matching BP3D skull.
     jaw_pts = [
-        (0.50, 0.94, "chin"),
-        (0.43, 0.92, "jaw_l1"), (0.36, 0.88, "jaw_l2"), (0.29, 0.83, "jaw_l3"),
-        (0.22, 0.76, "jaw_l4"), (0.17, 0.66, "ear_lower_l"),
-        (0.13, 0.55, "ear_upper_l"), (0.13, 0.42, "temple_l"),
-        (0.18, 0.28, "forehead_l"), (0.32, 0.18, "hairline_l"),
-        (0.50, 0.13, "hairline_top"),
-        (0.68, 0.18, "hairline_r"), (0.82, 0.28, "forehead_r"),
-        (0.87, 0.42, "temple_r"), (0.87, 0.55, "ear_upper_r"),
-        (0.83, 0.66, "ear_lower_r"), (0.78, 0.76, "jaw_r4"),
-        (0.71, 0.83, "jaw_r3"), (0.64, 0.88, "jaw_r2"),
-        (0.57, 0.92, "jaw_r1"),
+        (0.50, 0.96, "chin"),
+        (0.43, 0.93, "jaw_l1"), (0.37, 0.88, "jaw_l2"), (0.30, 0.81, "jaw_l3"),
+        (0.23, 0.73, "jaw_l4"), (0.18, 0.62, "ear_lower_l"),
+        (0.16, 0.50, "ear_upper_l"), (0.16, 0.38, "temple_l"),
+        (0.20, 0.24, "forehead_l"), (0.32, 0.13, "hairline_l"),
+        (0.50, 0.08, "hairline_top"),
+        (0.68, 0.13, "hairline_r"), (0.80, 0.24, "forehead_r"),
+        (0.84, 0.38, "temple_r"), (0.84, 0.50, "ear_upper_r"),
+        (0.82, 0.62, "ear_lower_r"), (0.77, 0.73, "jaw_r4"),
+        (0.70, 0.81, "jaw_r3"), (0.63, 0.88, "jaw_r2"),
+        (0.57, 0.93, "jaw_r1"),
     ]
     for x, y, name in jaw_pts:
         L.append(Landmark(name=name, group="face_oval", x=x, y=y))
 
-    # Brows — 5 per side following the brow ridge.
-    for side, sx in (("l", 0.30), ("r", 0.70)):
-        sign = -1 if side == "l" else 1
+    # Brows — anatomical mid-height (just above orbit, ~38% of face).
+    for side, sx in (("l", 0.32), ("r", 0.68)):
         for i, dx in enumerate([-0.07, -0.035, 0.0, 0.035, 0.07]):
-            x = sx + sign * dx if False else sx + dx
-            # Slight downward bend at outer end (anatomical brow arch).
-            y = 0.32 + 0.012 * abs(dx) * 30
+            x = sx + dx
+            y = 0.40 + 0.012 * abs(dx) * 30
             L.append(Landmark(name=f"brow_{side}_{i}", group=f"brow_{side}", x=x, y=y))
 
-    # Eyes — upper + lower lids, 6 each, plus inner/outer canthus + iris centre.
+    # Eyes — at vertical midpoint of head (canonical anatomical rule).
+    eye_y_centre = 0.48
     for side, sx in (("l", 0.36), ("r", 0.64)):
-        # Upper lid arc (top of palpebral fissure)
-        for i, (dx, dy) in enumerate([(-0.055, 0.40), (-0.030, 0.385),
-                                       (0.0, 0.38), (0.030, 0.385),
-                                       (0.055, 0.40)]):
-            L.append(Landmark(name=f"eye_{side}_upper_{i}", group=f"eye_{side}_upper",
-                              x=sx + dx, y=dy))
-        # Lower lid arc
-        for i, (dx, dy) in enumerate([(-0.055, 0.40), (-0.030, 0.418),
-                                       (0.0, 0.42), (0.030, 0.418),
-                                       (0.055, 0.40)]):
-            L.append(Landmark(name=f"eye_{side}_lower_{i}", group=f"eye_{side}_lower",
-                              x=sx + dx, y=dy))
-        # Iris centre
-        L.append(Landmark(name=f"iris_{side}", group=f"iris_{side}", x=sx, y=0.402))
+        for i, (dx, dy) in enumerate([(-0.055, 0.0), (-0.030, -0.014),
+                                       (0.0, -0.020), (0.030, -0.014),
+                                       (0.055, 0.0)]):
+            L.append(Landmark(name=f"eye_{side}_upper_{i}",
+                                group=f"eye_{side}_upper",
+                                x=sx + dx, y=eye_y_centre + dy))
+        for i, (dx, dy) in enumerate([(-0.055, 0.0), (-0.030, 0.018),
+                                       (0.0, 0.022), (0.030, 0.018),
+                                       (0.055, 0.0)]):
+            L.append(Landmark(name=f"eye_{side}_lower_{i}",
+                                group=f"eye_{side}_lower",
+                                x=sx + dx, y=eye_y_centre + dy))
+        L.append(Landmark(name=f"iris_{side}", group=f"iris_{side}",
+                            x=sx, y=eye_y_centre + 0.002))
 
-    # Nose — root (between brows), bridge, tip, columella, alar wings, nostrils.
+    # Nose — bridge starts just above eye line; tip at ~64% of face.
     nose_pts = [
-        (0.50, 0.34, "nose_root"),
-        (0.48, 0.42, "nose_bridge_l"), (0.52, 0.42, "nose_bridge_r"),
-        (0.47, 0.52, "nose_dorsum_l"), (0.53, 0.52, "nose_dorsum_r"),
-        (0.50, 0.59, "nose_tip"),
-        (0.44, 0.60, "nose_alar_l"), (0.56, 0.60, "nose_alar_r"),
-        (0.46, 0.62, "nostril_l"), (0.54, 0.62, "nostril_r"),
-        (0.50, 0.63, "columella"),
+        (0.50, 0.42, "nose_root"),
+        (0.48, 0.50, "nose_bridge_l"), (0.52, 0.50, "nose_bridge_r"),
+        (0.47, 0.58, "nose_dorsum_l"), (0.53, 0.58, "nose_dorsum_r"),
+        (0.50, 0.65, "nose_tip"),
+        (0.44, 0.66, "nose_alar_l"), (0.56, 0.66, "nose_alar_r"),
+        (0.46, 0.68, "nostril_l"), (0.54, 0.68, "nostril_r"),
+        (0.50, 0.69, "columella"),
     ]
     for x, y, name in nose_pts:
         L.append(Landmark(name=name, group="nose", x=x, y=y))
 
-    # Philtrum (groove between nose and lip).
+    # Philtrum.
     L += [
-        Landmark(name="philtrum_l", group="philtrum", x=0.485, y=0.66),
-        Landmark(name="philtrum_r", group="philtrum", x=0.515, y=0.66),
+        Landmark(name="philtrum_l", group="philtrum", x=0.485, y=0.72),
+        Landmark(name="philtrum_r", group="philtrum", x=0.515, y=0.72),
     ]
 
-    # Lip outer — upper (cupid's bow) and lower.
+    # Lips — at ~75% of face height.
     upper_lip_pts = [
-        (0.40, 0.71, "lip_corner_l"),
-        (0.44, 0.69, "lip_upper_l2"),
-        (0.475, 0.685, "cupid_l"),
-        (0.50, 0.690, "cupid_top"),  # philtrum dimple
-        (0.525, 0.685, "cupid_r"),
-        (0.56, 0.69, "lip_upper_r2"),
-        (0.60, 0.71, "lip_corner_r"),
+        (0.40, 0.78, "lip_corner_l"),
+        (0.44, 0.755, "lip_upper_l2"),
+        (0.475, 0.748, "cupid_l"),
+        (0.50, 0.753, "cupid_top"),
+        (0.525, 0.748, "cupid_r"),
+        (0.56, 0.755, "lip_upper_r2"),
+        (0.60, 0.78, "lip_corner_r"),
     ]
     for x, y, name in upper_lip_pts:
         L.append(Landmark(name=name, group="lip_outer_upper", x=x, y=y))
 
     lower_lip_pts = [
-        (0.60, 0.71, "lip_corner_r2"),
-        (0.555, 0.745, "lip_lower_r2"),
-        (0.50, 0.760, "lip_lower_mid"),
-        (0.445, 0.745, "lip_lower_l2"),
-        (0.40, 0.71, "lip_corner_l2"),
+        (0.60, 0.78, "lip_corner_r2"),
+        (0.555, 0.815, "lip_lower_r2"),
+        (0.50, 0.830, "lip_lower_mid"),
+        (0.445, 0.815, "lip_lower_l2"),
+        (0.40, 0.78, "lip_corner_l2"),
     ]
     for x, y, name in lower_lip_pts:
         L.append(Landmark(name=name, group="lip_outer_lower", x=x, y=y))
 
-    # Lip inner — defines the mouth opening when AU25/26 split lips apart.
-    inner_upper = [(0.46, 0.715, "inner_u_l"), (0.50, 0.713, "inner_u_m"),
-                   (0.54, 0.715, "inner_u_r")]
-    inner_lower = [(0.46, 0.730, "inner_l_l"), (0.50, 0.735, "inner_l_m"),
-                   (0.54, 0.730, "inner_l_r")]
+    inner_upper = [(0.46, 0.785, "inner_u_l"), (0.50, 0.783, "inner_u_m"),
+                   (0.54, 0.785, "inner_u_r")]
+    inner_lower = [(0.46, 0.800, "inner_l_l"), (0.50, 0.805, "inner_l_m"),
+                   (0.54, 0.800, "inner_l_r")]
     for x, y, name in inner_upper:
         L.append(Landmark(name=name, group="lip_inner_upper", x=x, y=y))
     for x, y, name in inner_lower:
         L.append(Landmark(name=name, group="lip_inner_lower", x=x, y=y))
 
-    # Cheek apples (zygomatic prominence) — used for AU6 cheek raise rendering.
     L += [
-        Landmark(name="cheek_l", group="cheek", x=0.30, y=0.58),
-        Landmark(name="cheek_r", group="cheek", x=0.70, y=0.58),
+        Landmark(name="cheek_l", group="cheek", x=0.30, y=0.62),
+        Landmark(name="cheek_r", group="cheek", x=0.70, y=0.62),
     ]
-    # Glabella (between brows) — for AU4 corrugator + AU9 procerus.
-    L.append(Landmark(name="glabella", group="glabella", x=0.50, y=0.34))
+    L.append(Landmark(name="glabella", group="glabella", x=0.50, y=0.42))
 
     return L
 
@@ -255,8 +254,8 @@ MUSCLE_LAYOUT: dict[str, tuple[float, float, float, float, float]] = {
     "Depr. Septi Nasi L":   (0.49, 0.62,  0.00,  1.00, 0.05),
     # Zygomaticus Maj. — origin at zygomatic bone, insertion at lip corner.
     # Fiber at insertion points up-and-out (toward origin).
-    "Zygomatic Maj. R":     (0.50, 0.68,  0.50, -0.85, 0.18),
-    "Zygomatic Maj. L":     (0.50, 0.68, -0.50, -0.85, 0.18),
+    "Zygomatic Maj. R":     (0.65, 0.70,  0.40, -0.92, 0.18),
+    "Zygomatic Maj. L":     (0.35, 0.70, -0.40, -0.92, 0.18),
     "Zygomatic Min. R":     (0.52, 0.65,  0.45, -0.80, 0.13),
     "Zygomatic Min. L":     (0.48, 0.65, -0.45, -0.80, 0.13),
     # Levator labii sup. — pulls upper lip + nasal wing up.

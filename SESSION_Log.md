@@ -13,6 +13,43 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-06 — Session 9: Smoother lite 3D + BP3D-aligned 2D proportions
+
+User pointed out the lite 3D head looked too cuboid and asked for
+the 2D faces to use BP3D proportions. Both addressed.
+
+**Lite 3D smoothing** (`vision/head_3d_lite.py`)
+- Replaced hand-tuned per-landmark Z values with a smooth ellipsoidal
+  Z function (`_smooth_z`) — half-ellipsoid dome centred at face,
+  radii (rx=0.45, ry=0.55, rz=0.22). Per-group / per-landmark Z
+  offsets layered on top, but kept small so they don't cause seams.
+  Continuous quadric surface = no more cuboid feel.
+- Added 30+ midpoint vertex inserts via `_MIDPOINT_PAIRS` — every
+  adjacent pair on the face oval, plus interior bridges (cheek to
+  jaw, lip to chin, glabella to hairline). Densifies the front mesh
+  before triangulation.
+- Added `_subdivide()` — one pass of edge-midpoint subdivision after
+  Delaunay. Each triangle becomes 4. Midpoint vertex groups inherit
+  parent groups when both agree, fall back to skin otherwise.
+- Computed per-vertex normals (averaged from incident triangles)
+  and per-vertex Phong shading; each triangle's colour = mean of
+  its three vertex shades. Cheap Gouraud-style smoothing.
+- Removed pen outline (was creating visible mesh edges).
+- ~140 vertices, ~600 triangles after subdivision. Still 20+ fps.
+
+**BP3D-aligned 2D proportions** (`vision/anatomy.py`)
+- Adjusted all 86 landmark Y positions to match BP3D-measured
+  anatomy: eye line at vertical midpoint of head (was 40%), nose
+  tip at ~64% (was 59%), mouth at ~78% (was 71%), narrower head
+  (1:1.45 ratio). Brows shifted down to follow eye line.
+- Repositioned Zygomaticus Major muscle pair so L and R sit on
+  their respective anatomical sides (not on the centerline) — the
+  prior layout cancelled out at the lip corners.
+- All 2D render modes (stylised, anatomical, layered, anatomy_xray,
+  etc.) inherit the new proportions automatically.
+
+Tests: 92 stay green. Demo images and GUI screenshots re-rendered.
+
 ## 2026-05-06 — Session 8: Three new 3D rendering tracks
 
 User asked for three things: (1) use the 3D model to improve other

@@ -29,6 +29,8 @@ Track legend:
 | A15 | A | Lite 3D animatable head (~105 verts, Delaunay-tri, AU-deformable, ~55 fps CPU) | done |
 | A16 | A | GPU rendering via moderngl + Apple Metal (~36 fps lifelike on M1) | done |
 | A17 | A | BP3D-derived landmark refinement (measure anatomy off the skull) | infrastructure done; 2D template integration pending |
+| A18 | A | Smooth lite 3D (ellipsoidal Z + midpoint inserts + Loop subdivision + per-vertex Phong) | done |
+| A19 | A | BP3D-aligned 2D landmark proportions (eye line midpoint, narrower head) | done |
 
 ## Next (clear winners, queued)
 
