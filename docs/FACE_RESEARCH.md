@@ -109,6 +109,69 @@ for face reconstruction; overkill for our renderer.
 These are the next realism tier above what we ship today; all
 require shader work on top of ICT's geometry.
 
+## Region detection — using blendshape deltas as anatomical labels
+
+Late note (session 19): the cleanest way to identify which mesh
+vertices are lips, brows, cheeks, eyelids on the ICT mesh is to
+**read it off the blendshapes themselves**. Each ARKit blendshape
+is named after the facial action it drives — `mouthRollLower`,
+`browInnerUp_L`, `cheekPuff_R`. The vertices each blendshape moves
+ARE that anatomical region.
+
+For each region we whitelist a few vermillion / brow-ridge / apple
+specific shapes (broader prefixes catch corner-pull / dimple
+shapes that drag the whole lower face). Then per vertex,
+**winner-take-all**: pick the region with the highest blendshape
+delta magnitude. Vertices below all thresholds are plain skin.
+
+```python
+region_blendshapes = {
+    "lips": ["mouthClose", "mouthRollLower", "mouthRollUpper",
+             "mouthShrugLower", "mouthShrugUpper",
+             "mouthFunnel", "mouthPucker"],
+    "brow": ["browDown_L", "browDown_R", "browInnerUp_L",
+             "browInnerUp_R", "browOuterUp_L", "browOuterUp_R"],
+    ...
+}
+```
+
+Result: lips region has ~1300 vertices on the actual vermillion
+border. Brow has ~2500 on the brow ridge area. Cheek has ~2800
+on the cheek apple. No more horizontal Y-stripes catching the
+back of the head.
+
+## Faceforge anatomy + ICT animation — can we combine?
+
+Faceforge ships static BodyParts3D STL meshes (skull, expression
+muscles, etc.) — anatomically accurate but rigid. ICT ships
+26 K vertices + 53 ARKit blendshapes — animatable but a single
+generic head topology.
+
+**Direct mesh combination is impractical** because the topologies
+don't match — BP3D is a triangle soup of medical scans; ICT is a
+single artist-rigged mesh. There's no vertex correspondence.
+
+**What we already do (and recommend keeping)**:
+
+- `faceforge_3d_gpu` mode renders the BP3D head as a static
+  high-fidelity reference.
+- `anatomy_layers` / `anatomy_skull` / `anatomy_brain` etc. modes
+  render BP3D skull / muscles / brain stylised — useful for
+  educational/diagnostic views.
+- ICT face is the recommended primary renderer for animation.
+
+**Potentially useful integration paths** (none implemented yet):
+
+1. **Anatomy underlay** — render the ICT face translucent on top
+   of the BP3D skull, so you see "muscles deforming under skin".
+   Roadmap A47.
+2. **Face-fitting** — use BP3D skull landmark positions to refine
+   ICT identity_weights so the animated face matches a specific
+   anatomical reference. Roadmap A48.
+3. **Per-vertex skinning correspondence** — find the closest BP3D
+   bone for each ICT vertex, then drive ICT vertices via BP3D bone
+   movement. Heavy ML pipeline; not justified by realism gain.
+
 ## Recommendation
 
 **Today's commit makes ICT-FaceKit the project's highest-realism

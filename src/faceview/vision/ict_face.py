@@ -474,14 +474,97 @@ def _render_via_moderngl(
     )
 
 
+@lru_cache(maxsize=1)
+def _vertex_regions() -> dict[str, np.ndarray]:
+    """Derive anatomical region masks from blendshape delta magnitudes.
+
+    Each ARKit blendshape is named after the facial action it
+    drives (``mouthSmile_L``, ``browInnerUp_R``, ``cheekPuff_L``).
+    The vertices it moves are anatomically members of that region.
+
+    But blendshape deformations ripple across the face, so a naive
+    "non-zero" mask gives ~half the mesh. We aggregate by region
+    (sum of delta magnitudes across all blendshapes in that region)
+    then classify each vertex by its dominant region — the one that
+    moves it the most. That gives clean anatomical region masks
+    that match what the artist actually rigged.
+    """
+    m = load_ict_model()
+    n_verts = len(m.vertices)
+
+    # Per-region blendshape WHITELIST. We pick blendshapes whose
+    # primary deformation is the named region — broader prefixes
+    # (e.g. "mouth*") catch corner-pull / dimple shapes that drag
+    # the whole lower face, smearing the lip colour onto the chin.
+    region_blendshapes = {
+        # Vermillion border (the actual lip surface): these shapes
+        # roll, shrug, funnel, pucker, close — all on the lip skin.
+        "lips": [
+            "mouthClose",
+            "mouthRollLower", "mouthRollUpper",
+            "mouthShrugLower", "mouthShrugUpper",
+            "mouthFunnel", "mouthPucker",
+        ],
+        # Brow ridge / hair line.
+        "brow": [
+            "browDown_L", "browDown_R",
+            "browInnerUp_L", "browInnerUp_R",
+            "browOuterUp_L", "browOuterUp_R",
+        ],
+        # Eyelid skin.
+        "eyelid": [
+            "eyeBlink_L", "eyeBlink_R",
+            "eyeSquint_L", "eyeSquint_R",
+            "eyeWide_L", "eyeWide_R",
+        ],
+        # Cheek apples (puff + raiser only — squint pulls eyelid).
+        "cheek": [
+            "cheekPuff_L", "cheekPuff_R",
+            "cheekRaiser_L", "cheekRaiser_R",
+        ],
+        "nose": ["noseSneer_L", "noseSneer_R"],
+        "jaw":  ["jawOpen"],
+    }
+
+    # Max |delta| per region.
+    region_mag: dict[str, np.ndarray] = {}
+    for region, blendshapes in region_blendshapes.items():
+        agg = np.zeros(n_verts, dtype=np.float32)
+        for name in blendshapes:
+            idx = m.name_to_idx.get(name)
+            if idx is None:
+                continue
+            agg = np.maximum(agg, np.linalg.norm(m.deltas[idx], axis=1))
+        region_mag[region] = agg
+
+    # For each vertex, pick the region with the highest magnitude.
+    # Vertices below ALL region thresholds get classified as "skin".
+    region_keys = list(region_mag.keys())
+    stack = np.stack([region_mag[k] for k in region_keys], axis=0)  # (R, N)
+    max_region = np.argmax(stack, axis=0)
+    max_mag = np.max(stack, axis=0)
+
+    # Vertices need a minimum motion magnitude to be considered IN a
+    # region; otherwise they're plain skin.
+    threshold = 0.0015
+    in_any = max_mag > threshold
+
+    out: dict[str, np.ndarray] = {}
+    for i, key in enumerate(region_keys):
+        out[key] = (max_region == i) & in_any
+    out["skin"] = ~in_any
+    return out
+
+
 def _per_vertex_colors_for(params) -> np.ndarray:
     """Return (N, 3) RGB colors keyed off the OBJ's material tags +
-    persona palette + scalp/eyebrow/lip/cheek heuristics.
+    persona palette + blendshape-derived anatomical regions.
 
-    Vectorised — assigns a colour per vertex from a combined palette
-    (skin / hair / eyebrows / lips / cheeks) using anatomical
-    position heuristics on the ICT mesh. Adds slight per-vertex
-    noise so hair and cheeks don't look uniform.
+    Region detection uses ICT blendshape deltas (winner-take-all per
+    vertex) so colours land in anatomically correct places — lips
+    on lip vertices, eyebrows on the brow ridge, cheeks on cheek
+    apples, etc. Hair cap stays on the Y heuristic since ICT has
+    no hair blendshapes.
     """
     palette = _material_palette(params)
     m = load_ict_model()
@@ -518,45 +601,20 @@ def _per_vertex_colors_for(params) -> np.ndarray:
         if 0 <= vm < len(m.materials) else False for vm in vert_mat_safe
     ])
 
-    # ── Anchor regions to eye line ─────────────────────────────
-    # The naive Y-band approach catches back-of-head vertices and
-    # creates visible stripes around the head. Anchor each region
-    # to the eye-mean Y and constrain to FRONT-FACING vertices in
-    # a narrow X band centred on the face midline.
-    eye_mat_names = {"M_EyeBlend", "M_ScleraLeft", "M_ScleraRight",
-                      "M_IrisLeft", "M_IrisRight"}
-    eye_idx = np.array([
-        i for i in range(n_verts)
-        if 0 <= vert_mat_safe[i] < len(m.materials)
-        and m.materials[vert_mat_safe[i]] in eye_mat_names
-    ])
-    eye_y_mean = (float(verts[eye_idx, 1].mean()) if len(eye_idx) > 10
-                   else (y_min + y_max) / 2)
-    eye_x_centre = ((float(verts[eye_idx, 0].mean()) if len(eye_idx) > 10
-                     else (x_min + x_max) / 2))
-    eye_z_mean = (float(verts[eye_idx, 2].mean()) if len(eye_idx) > 10
-                   else z_max)
-    face_half_w = (x_max - x_min) * 0.30   # inside face only
-
-    # Front-facing gate: vertex Z must be near or in front of the
-    # eyes (excludes ears, sides, back of head, neck-back).
-    z_face_thresh = eye_z_mean - y_span * 0.10
-    front_strict = verts[:, 2] > z_face_thresh
-    on_face_front = on_face & front_strict & (
-        np.abs(verts[:, 0] - eye_x_centre) < face_half_w
+    hair_color = np.array(palette["M_HairCap"], dtype=np.float32)
+    lip_color = np.array(
+        _hex_to_rgb_f(getattr(params, "lip_color", "#a44a4a")),
+        dtype=np.float32,
     )
 
-    hair_color = np.array(palette["M_HairCap"], dtype=np.float32)
-
-    # ── Hair cap: top of head, all sides (need Y gate, not X gate) ──
-    # Hair covers the cranium dome — leave the X gate off but keep
-    # the Y-band fade so the forehead transition is smooth.
-    hair_y = eye_y_mean + y_span * 0.20
-    hair_fade_y = hair_y - y_span * 0.04
+    # ── Hair cap (Y heuristic — no hair blendshapes in ICT) ──
+    # Top of head, fading at the forehead.
+    hair_y = y_max - y_span * 0.32
+    hair_fade_y = hair_y - y_span * 0.05
     hair_mask = on_face & (verts[:, 1] > hair_y)
     fade_mask = (on_face & (verts[:, 1] > hair_fade_y)
                  & (verts[:, 1] <= hair_y))
-    hair_noise = 1.0 + (rng.standard_normal(n_verts).astype(np.float32) * 0.06)
+    hair_noise = 1.0 + rng.standard_normal(n_verts).astype(np.float32) * 0.06
     hair_noise = np.clip(hair_noise, 0.85, 1.15)
     colors[hair_mask] = hair_color * hair_noise[hair_mask, None]
     if fade_mask.any():
@@ -564,48 +622,33 @@ def _per_vertex_colors_for(params) -> np.ndarray:
               / max(1e-6, hair_y - hair_fade_y))[:, None]
         colors[fade_mask] = colors[fade_mask] * (1 - t) + hair_color * t
 
-    # ── Eyebrows: thin front-only band just above eye mean ──
-    brow_y_lo = eye_y_mean + y_span * 0.020
-    brow_y_hi = eye_y_mean + y_span * 0.045
-    brow_mask = (on_face_front
-                 & (verts[:, 1] > brow_y_lo)
-                 & (verts[:, 1] < brow_y_hi))
+    # ── Anatomical regions from blendshape deltas ──
+    regions = _vertex_regions()
+
+    # Brows — coloured with hair_color, blended so it reads as hair
+    # over skin (the brow region from blendshapes IS the eyebrow
+    # ridge / brow hair area). Don't apply where hair cap already painted.
+    brow_mask = regions["brow"] & on_face & ~hair_mask
     if brow_mask.any():
-        # Soften: blend hair_color 70% with current colour for the
-        # brow band so it reads as eyebrow hair against skin.
+        brow_noise = 1.0 + rng.standard_normal(n_verts).astype(np.float32) * 0.05
+        brow_noise = np.clip(brow_noise, 0.88, 1.12)
         colors[brow_mask] = (colors[brow_mask] * 0.30
-                              + hair_color * 0.70)
+                              + hair_color * 0.70 * brow_noise[brow_mask, None])
 
-    # ── Lips: very tight band, front-only, narrow X ──
-    lip_color = np.array(
-        _hex_to_rgb_f(getattr(params, "lip_color", "#a44a4a")),
-        dtype=np.float32,
-    )
-    lip_y_centre = eye_y_mean - y_span * 0.105
-    lip_y_lo = lip_y_centre - y_span * 0.012
-    lip_y_hi = lip_y_centre + y_span * 0.012
-    lip_x_half = (x_max - x_min) * 0.13
-    lip_mask = (on_face_front
-                & (verts[:, 1] > lip_y_lo)
-                & (verts[:, 1] < lip_y_hi)
-                & (np.abs(verts[:, 0] - eye_x_centre) < lip_x_half))
-    if lip_mask.any():
-        # 50/50 blend so lips read as redder skin, not paint stripe.
-        colors[lip_mask] = colors[lip_mask] * 0.50 + lip_color * 0.50
+    # Lips — winner-take-all from "mouth*" blendshapes. Filter out
+    # vertices that are visibly NOT face material (teeth, gums, tongue).
+    lips_mask = (regions["lips"] & on_face & ~hair_mask)
+    if lips_mask.any():
+        # Lips read as redder skin — 60/40 blend.
+        colors[lips_mask] = colors[lips_mask] * 0.40 + lip_color * 0.60
 
-    # ── Cheek blush: small radial spots, very subtle ──
-    cheek_y = eye_y_mean - y_span * 0.045
-    for sign in (-1, 1):
-        cx = eye_x_centre + sign * (x_max - x_min) * 0.18
-        cheek_mask = (on_face_front
-                      & (verts[:, 1] > cheek_y - y_span * 0.020)
-                      & (verts[:, 1] < cheek_y + y_span * 0.020)
-                      & (np.abs(verts[:, 0] - cx) < (x_max - x_min) * 0.05))
-        if cheek_mask.any():
-            blush = np.array([0.95, 0.62, 0.55], dtype=np.float32)
-            colors[cheek_mask] = colors[cheek_mask] * 0.92 + blush * 0.08
+    # Cheek blush — subtle pink at cheek apple area.
+    cheek_mask = regions["cheek"] & on_face & ~hair_mask & ~lips_mask & ~brow_mask
+    if cheek_mask.any():
+        blush = np.array([0.95, 0.62, 0.55], dtype=np.float32)
+        colors[cheek_mask] = colors[cheek_mask] * 0.90 + blush * 0.10
 
-    # ── Subtle global skin noise (very small) ──
+    # ── Subtle global skin noise ──
     if on_face.any():
         skin_noise = 1.0 + rng.standard_normal(n_verts).astype(np.float32) * 0.012
         skin_noise = np.clip(skin_noise, 0.97, 1.03)
