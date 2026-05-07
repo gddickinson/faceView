@@ -31,6 +31,37 @@ def _mesh_path() -> Path:
     return assets_dir() / "data" / "makehuman" / "base.obj"
 
 
+def _target_path(name: str) -> Path:
+    return assets_dir() / "data" / "makehuman" / f"{name}.target"
+
+
+def load_target(name: str, n_verts: int) -> np.ndarray:
+    """Read a MakeHuman .target file → (n_verts, 3) sparse delta array.
+
+    Target files are plain text: one ``index dx dy dz`` per non-zero
+    vertex. Returns zeros for unspecified vertices.
+    """
+    path = _target_path(name)
+    if not path.exists():
+        return np.zeros((n_verts, 3), dtype=np.float32)
+    deltas = np.zeros((n_verts, 3), dtype=np.float32)
+    with path.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) != 4:
+                continue
+            try:
+                idx = int(parts[0])
+                deltas[idx] = (float(parts[1]), float(parts[2]),
+                                float(parts[3]))
+            except (ValueError, IndexError):
+                continue
+    return deltas
+
+
 def _parse_obj(path: Path) -> tuple[np.ndarray, np.ndarray]:
     """Parse a Wavefront OBJ — return (verts, tris)."""
     verts: list[tuple[float, float, float]] = []
@@ -51,9 +82,19 @@ def _parse_obj(path: Path) -> tuple[np.ndarray, np.ndarray]:
             np.array(tris, dtype=np.int32))
 
 
-@lru_cache(maxsize=4)
-def load_makehuman_head(grid: int = 24) -> tuple[np.ndarray, np.ndarray]:
-    """Load the MakeHuman base, crop to head + neck, decimate.
+@lru_cache(maxsize=8)
+def load_makehuman_head(
+    grid: int = 24,
+    target: str = "",
+    target_weight: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load the MakeHuman base, optionally apply a .target deformation,
+    crop to head + neck, decimate.
+
+    ``target`` is a name like ``"male_young"`` or ``"female_young"``;
+    its CC0 vertex deltas are loaded from
+    ``assets/data/makehuman/<target>.target`` and added to the base
+    mesh before cropping. ``target_weight`` lets you dial intensity.
 
     Returns ``(verts, tris)`` in screen-coord space.
     """
@@ -67,6 +108,10 @@ def load_makehuman_head(grid: int = 24) -> tuple[np.ndarray, np.ndarray]:
             ),
         )
     verts, tris = _parse_obj(path)
+
+    if target:
+        deltas = load_target(target, len(verts))
+        verts = verts + (target_weight * deltas)
 
     # MakeHuman convention: +Y up (head at +Y), +Z forward (face at +Z).
     # Crop to head + upper neck FIRST (in original Y-up space), then
@@ -129,14 +174,28 @@ def render_face_makehuman(
     size: tuple[int, int] = (480, 480),
     *,
     grid: int = 24,
+    target: str = "",
+    target_weight: float = 1.0,
 ) -> np.ndarray:
-    """Render the decimated MakeHuman head via QPainter Z-sort."""
+    """Render the decimated MakeHuman head via QPainter Z-sort.
+
+    ``target`` selects an optional .target deformation
+    (``male_young``, ``female_young``). Personas can carry the
+    target name in their ``identity_weights`` dict (key
+    ``mh_target``).
+    """
+    # Personas may carry the target name via identity_weights.
+    iw = getattr(params, "identity_weights", {}) or {}
+    if not target and "mh_target" in iw:
+        target = str(iw.get("mh_target", "")) or ""
+        target_weight = float(iw.get("mh_target_weight", 1.0))
     from PySide6.QtCore import QPointF, Qt
     from PySide6.QtGui import (
         QBrush, QColor, QImage, QPainter, QPainterPath,
     )
 
-    verts, tris = load_makehuman_head(grid)
+    verts, tris = load_makehuman_head(grid, target=target,
+                                         target_weight=target_weight)
     if len(tris) == 0:
         return np.zeros((size[1], size[0], 3), dtype=np.uint8)
 

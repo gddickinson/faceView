@@ -146,6 +146,22 @@
     "background": "#0a0d12",
     "render_mode": "makehuman_3d"
   },
+  "makehuman_male": {
+    "skin_hue": 24.0,
+    "hair_color": "#1a1208",
+    "lip_color": "#a25048",
+    "background": "#0a0d12",
+    "render_mode": "makehuman_3d",
+    "identity_weights": {"mh_target": "male_young", "mh_target_weight": 1.0}
+  },
+  "makehuman_female": {
+    "skin_hue": 28.0,
+    "hair_color": "#3a2010",
+    "lip_color": "#c25a4a",
+    "background": "#0c0e14",
+    "render_mode": "makehuman_3d",
+    "identity_weights": {"mh_target": "female_young", "mh_target_weight": 1.0}
+  },
   "ict_face_3d": {
     "skin_hue": 26.0,
     "hair_color": "#2a1808",

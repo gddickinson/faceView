@@ -302,6 +302,21 @@ def render_face(params: FaceParams, size: tuple[int, int] = (640, 480)) -> np.nd
     if mode == "ict_face_3d":
         from faceview.vision.ict_face import render_face_ict
         return render_face_ict(params, size)
+    if mode == "bfm_3d":
+        from faceview.vision.bfm_face import render_face_bfm
+        return render_face_bfm(params, size)
+    if mode == "rpm_3d":
+        from faceview.vision.rpm_avatar import render_face_rpm
+        return render_face_rpm(params, size)
+    if mode == "flame_3d":
+        from faceview.vision.flame_face import render_face_flame
+        return render_face_flame(params, size)
+    if mode == "metahuman_3d":
+        from faceview.vision.metahuman_face import render_face_metahuman
+        return render_face_metahuman(params, size)
+    if mode == "facescape_3d":
+        from faceview.vision.facescape_face import render_face_facescape
+        return render_face_facescape(params, size)
 
     from faceview.vision.sim_face_parts import (
         draw_brows,

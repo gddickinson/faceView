@@ -13,6 +13,69 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-07 — Session 15: All remaining face-resource bridges shipped
+
+User asked us to wire in MakeHuman gendered targets first then
+work through the remaining roadmap items in order. Done.
+
+**MakeHuman gendered targets** (`vision/makehuman_mesh.py`)
+  * Bundled CC0 `male_young.target` and `female_young.target`
+    files from MakeHuman community.
+  * `load_target(name, n_verts)` parses sparse vertex deltas.
+  * `load_makehuman_head(grid, target=)` applies them before crop/
+    decimation. Personas `makehuman_male` / `makehuman_female`
+    set the `mh_target` key.
+
+**A39 — Basel Face Model bridge** (`vision/bfm_face.py`)
+  * Lazy-imports `eos-py` (PyPI). Loads BFM 2017 H5 from
+    `assets/data/bfm/`. Persona `identity_weights` keys `bfm_<n>`
+    drive the PCA shape coefficients.
+  * Apple Silicon caveat: PyPI `eos-py` wheels are x86_64 only.
+    Documented in module docstring; users run under Rosetta.
+
+**A41 — Ready Player Me bridge** (`vision/rpm_avatar.py`)
+  * Lazy-imports `pygltflib`. Fetches `<id>.glb` from
+    `https://models.readyplayer.me/`, caches to
+    `assets/data/rpm/`. Extracts head mesh + ARKit-named morph
+    targets from the glTF binary blob. Renders through ICT's
+    moderngl pipeline.
+
+**A38 — FLAME PyTorch bridge** (`vision/flame_face.py`)
+  * Lazy-imports `torch` + `FLAME-PyTorch`. Persona keys
+    `flame_shape_<n>` and `flame_expr_<n>` drive the 100+100 PCA
+    coefficients. CC-BY academic — model file (~100 MB) requires
+    user signup at MPI-IS.
+
+**A32 — MetaHuman FBX bridge** (`vision/metahuman_face.py`)
+  * Loader via `pyassimp`. Reads anim_meshes for ARKit
+    blendshapes. Free Gumroad distribution from Dragonboots,
+    user places `head.fbx` at `assets/data/metahuman/`.
+
+**A40 — FaceScape / FaceVerse bridge** (`vision/facescape_face.py`)
+  * OBJ loader for the non-commercial pore-level scans. Persona
+    keys `facescape_subject` / `facescape_expression`. Data
+    needs manual download (research licence).
+
+**A44 — DECA / EMOCA capture bridge** (`vision/deca_capture.py`)
+  * `DECACapture(checkpoint_dir).fit_to_image(bgr)` returns FLAME
+    parameters; `.to_au_values(codedict)` heuristically maps to
+    our 12-AU pipeline. Heavy dep (torch + DECA repo).
+
+**Wiring**
+  * `sim_face.render_face` now dispatches: `bfm_3d` / `rpm_3d` /
+    `flame_3d` / `metahuman_3d` / `facescape_3d` modes alongside
+    everything else.
+
+Tests: 107 → 117. test_optional_face_bridges.py covers import,
+graceful MissingDependency raises, MakeHuman target loader.
+
+ROADMAP STATUS
+  Done in this session: A38, A39, A40, A41, A44, A45, A46 (all as
+  bridges; users opt in deliberately by installing deps + data).
+  Heavy / commercial paths now have lightweight Python wrappers
+  ready for the day a faceview user wants the higher-fidelity
+  head.
+
 ## 2026-05-07 — Session 14: SSS shader + cleanup + roadmap completion
 
 User asked for A42 (skin texture + SSS), README cleanup, removal

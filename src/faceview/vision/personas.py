@@ -61,6 +61,15 @@ def load_persona(name: str) -> Persona:
     data = _load_personas_json()
     raw = data.get(name) or data.get("default") or {}
     iw = raw.get("identity_weights", {}) or {}
+    # Coerce numeric values to float; pass strings through (some
+    # entries — e.g. ``mh_target`` — are mode-specific tag names
+    # rather than coefficients).
+    norm_iw: dict[str, float | str] = {}
+    for k, v in iw.items():
+        if isinstance(v, (int, float)):
+            norm_iw[k] = float(v)
+        else:
+            norm_iw[k] = v
     return Persona(
         name=name,
         skin_hue=float(raw.get("skin_hue", 28.0)),
@@ -68,7 +77,7 @@ def load_persona(name: str) -> Persona:
         lip_color=str(raw.get("lip_color", "#a44a4a")),
         background=str(raw.get("background", "#0c0f14")),
         render_mode=str(raw.get("render_mode", "stylised")),
-        identity_weights={k: float(v) for k, v in iw.items()},
+        identity_weights=norm_iw,
     )
 
 

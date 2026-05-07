@@ -49,13 +49,15 @@ Track legend:
 | A35 | A | CMU mocap library (BVH/ASF/AMC) for full-body avatar motion if scope expands | future, body-focused |
 | A36 | A | openFACS UDP bridge — emit our AU stream to an Unreal-rendered avatar | future bridge, MIT-licensed [phuselab/openFACS](https://github.com/phuselab/openFACS) |
 | A37 | A | **ICT-FaceKit blendshape head** (`ict_face_3d`) — research-grade animated avatar | **done** ✅ |
-| A38 | A | FLAME PyTorch — differentiable head model for image-fitting capture path | future |
-| A39 | A | Basel Face Model 2017 via `eos-py` — pip-installable 3DMM | candidate |
-| A40 | A | FaceScape / FaceVerse non-commercial scans — pore-level detail | future research-only |
-| A41 | A | Ready Player Me GLB loader for end-user avatar customization | future |
+| A38 | A | FLAME PyTorch — differentiable head model for image-fitting capture path | bridge done — `vision/flame_face.py` (model download required) |
+| A39 | A | Basel Face Model 2017 via `eos-py` — pip-installable 3DMM | bridge done — `vision/bfm_face.py` (eos-py is x86_64 only — needs Rosetta on Apple Silicon) |
+| A40 | A | FaceScape / FaceVerse non-commercial scans — pore-level detail | bridge done — `vision/facescape_face.py` (data download required) |
+| A41 | A | Ready Player Me GLB loader for end-user avatar customization | done — `vision/rpm_avatar.py` |
 | A42 | A | Skin texture map + GLSL SSS / dual specular shader on ICT mesh | next realism tier |
 | A43 | A | Eye-specific specular material (wet-eye look) | next realism tier |
-| A44 | A | DECA/EMOCA capture pipeline — image → ARKit coefficients → ICT renderer | future |
+| A44 | A | DECA/EMOCA capture pipeline — image → ARKit coefficients → ICT renderer | bridge done — `vision/deca_capture.py` (DECA repo required) |
+| A45 | A | MakeHuman gendered targets (CC0 male_young / female_young) | done — `vision/makehuman_mesh.load_target` + `makehuman_male/female` personas |
+| A46 | A | MetaHuman head FBX loader (Gumroad CC) | bridge done — `vision/metahuman_face.py` |
 
 ## Next (clear winners, queued)
 

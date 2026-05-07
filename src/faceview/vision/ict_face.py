@@ -216,8 +216,11 @@ def render_face_ict(
     # coefficients — identity reshapes the underlying head, expression
     # animates it. ``identity_weights`` lives on FaceParams (set by
     # apply_persona) and is keyed by ICT identity names like
-    # ``identity001``.
-    identity_w = dict(getattr(params, "identity_weights", {}) or {})
+    # ``identity001``. Skip non-float entries (e.g. ``mh_target``
+    # which is meant for the makehuman mode).
+    raw_iw = getattr(params, "identity_weights", {}) or {}
+    identity_w = {k: float(v) for k, v in raw_iw.items()
+                   if isinstance(v, (int, float))}
     full_coefs = {**arkit_coefs, **identity_w}
     verts = apply_blendshapes(model, full_coefs)
 
