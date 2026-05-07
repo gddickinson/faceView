@@ -295,6 +295,9 @@ def render_face(params: FaceParams, size: tuple[int, int] = (640, 480)) -> np.nd
     if mode == "makehuman_3d":
         from faceview.vision.makehuman_mesh import render_face_makehuman
         return render_face_makehuman(params, size)
+    if mode == "ict_face_3d":
+        from faceview.vision.ict_face import render_face_ict
+        return render_face_ict(params, size)
 
     from faceview.vision.sim_face_parts import (
         draw_brows,

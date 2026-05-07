@@ -13,6 +13,50 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-07 — Session 13: ICT-FaceKit integration — biggest realism jump yet
+
+User asked us to research all the candidate face resources and ship
+the best one. Surveyed: ICT-FaceKit, MetaHuman head FBX, FLAME,
+Basel Face Model, FaceScape, FaceVerse, DECA/EMOCA, Ready Player
+Me, MediaPipe FaceLandmarker, openFACS, MakeHuman, ProductionCrate,
+CMU mocap, USC ICT pack. Findings consolidated in
+`docs/FACE_RESEARCH.md`.
+
+**Top recommendation shipped: ICT-FaceKit** (USC Institute for
+Creative Technologies, MIT-licensed, 26K verts, 157 blendshapes).
+
+Pipeline:
+1. Cloned `USC-ICT/ICT-FaceKit` (386 MB tree of OBJs).
+2. New `tools/build_ict_blendshapes.py` reads the neutral mesh +
+   every blendshape OBJ, computes per-vertex deltas, saves a
+   compressed npz: `assets/data/ict/face_kit.npz` (23 MB).
+3. New `vision/ict_face.py` loads the npz, applies ARKit-named
+   blendshape coefficients as vertex displacements, renders
+   through moderngl with a Phong shader.
+4. ICT names map 1:1 to ARKit (just `_L`/`_R` → `Left`/`Right`),
+   plugs straight into our existing `arkit_blendshapes` layer.
+5. `face_params_to_au_values` → `au_to_arkit_values` →
+   `apply_blendshapes(neutral, deltas)` → render. Same FACS
+   pipeline, real anatomical mesh deltas, ~88 fps GPU.
+
+Result: a real human head with visible teeth when the jaw opens,
+genuine smiles that pull lip corners up, smooth skin shading, all
+animated by our existing FACS expressions / viseme pipeline.
+
+Tests: 105 → 109. `test_ict_face.py` covers npz load, blendshape
+application, render frame validity, dispatcher routing — all
+gated on the npz being built locally.
+
+Render mode `ict_face_3d`, persona of same name. The npz is
+gitignored (23 MB); user runs build tool once after cloning
+ICT-FaceKit.
+
+Demo images:
+- `docs/images/ict_face_grid.png` — neutral / happy / sad /
+  surprised / jaw_open / yaw 0.5
+- `docs/images/ict_face_talking.gif` — talking head animation
+- `docs/images/realism_progression.png` — full mode progression
+
 ## 2026-05-07 — Session 12: Atlas rotation + MakeHuman + ARKit + research
 
 User asked us to proceed with all 7 ranked next steps from the

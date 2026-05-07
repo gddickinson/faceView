@@ -48,6 +48,14 @@ Track legend:
 | A34 | A | MediaPipe FaceLandmarker as live capture input — drive avatar from webcam | future |
 | A35 | A | CMU mocap library (BVH/ASF/AMC) for full-body avatar motion if scope expands | future, body-focused |
 | A36 | A | openFACS UDP bridge — emit our AU stream to an Unreal-rendered avatar | future bridge, MIT-licensed [phuselab/openFACS](https://github.com/phuselab/openFACS) |
+| A37 | A | **ICT-FaceKit blendshape head** (`ict_face_3d`) — research-grade animated avatar | **done** ✅ |
+| A38 | A | FLAME PyTorch — differentiable head model for image-fitting capture path | future |
+| A39 | A | Basel Face Model 2017 via `eos-py` — pip-installable 3DMM | candidate |
+| A40 | A | FaceScape / FaceVerse non-commercial scans — pore-level detail | future research-only |
+| A41 | A | Ready Player Me GLB loader for end-user avatar customization | future |
+| A42 | A | Skin texture map + GLSL SSS / dual specular shader on ICT mesh | next realism tier |
+| A43 | A | Eye-specific specular material (wet-eye look) | next realism tier |
+| A44 | A | DECA/EMOCA capture pipeline — image → ARKit coefficients → ICT renderer | future |
 
 ## Next (clear winners, queued)
 

@@ -149,6 +149,31 @@ pip install moderngl   # one-time
 
 *BP3D head rotating in real time on the GPU. Same mesh data + materials as the CPU `faceforge_3d` mode, just routed through Metal. Each frame ~28 ms after the one-time mesh upload.*
 
+### ICT-FaceKit — realistic animated 3D (`ict_face_3d`)
+
+The realistic-animated endpoint. [USC ICT-FaceKit](https://github.com/USC-ICT/ICT-FaceKit) is an MIT-licensed morphable face model from USC's Vision and Graphics Lab — 26 719 vertices, 52 220 triangles, **157 blendshapes** captured from real scans, including the full ARKit 52-shape vocabulary. Each blendshape ships as a separate OBJ; we pre-compute per-vertex deltas as a 23 MB compressed `.npz`.
+
+```bash
+# One-time setup after copy_anatomy_meshes:
+git clone --depth 1 https://github.com/USC-ICT/ICT-FaceKit /tmp/ICT-FaceKit
+python -m tools.build_ict_blendshapes /tmp/ICT-FaceKit
+```
+
+After that, render mode `ict_face_3d` (or persona `ict_face_3d`) gives an animated lifelike head at **~88 fps on Apple Silicon GPU** through `moderngl`. The same FACS pipeline that drives our 2D modes feeds in: `FaceParams → AU values → ARKit coefficients → ICT vertex deltas → GPU Phong render`.
+
+<p align="center">
+  <img src="docs/images/ict_face_grid.png" alt="ICT face — 6 expressions" width="100%">
+</p>
+
+*ICT-FaceKit at six FACS-driven states: **neutral / happy / sad / surprised / jaw_open / yaw +0.5 + happy**. The mouth opens with visible teeth and tongue. Smiles pull lip corners up. Each expression is a real anatomical scan, not a synthetic deformation.*
+
+<p align="center">
+  <img src="docs/images/ict_face_talking.gif" alt="ICT face talking" width="40%">
+  <img src="docs/images/realism_progression.png" alt="realism progression" width="55%">
+</p>
+
+*Left: ICT face speaking, ARKit blendshapes driven by our SpeechEngine viseme pipeline. Right: realism progression from `stylised 2D` → `anatomical 2D` → `MakeHuman 3D` → `face_warp 2D` → `GPU lifelike` → `ICT (new)`.*
+
 ### Image-warp realistic face (`face_warp_2d`)
 
 The most lifelike *animated* mode. Renders the BP3D photo-anatomical head once at neutral pose via the GPU pipeline, saves the result as a texture, and at runtime warps that texture using piecewise-affine deformation driven by the same FACS-driven landmark pipeline. The source pixels are real medical-imaging anatomy; the warp deforms small triangles so features slide in response to AU activations.
@@ -215,6 +240,7 @@ Switchable at runtime via `POST /avatar/persona`:
 | `faceforge_3d_gpu` | photo-anatomical | Same as `faceforge_3d` but rendered through Apple Metal-backed OpenGL via `moderngl`. ~36 fps on M1 Max — the only path that animates the lifelike head in real time. Same layer sets. |
 | `head_3d_lite` | 3D animated | ~140-vertex Delaunay mesh with smooth ellipsoidal Z + Loop subdivision + per-vertex Phong. AU-driven deformation drives expression. Renders ~20 fps on CPU. Honestly: even after smoothing it still looks low-poly — see `face_warp_2d` below for a more lifelike alternative. |
 | `face_warp_2d` | photo-real animated | Renders the BP3D photo-anatomical face once at neutral pose (via the GPU lifelike pipeline), then warps that texture per-frame using piecewise-affine warping driven by the same FACS-driven landmark deformation. Photo-real source + cheap CPU warping = most lifelike *animated* mode. ~25 fps on CPU. Locked to front view (use `faceforge_3d_gpu` for rotation). |
+| `ict_face_3d` | **realistic animated 3D — top mode** | USC ICT-FaceKit (MIT) — 26 719 verts, 157 ARKit-named blendshapes from real face scans. Real teeth visible when jaw opens, lip corners pull on smile, smooth Phong skin. **~88 fps on Apple GPU.** The realistic-animated endpoint. One-time setup: clone `USC-ICT/ICT-FaceKit` then `python -m tools.build_ict_blendshapes /path/to/ICT-FaceKit`. |
 
 ## The simulated face — building blocks
 
@@ -372,7 +398,7 @@ Then a Claude Code session can call `send_chat`, `speak`, `camera_state`, `list_
 ## Testing
 
 ```bash
-pytest                # 96 tests, all green
+pytest                # 109 tests, all green
 ```
 
 Tests run fully offscreen (`QT_QPA_PLATFORM=offscreen` is set in `tests/conftest.py`) and require only the `[dev]` extra — no real ML model is loaded.

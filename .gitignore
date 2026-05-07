@@ -45,3 +45,7 @@ models/
 # BodyParts3D STL meshes for the photo-anatomical render mode.
 # Populate via `python -m tools.copy_anatomy_meshes /path/to/bp3d/stl`.
 src/faceview/assets/anatomy_meshes/
+
+# ICT-FaceKit npz — 23 MB, generated from a local clone via
+# `python -m tools.build_ict_blendshapes /path/to/ICT-FaceKit/`.
+src/faceview/assets/data/ict/

@@ -93,6 +93,10 @@ faceView/
 │   │   ├── arkit_blendshapes.py 52 ARKit blendshapes (industry std,
 │   │   │                        used by MediaPipe / iOS / MetaHumans)
 │   │   │                        + two-way mapping to/from our 12 AUs
+│   │   ├── ict_face.py          USC ICT-FaceKit blendshape head —
+│   │   │                        26K verts, 157 ARKit-aligned shapes,
+│   │   │                        ~88 fps GPU. The realistic-animated
+│   │   │                        endpoint of the project.
 │   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
 │   │                            + coarticulated lip-sync from text
 │   │                            + persona overlay applied per tick
@@ -137,6 +141,9 @@ faceView/
     ├── animate_anatomical.py    Anatomical-mode GIFs + emotion grid
     ├── animate_anatomy_layers.py  Layered-anatomy grid + peel-away GIF +
     │                            BP3D rotating head (when meshes present)
+    ├── build_ict_blendshapes.py Compile ICT-FaceKit OBJ tree (~386 MB
+    │                            from a local clone) → compressed 23 MB
+    │                            npz with neutral + 157 blendshape deltas
     ├── animate_3d_modes.py      Lite-3D talking GIF + emotion grid +
     │                            three-modes comparison panel
     ├── render_neutral_face_texture.py  Generate the BP3D photo-anatomical
