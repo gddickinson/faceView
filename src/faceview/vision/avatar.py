@@ -225,6 +225,14 @@ class TalkingAvatar:
             if blend:
                 for au, val in blend.items():
                     setattr(self.target, au, max(getattr(self.target, au), float(val)))
+            # Subtle head sway while speaking — three out-of-phase
+            # sinusoids on yaw / pitch / roll. Amplitudes in
+            # normalised pose units (×0.6 → radians at render).
+            # Small enough to read as "natural emphasis" not
+            # "agitated"; smoothing in step 4 takes the edge off.
+            self.target.head_yaw += 0.13 * math.sin(rel * 2.1)
+            self.target.head_pitch += 0.07 * math.sin(rel * 1.4 + 0.7)
+            self.target.head_roll += 0.05 * math.sin(rel * 1.7 + 2.3)
             if rel >= self._utterance.duration + 0.05:
                 self._utterance = None
 
