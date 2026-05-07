@@ -48,6 +48,11 @@ class Persona:
     # Skin saturation/value multipliers — tone down or tan up.
     skin_saturation: float = 0.32
     skin_value: float = 0.86
+    # Render style — flips the ICT palette + shader uniforms for
+    # sci-fi looks. Default "natural" is the realistic skin path.
+    # "neon" / "transparent" / "cyberpunk" / "xray" select preset
+    # palettes designed for stylised animation.
+    style: str = "natural"
 
 
 @lru_cache(maxsize=1)
@@ -87,6 +92,7 @@ def load_persona(name: str) -> Persona:
         eye_color=str(raw.get("eye_color", "#5a3818")),
         skin_saturation=float(raw.get("skin_saturation", 0.32)),
         skin_value=float(raw.get("skin_value", 0.86)),
+        style=str(raw.get("style", "natural")),
     )
 
 
@@ -105,6 +111,7 @@ def apply_persona(params: FaceParams, persona: Persona) -> FaceParams:
     params._persona_eye_color = persona.eye_color
     params._persona_skin_sat = persona.skin_saturation
     params._persona_skin_val = persona.skin_value
+    params._persona_style = persona.style
     return params
 
 

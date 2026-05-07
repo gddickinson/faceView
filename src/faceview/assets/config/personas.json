@@ -347,5 +347,35 @@
     "eye_color": "#604838",
     "skin_saturation": 0.24,
     "skin_value": 0.84
+  },
+  "ict_neon": {
+    "background": "#080018",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity001": 1.5,
+      "identity004": -1.0
+    },
+    "style": "neon"
+  },
+  "ict_transparent": {
+    "background": "#020812",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {},
+    "style": "transparent"
+  },
+  "ict_cyberpunk": {
+    "background": "#080010",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity002": -1.5,
+      "identity007": 1.5
+    },
+    "style": "cyberpunk"
+  },
+  "ict_xray": {
+    "background": "#000810",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {},
+    "style": "xray"
   }
 }

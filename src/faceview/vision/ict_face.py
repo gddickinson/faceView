@@ -69,6 +69,100 @@ def _hex_to_rgb_f(c: str) -> tuple[float, float, float]:
         return 0.5, 0.5, 0.5
 
 
+# ── Sci-fi palette presets ──────────────────────────────────────
+# Each preset overrides the natural HSV-derived skin palette with a
+# stylised colour scheme. Styles also control shader uniforms
+# (ambient / specular / SSS) via _shader_overrides_for_style.
+
+_SCIFI_PALETTES: dict[str, dict[str, tuple[float, float, float]]] = {
+    "neon": {
+        "M_Face":         (0.95, 0.18, 0.65),     # hot magenta
+        "M_BackHead":     (0.55, 0.12, 0.50),
+        "M_GumsTongue":   (1.00, 0.30, 0.65),
+        "M_Teeth":        (0.95, 0.95, 0.95),
+        "M_ScleraLeft":   (0.10, 1.00, 0.95),     # glowing cyan
+        "M_ScleraRight":  (0.10, 1.00, 0.95),
+        "M_IrisLeft":     (1.00, 0.95, 0.05),     # neon yellow
+        "M_IrisRight":    (1.00, 0.95, 0.05),
+        "M_LacrimalFluid":(0.30, 1.00, 0.95),
+        "M_EyeBlend":     (0.85, 0.18, 0.60),
+        "M_EyeOcclusion": (0.20, 0.05, 0.30),
+        "M_EyeLashes":    (0.10, 0.95, 1.00),     # cyan lashes
+        "M_HairCap":      (0.20, 1.00, 0.80),     # electric green
+    },
+    "transparent": {
+        "M_Face":         (0.55, 0.78, 0.92),     # ghost pale-blue
+        "M_BackHead":     (0.40, 0.62, 0.78),
+        "M_GumsTongue":   (0.50, 0.70, 0.85),
+        "M_Teeth":        (0.85, 0.92, 0.98),
+        "M_ScleraLeft":   (0.75, 0.95, 1.00),
+        "M_ScleraRight":  (0.75, 0.95, 1.00),
+        "M_IrisLeft":     (0.40, 0.85, 0.95),     # icy blue
+        "M_IrisRight":    (0.40, 0.85, 0.95),
+        "M_LacrimalFluid":(0.85, 0.95, 1.00),
+        "M_EyeBlend":     (0.50, 0.75, 0.90),
+        "M_EyeOcclusion": (0.20, 0.35, 0.50),
+        "M_EyeLashes":    (0.30, 0.50, 0.70),
+        "M_HairCap":      (0.55, 0.78, 0.92),
+    },
+    "cyberpunk": {
+        "M_Face":         (0.30, 0.55, 0.62),     # cool teal skin
+        "M_BackHead":     (0.20, 0.40, 0.50),
+        "M_GumsTongue":   (0.85, 0.10, 0.45),
+        "M_Teeth":        (0.95, 0.90, 0.80),
+        "M_ScleraLeft":   (0.92, 0.95, 0.95),
+        "M_ScleraRight":  (0.92, 0.95, 0.95),
+        "M_IrisLeft":     (1.00, 0.20, 0.50),     # hot pink iris
+        "M_IrisRight":    (1.00, 0.20, 0.50),
+        "M_LacrimalFluid":(0.80, 0.90, 0.95),
+        "M_EyeBlend":     (0.20, 0.40, 0.50),
+        "M_EyeOcclusion": (0.05, 0.08, 0.15),
+        "M_EyeLashes":    (0.02, 0.05, 0.10),
+        "M_HairCap":      (0.85, 0.10, 0.60),     # magenta hair
+    },
+    "xray": {
+        "M_Face":         (0.22, 0.45, 0.55),     # dim cyan-bone
+        "M_BackHead":     (0.15, 0.32, 0.42),
+        "M_GumsTongue":   (0.18, 0.40, 0.50),
+        "M_Teeth":        (0.95, 0.98, 1.00),     # bright bone
+        "M_ScleraLeft":   (0.95, 0.98, 1.00),
+        "M_ScleraRight":  (0.95, 0.98, 1.00),
+        "M_IrisLeft":     (0.10, 0.18, 0.25),     # dark sockets
+        "M_IrisRight":    (0.10, 0.18, 0.25),
+        "M_LacrimalFluid":(0.85, 0.95, 1.00),
+        "M_EyeBlend":     (0.20, 0.40, 0.50),
+        "M_EyeOcclusion": (0.04, 0.08, 0.12),
+        "M_EyeLashes":    (0.04, 0.08, 0.12),
+        "M_HairCap":      (0.18, 0.32, 0.42),
+    },
+}
+
+
+def _shader_overrides_for_style(style: str) -> dict:
+    """Per-style shader uniform overrides (ambient / specular / SSS).
+
+    Returns a partial dict that gets merged into the default values
+    in ``_ICTRenderer.render``.
+    """
+    if style == "neon":
+        # High emission — push ambient up so colours appear self-lit.
+        return {"ambient": 0.85, "specular": 0.40, "shininess": 8.0,
+                "sss_tint": (1.0, 0.05, 0.7)}
+    if style == "transparent":
+        # Soft, even lighting + cool blue SSS terminator.
+        return {"ambient": 0.60, "specular": 0.10, "shininess": 6.0,
+                "sss_tint": (0.55, 0.85, 1.0)}
+    if style == "cyberpunk":
+        # Strong rim + dark base, tech-noir feel.
+        return {"ambient": 0.20, "specular": 0.60, "shininess": 32.0,
+                "sss_tint": (1.0, 0.15, 0.55)}
+    if style == "xray":
+        # High specular + bone-cyan SSS — bones glow through.
+        return {"ambient": 0.25, "specular": 0.50, "shininess": 16.0,
+                "sss_tint": (0.40, 0.90, 1.00)}
+    return {}
+
+
 def _material_palette(params) -> dict[str, tuple[float, float, float]]:
     """Build a per-material colour palette driven by the persona.
 
@@ -76,7 +170,15 @@ def _material_palette(params) -> dict[str, tuple[float, float, float]]:
     from ``persona.eye_color`` (default brown); lips from
     ``persona.lip_color``; everything else fixed (teeth, sclera,
     lashes etc.).
+
+    When ``persona.style`` is not ``"natural"`` we replace the
+    palette wholesale with a sci-fi preset — neon / transparent /
+    cyberpunk / xray.
     """
+    style = getattr(params, "_persona_style", "natural")
+    if style in _SCIFI_PALETTES:
+        return _SCIFI_PALETTES[style]
+
     sat = float(getattr(params, "_persona_skin_sat", 0.32))
     val = float(getattr(params, "_persona_skin_val", 0.86))
     hue = float(getattr(params, "skin_hue", 28.0))
@@ -460,6 +562,9 @@ def _render_via_moderngl(
     span = float(np.linalg.norm(vmax - vmin))
     scale = 1.6 / max(span, 1e-6)
 
+    rend._style_uniforms = _shader_overrides_for_style(
+        getattr(params, "_persona_style", "natural")
+    )
     return rend.render(
         verts=verts.astype(np.float32),
         normals=vert_norms.astype(np.float32),
@@ -606,6 +711,19 @@ def _per_vertex_colors_for(params) -> np.ndarray:
         _hex_to_rgb_f(getattr(params, "lip_color", "#a44a4a")),
         dtype=np.float32,
     )
+
+    # Sci-fi styles use their own palette wholesale — skip the
+    # lip/brow/cheek post-processing which is meant for natural skin.
+    style = getattr(params, "_persona_style", "natural")
+    if style != "natural":
+        # Add subtle hair-region brightening even in sci-fi mode for visual structure.
+        regions_sf = _vertex_regions()
+        # Scalp Y heuristic still applies.
+        hair_y = verts[:, 1].max() - (verts[:, 1].max() - verts[:, 1].min()) * 0.32
+        hair_mask_sf = on_face & (verts[:, 1] > hair_y)
+        if hair_mask_sf.any():
+            colors[hair_mask_sf] = hair_color
+        return np.clip(colors, 0.0, 1.0).astype(np.float32)
 
     # ── Hair cap (Y heuristic — no hair blendshapes in ICT) ──
     # Top of head, fading at the forehead.
@@ -785,6 +903,7 @@ class _ICTRenderer:
                                        fragment_shader=_FRAG_SHADER)
         self._fbo = None
         self._fbo_size: tuple[int, int] | None = None
+        self._style_uniforms: dict = {}
 
     def _ensure_fbo(self, w: int, h: int) -> None:
         if self._fbo_size == (w, h) and self._fbo is not None:
@@ -842,10 +961,12 @@ class _ICTRenderer:
         self.prog["u_mvp"].write(model.T.tobytes())
         self.prog["u_norm_mat"].write(norm_mat.T.tobytes())
         self.prog["u_light_dir"].value = (-0.4, -0.3, -0.7)
-        self.prog["u_sss_tint"].value = _SSS_TINT
-        self.prog["u_ambient"].value = 0.32
-        self.prog["u_specular"].value = 0.30
-        self.prog["u_shininess"].value = 22.0
+        # Resolve per-style overrides (passed in via render kwargs).
+        self.prog["u_sss_tint"].value = self._style_uniforms.get(
+            "sss_tint", _SSS_TINT)
+        self.prog["u_ambient"].value = self._style_uniforms.get("ambient", 0.32)
+        self.prog["u_specular"].value = self._style_uniforms.get("specular", 0.30)
+        self.prog["u_shininess"].value = self._style_uniforms.get("shininess", 22.0)
 
         vbo = self.ctx.buffer(verts.tobytes())
         nbo = self.ctx.buffer(normals.tobytes())
