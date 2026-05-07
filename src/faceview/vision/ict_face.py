@@ -697,31 +697,41 @@ def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
     except Exception:
         return None
 
+    # NOTE: BP3D's gpu_renderer pre-rotation (ry180) mirrors X in
+    # screen space — a muscle anatomically on subject's left side
+    # ends up on screen-LEFT after rendering. ICT, with no mirror,
+    # puts subject's-left features on screen-RIGHT. To make the
+    # similarity-transform fit work without needing a reflection
+    # (which estimateAffinePartial2D can't produce), we label BP3D
+    # anchors by SCREEN position: "eye_L" = the eye that lands on
+    # the LEFT half of the rendered frame = anatomically subject's
+    # right (FMA*_R). The names are chosen to match the ICT
+    # screen-position convention, not the underlying anatomy.
     fma_single: dict[str, str] = {
-        # Eye line.
-        "eye_L":          "FMA46783",  # Orbic. Oculi Orb. L
-        "eye_R":          "FMA46782",  # Orbic. Oculi Orb. R
+        # Eye line — screen labels.
+        "eye_L":          "FMA46782",  # screen-L = anat. R (Orbic. Oculi Orb. R)
+        "eye_R":          "FMA46783",  # screen-R = anat. L
         # Brow line.
-        "brow_inner_L":   "FMA46797",  # Corrugator Sup. L
-        "brow_inner_R":   "FMA46796",  # Corrugator Sup. R
-        "brow_outer_L":   "FMA46760",  # Frontalis L
-        "brow_outer_R":   "FMA46759",  # Frontalis R
-        # Cheeks.
-        "cheek_L":        "FMA46813",  # Zygomatic Maj. L
-        "cheek_R":        "FMA46812",  # Zygomatic Maj. R
-        # Nose alae (Lev. Labii Alae attaches at the nasal sides).
-        "nose_L":         "FMA46804",  # Lev. Labii Alae. L
-        "nose_R":         "FMA46803",  # Lev. Labii Alae. R
+        "brow_inner_L":   "FMA46796",  # Corrugator Sup. R (anat.)
+        "brow_inner_R":   "FMA46797",
+        "brow_outer_L":   "FMA46759",  # Frontalis R (anat.)
+        "brow_outer_R":   "FMA46760",
+        # Cheeks (Zygomatic Maj.).
+        "cheek_L":        "FMA46812",  # anat. R
+        "cheek_R":        "FMA46813",
+        # Nose alae (Lev. Labii Alae).
+        "nose_L":         "FMA46803",  # anat. R
+        "nose_R":         "FMA46804",
         # Mouth line.
-        "mouth":          "FMA46841",  # Orbicularis Oris (whole ring)
-        "mouth_corner_L": "FMA46824",  # Lev. Anguli Oris L
-        "mouth_corner_R": "FMA46823",  # Lev. Anguli Oris R
-        # Jaw line.
-        "jaw_L":          "FMA49002",  # Masseter Sup. L
-        "jaw_R":          "FMA49001",  # Masseter Sup. R
-        # Temple line.
-        "temple_L":       "FMA49008",  # Temporalis L
-        "temple_R":       "FMA49007",  # Temporalis R
+        "mouth":          "FMA46841",  # Orbicularis Oris (midline)
+        "mouth_corner_L": "FMA46823",  # Lev. Anguli Oris R (anat.)
+        "mouth_corner_R": "FMA46824",
+        # Jaw (Masseter Sup.).
+        "jaw_L":          "FMA49001",  # anat. R
+        "jaw_R":          "FMA49002",
+        # Temple (Temporalis).
+        "temple_L":       "FMA49007",  # anat. R
+        "temple_R":       "FMA49008",
     }
     avail = set(list_available_meshes())
     out: dict[str, np.ndarray] = {}
@@ -747,24 +757,28 @@ def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
             out["chin"] = bot.mean(axis=0).astype(np.float32)
     # Override temple_L / R with the lateral-most extents of the
     # Temporalis muscles so they land on the actual head silhouette
-    # rather than the muscle interior.
-    if "FMA49008" in avail:
-        v = load_mesh("FMA49008").vertices  # Temporalis L
-        side = v[v[:, 0] > np.percentile(v[:, 0], 95)]
+    # rather than the muscle interior. NOTE: gpu_renderer's ry180
+    # flips X — anatomical subject's-right (raw -X) ends up at
+    # screen-LEFT (low pixel x). With our screen-position label
+    # convention, "temple_L" = screen-LEFT = subject's right
+    # = lateral-most negative raw X of Temporalis R.
+    if "FMA49007" in avail:                                # Temporalis R (anat.)
+        v = load_mesh("FMA49007").vertices
+        side = v[v[:, 0] < np.percentile(v[:, 0], 5)]      # most-neg raw X
         out["temple_L"] = side.mean(axis=0).astype(np.float32)
-    if "FMA49007" in avail:
-        v = load_mesh("FMA49007").vertices  # Temporalis R
-        side = v[v[:, 0] < np.percentile(v[:, 0], 5)]
+    if "FMA49008" in avail:                                # Temporalis L (anat.)
+        v = load_mesh("FMA49008").vertices
+        side = v[v[:, 0] > np.percentile(v[:, 0], 95)]     # most-pos raw X
         out["temple_R"] = side.mean(axis=0).astype(np.float32)
-    # Side-of-head anchors — widest extent at eye level via Ear mesh
-    # (single combined mesh, split by sign of x).
+    # Side-of-head anchors via the (combined L+R) Ear mesh. Same
+    # screen-position logic — most-negative raw X = screen LEFT.
     if "FMA52780" in avail:
         v = load_mesh("FMA52780").vertices
-        right = v[v[:, 0] < np.percentile(v[:, 0], 5)]
-        left = v[v[:, 0] > np.percentile(v[:, 0], 95)]
-        if len(left) and len(right):
-            out["ear_L"] = left.mean(axis=0).astype(np.float32)
-            out["ear_R"] = right.mean(axis=0).astype(np.float32)
+        screen_left = v[v[:, 0] < np.percentile(v[:, 0], 5)]
+        screen_right = v[v[:, 0] > np.percentile(v[:, 0], 95)]
+        if len(screen_left) and len(screen_right):
+            out["ear_L"] = screen_left.mean(axis=0).astype(np.float32)
+            out["ear_R"] = screen_right.mean(axis=0).astype(np.float32)
 
     if "eye_L" not in out or "mouth" not in out:
         return None
