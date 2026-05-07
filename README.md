@@ -27,27 +27,33 @@ What faceView actually ships under "lip reading" is **mouth-activity + viseme de
 
 The upgrade path to real VSR (Auto-AVSR converted to ONNX and run via `onnxruntime` CoreML EP) is documented in `INTERFACE.md` and is purely additive — drop in a new `vision/visual_asr.py` worker that subscribes to `FRAME` events.
 
-## Talking avatar — face for Claude
+## Talking avatar — Claude's face
 
-faceView ships a FACS-based talking avatar (`vision.avatar.TalkingAvatar`) that can be driven by any text. It's wired to the LLM so that when Claude finishes a reply, the avatar mouths the words. Set `FACEVIEW_AVATAR=1` and the camera panel becomes Claude's face.
+faceView ships an animated 3D head — the **ICT-FaceKit** photo-real avatar — driven by Claude's chat replies. Set `FACEVIEW_AVATAR=1` and the camera panel becomes Claude's face: smooth Phong-shaded skin, real ARKit blendshapes for expression, GPU-accelerated through Apple Metal.
 
-<p align="center">
-  <img src="docs/images/avatar_talking.gif" alt="avatar speaking" width="60%">
-</p>
-
-*Avatar saying "Hi! I'm faceView. I can see, hear, and talk." in real time. The mouth is driven by viseme targets from a phoneme timeline; idle blinks, breathing, and saccadic gaze drift run continuously.*
-
-<p align="center">
-  <img src="docs/images/avatar_strip.png" alt="avatar frame strip" width="100%">
-</p>
-
-*Six frames sampled across the same utterance — closed-mouth `PP / REST` between syllables, `AA` and `OH` vowels reach into open-mouth shapes.*
+```bash
+# One-time setup (after pip install):
+git clone --depth 1 https://github.com/USC-ICT/ICT-FaceKit /tmp/ICT-FaceKit
+python -m tools.build_ict_blendshapes /tmp/ICT-FaceKit
+# Now run:
+FACEVIEW_AVATAR=1 faceview
+```
 
 <p align="center">
-  <img src="docs/images/avatar_monitor.png" alt="avatar shown in the GUI camera panel" width="100%">
+  <img src="docs/images/ict_face_grid.png" alt="ICT face — 6 expressions" width="100%">
 </p>
 
-*The GUI mid-utterance: avatar in the camera panel, the chat showing Claude's reply, status pills tracking emotion / viseme / presence. This is what `FACEVIEW_AVATAR=1 faceview` looks like during conversation.*
+*Six FACS-driven states: **neutral / happy / sad / surprised / jaw_open / yaw +0.5 happy**. Real teeth visible when the jaw opens, lip corners pull on smile, smooth skin shading via subsurface-scattering shader (wrap diffuse + terminator SSS + dual specular + Fresnel rim).*
+
+### Different personas (sex × age)
+
+The ICT mesh ships with 100 PCA identity shape modes — combinations produce visibly different individuals. faceView ships a **persona library** with male / female × young / middle-aged / elder presets. Each persona also carries skin tone, hair colour, and lip colour.
+
+<p align="center">
+  <img src="docs/images/ict_persona_library.png" alt="ICT personas — sex × age" width="100%">
+</p>
+
+*Six bundled personas: `ict_male_young / male_middle / male_elder / female_young / female_middle / female_elder`. Plus `ict_claude / ict_alt1 / ict_alt2` for character variety. Switch at runtime via `POST /avatar/persona` or persona JSON.*
 
 ### How it works
 

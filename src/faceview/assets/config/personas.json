@@ -221,5 +221,71 @@
     "identity_weights": {
       "identity015": -2.0, "identity025": 2.0, "identity045": 1.5
     }
+  },
+  "ict_male_young": {
+    "skin_hue": 24.0,
+    "hair_color": "#1a1208",
+    "lip_color": "#a25048",
+    "background": "#0a0d12",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity000": 2.5, "identity002": -2.0, "identity005": 1.8,
+      "identity008": 1.5, "identity012": -1.0
+    }
+  },
+  "ict_male_middle": {
+    "skin_hue": 22.0,
+    "hair_color": "#2a1c10",
+    "lip_color": "#9a4a40",
+    "background": "#0a0d12",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity000": 2.0, "identity003": 1.5, "identity007": -1.8,
+      "identity011": 2.2, "identity014": 1.0
+    }
+  },
+  "ict_male_elder": {
+    "skin_hue": 22.0,
+    "hair_color": "#807060",
+    "lip_color": "#8a4640",
+    "background": "#0a0d12",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity000": 1.5, "identity001": -1.0, "identity004": 2.5,
+      "identity009": -2.0, "identity016": 1.8, "identity021": 1.2
+    }
+  },
+  "ict_female_young": {
+    "skin_hue": 28.0,
+    "hair_color": "#3a2010",
+    "lip_color": "#c25a4a",
+    "background": "#0c0e14",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity000": -2.5, "identity001": 1.8, "identity003": 2.2,
+      "identity007": -1.8, "identity013": 1.5
+    }
+  },
+  "ict_female_middle": {
+    "skin_hue": 30.0,
+    "hair_color": "#5a3018",
+    "lip_color": "#b85a4a",
+    "background": "#0c0e14",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity000": -2.0, "identity002": 1.5, "identity006": -1.0,
+      "identity010": 1.8, "identity017": 1.2
+    }
+  },
+  "ict_female_elder": {
+    "skin_hue": 32.0,
+    "hair_color": "#a09590",
+    "lip_color": "#a85248",
+    "background": "#0c0e14",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {
+      "identity000": -1.8, "identity002": 1.2, "identity004": 2.0,
+      "identity009": -1.5, "identity018": 1.8, "identity024": 1.5
+    }
   }
 }

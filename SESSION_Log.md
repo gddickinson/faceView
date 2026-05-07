@@ -13,6 +13,43 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-07 — Session 16: ICT-only consolidation + persona library
+
+User pivoted to a single-solution focus: make ICT-FaceKit the
+single best face renderer for the project, with multiple personas
+spanning different sexes and ages. The other bridge modules
+(BFM / FLAME / RPM / MetaHuman / FaceScape / DECA) stay shipped
+as opt-in alternatives but ICT is now the recommended path.
+
+**Persona library** (`assets/config/personas.json`) gains six
+named ICT presets:
+  ict_male_young / male_middle / male_elder
+  ict_female_young / female_middle / female_elder
+Each combines:
+  * Identity PCA coefficients (5–6 ICT identity_<n> modes
+    blended) producing visibly different head shapes per persona.
+  * Skin hue, hair colour, and lip colour appropriate to age/sex
+    (greying hair on elders, younger lip tones on females, etc).
+  * `docs/images/ict_persona_library.png` showcases all six.
+
+**Avatar integration**
+  * SimCameraWorker now accepts `persona=` kwarg → passed through
+    to TalkingAvatar.
+  * app.py auto-picks `ict_claude` when ICT data is present
+    (already wired in session 14).
+
+**Hair overlay disabled by default**
+  Procedural 2D hair was producing spiky / over-tall caps that
+  hurt rather than helped. Disabled by default; opt in with
+  `params._enable_hair = True`. The bald ICT head reads cleaner.
+
+**README pivoted to ICT-centric**
+  Replaced the multi-mode comparison table at the top with the
+  ICT-FaceKit setup flow + persona library. Other modes still
+  documented but not foregrounded.
+
+Tests stay at 117 green.
+
 ## 2026-05-07 — Session 15: All remaining face-resource bridges shipped
 
 User asked us to wire in MakeHuman gendered targets first then

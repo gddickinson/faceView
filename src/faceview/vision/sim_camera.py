@@ -46,6 +46,7 @@ class SimCameraWorker:
         scenario: str = "talking",
         *,
         emotion: str = "neutral",
+        persona: str = "default",
         wire_to_llm: bool = False,
     ) -> None:
         self.size = size
@@ -59,8 +60,9 @@ class SimCameraWorker:
         self._last_emotion = ""
 
         # The talking avatar is created up front so external callers can call
-        # ``worker.avatar.say(text)`` even before ``start()``.
-        self.avatar = TalkingAvatar(emotion=emotion, seed=42)
+        # ``worker.avatar.say(text)`` even before ``start()``. Persona drives
+        # appearance + render mode (ICT face when ICT data is built locally).
+        self.avatar = TalkingAvatar(emotion=emotion, persona=persona, seed=42)
         if wire_to_llm:
             self._wire_llm_chat()
 

@@ -230,123 +230,154 @@ def render_face_ict(
     bgr = _render_via_moderngl(verts, model.triangles, size,
                                   yaw, pitch, params)
 
-    # 2D hair overlay so the head doesn't read as bald. The mesh
-    # itself doesn't include hair, so we draw a simple cap through
-    # QPainter on top of the rendered output. Persona.hair_color
-    # drives the colour.
-    if not getattr(params, "_no_hair", False):
+    # 2D hair overlay (off by default — the procedural overlay is
+    # rough; the bald ICT head reads cleaner). Set
+    # ``params._enable_hair = True`` if you want to opt in.
+    if getattr(params, "_enable_hair", False):
         bgr = _composite_hair_overlay(bgr, params, yaw)
     return bgr
 
 
 def _composite_hair_overlay(bgr: np.ndarray, params, yaw: float) -> np.ndarray:
-    """Draw a simple hair cap on top of the rendered ICT head.
+    """Draw a smooth 2D hair cap on top of the rendered ICT head.
 
-    Approach: detect the head silhouette top via background mask,
-    then paint an opaque hair cap above the brow line with strand
-    highlights. Cheap CPU work, ~1 ms.
+    Approach: detect the head silhouette via the background mask,
+    smooth the upper outline with a moving average, and paint an
+    opaque cap. Cheap CPU work, ~2 ms.
     """
-    from PIL import Image
     from PySide6.QtCore import QPointF, Qt
     from PySide6.QtGui import (
-        QBrush, QColor, QImage, QPainter, QPainterPath, QPen,
+        QBrush, QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPen,
     )
 
     h, w, _ = bgr.shape
     rgb = bgr[:, :, ::-1].copy()
-    img = Image.fromarray(rgb)
 
-    # Find the top-most non-background pixel per column to follow the
-    # head silhouette.
-    bg_mask = (rgb.sum(axis=2) < 60)   # near-black background
+    # Foreground mask via background detection.
+    bg_mask = (rgb.sum(axis=2) < 60)
     fg_mask = ~bg_mask
     cols_with_face = np.any(fg_mask, axis=0)
-    top_y = np.full(w, -1, dtype=np.int32)
-    if np.any(cols_with_face):
-        for x in range(w):
-            if cols_with_face[x]:
-                top_y[x] = np.argmax(fg_mask[:, x])
-
-    # Find left/right extents (head width).
-    fg_xs = np.where(cols_with_face)[0]
-    if len(fg_xs) < 4:
+    if not np.any(cols_with_face):
         return bgr
-    left, right = int(fg_xs[0]), int(fg_xs[-1])
 
-    # Convert PIL → QImage for QPainter drawing.
+    # Top silhouette per column.
+    top_y = np.full(w, h, dtype=np.int32)
+    has = cols_with_face
+    if has.any():
+        idxs = np.argmax(fg_mask, axis=0)
+        top_y[has] = idxs[has]
+
+    fg_xs = np.where(cols_with_face)[0]
+    left, right = int(fg_xs[0]), int(fg_xs[-1])
+    head_w = right - left
+    if head_w < 20:
+        return bgr
+
+    # Smooth the silhouette with a running average so the hair cap
+    # follows a gentle curve instead of jagged pixel edges.
+    smooth = top_y.copy().astype(np.float32)
+    win = max(3, head_w // 25)
+    kernel = np.ones(win, dtype=np.float32) / win
+    smooth = np.convolve(smooth, kernel, mode="same")
+
+    # Hair cap extends from forehead up to ~head_w * 0.5 above.
+    cap_pad = int(0.42 * head_w)
+    fringe_drop = int(0.08 * head_w)
+
     qimg = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
     p = QPainter(qimg)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
     hair_hex = getattr(params, "hair_color", "#2a1808")
     hair = QColor(hair_hex)
-    hair_light = hair.lighter(140)
+    hair_dark = hair.darker(130)
+    hair_light = hair.lighter(135)
 
-    # Build a hair cap from the top silhouette: above each top_y
-    # pixel, pad upward by a fraction of head height so the cap
-    # extends above the skull.
-    head_h = max(1, int((right - left) * 1.2))
-    cap_pad = int(0.08 * head_h)
-
+    # Build the cap path: trace the smoothed top silhouette
+    # (with a small downward bias for fringe) then arc up over the head.
     cap_path = QPainterPath()
-    started = False
-    # Trace top silhouette left → right, slightly above the head.
-    for x in range(left, right + 1):
-        ty = top_y[x]
-        if ty < 0:
-            continue
-        y = max(0, ty - 4)
-        if not started:
-            cap_path.moveTo(QPointF(x, y))
-            started = True
-        else:
-            cap_path.lineTo(QPointF(x, y))
-    # Close above the head.
-    cap_path.lineTo(QPointF(right, max(0, top_y[right] - cap_pad)))
-    cap_path.lineTo(QPointF((left + right) // 2,
-                              max(0, int(top_y[(left + right) // 2]) - 2 * cap_pad)))
-    cap_path.lineTo(QPointF(left, max(0, top_y[left] - cap_pad)))
+    centre_x = (left + right) / 2
+    cap_top_y = max(0, float(np.min(smooth[left:right + 1])) - cap_pad)
+
+    # Start from left edge, slightly below the forehead silhouette.
+    cap_path.moveTo(QPointF(left - 4,
+                              float(smooth[left]) + fringe_drop))
+    # Walk along the silhouette top with a fringe drop.
+    step = max(1, head_w // 40)
+    for x in range(left, right + 1, step):
+        sy = float(smooth[x])
+        # Fringe pulls down toward the brow on the lower part.
+        f = abs(x - centre_x) / max(1, head_w / 2)
+        drop = fringe_drop * (1 - f * 0.6)
+        cap_path.lineTo(QPointF(x, sy + drop))
+    cap_path.lineTo(QPointF(right + 4,
+                              float(smooth[right]) + fringe_drop))
+    # Up over the right side.
+    cap_path.cubicTo(
+        QPointF(right + 8, cap_top_y + 0.5 * (smooth[right] - cap_top_y)),
+        QPointF(centre_x + 0.4 * head_w, cap_top_y),
+        QPointF(centre_x, cap_top_y),
+    )
+    cap_path.cubicTo(
+        QPointF(centre_x - 0.4 * head_w, cap_top_y),
+        QPointF(left - 8, cap_top_y + 0.5 * (smooth[left] - cap_top_y)),
+        QPointF(left - 4, float(smooth[left]) + fringe_drop),
+    )
     cap_path.closeSubpath()
 
-    p.setBrush(QBrush(hair))
+    # Fill cap with a vertical gradient (darker at top, lighter at fringe).
+    grad = QLinearGradient(QPointF(centre_x, cap_top_y),
+                            QPointF(centre_x, float(smooth[int(centre_x)]) + fringe_drop))
+    grad.setColorAt(0.0, hair_dark)
+    grad.setColorAt(0.6, hair)
+    grad.setColorAt(1.0, hair)
+    p.setBrush(QBrush(grad))
     p.setPen(Qt.PenStyle.NoPen)
     p.drawPath(cap_path)
 
-    # Side fringe — darker streaks down past temples.
-    fringe = QPainterPath()
-    fringe.moveTo(QPointF(left + 0.05 * (right - left),
-                            top_y[left] if top_y[left] >= 0 else 0))
-    fringe.cubicTo(
-        QPointF(left + 0.20 * (right - left), top_y[left + (right - left) // 4] + 4),
-        QPointF(left + 0.45 * (right - left), top_y[(left + right) // 2] - 2),
-        QPointF(left + 0.55 * (right - left), top_y[(left + right) // 2] + 4),
+    # A small fringe across the forehead — slightly lower-saturation
+    # band that breaks the hard edge.
+    fringe_path = QPainterPath()
+    fringe_l = left + 0.10 * head_w
+    fringe_r = right - 0.10 * head_w
+    fringe_path.moveTo(QPointF(fringe_l,
+                                  float(smooth[int(fringe_l)]) + fringe_drop * 0.4))
+    fringe_path.cubicTo(
+        QPointF(fringe_l + 0.15 * head_w,
+                 float(smooth[int(fringe_l + 0.15 * head_w)]) + fringe_drop * 1.2),
+        QPointF(fringe_r - 0.15 * head_w,
+                 float(smooth[int(fringe_r - 0.15 * head_w)]) + fringe_drop * 0.6),
+        QPointF(fringe_r,
+                 float(smooth[int(fringe_r)]) + fringe_drop * 0.3),
     )
-    fringe.cubicTo(
-        QPointF(left + 0.45 * (right - left), top_y[(left + right) // 2] - 8),
-        QPointF(left + 0.20 * (right - left), top_y[left + (right - left) // 4] - 8),
-        QPointF(left + 0.05 * (right - left),
-                 (top_y[left] if top_y[left] >= 0 else 0) - 4),
+    fringe_path.lineTo(QPointF(fringe_r, float(smooth[int(fringe_r)]) - 4))
+    fringe_path.cubicTo(
+        QPointF(fringe_r - 0.15 * head_w,
+                 float(smooth[int(fringe_r - 0.15 * head_w)]) - 4),
+        QPointF(fringe_l + 0.15 * head_w,
+                 float(smooth[int(fringe_l + 0.15 * head_w)]) - 4),
+        QPointF(fringe_l, float(smooth[int(fringe_l)]) - 4),
     )
-    fringe.closeSubpath()
-    p.drawPath(fringe)
+    fringe_path.closeSubpath()
+    p.setBrush(QBrush(hair))
+    p.drawPath(fringe_path)
 
-    # Strand highlights.
-    pen = QPen(hair_light, 1.4)
+    # Soft strand highlights (subtle).
+    pen = QPen(hair_light, max(1.0, head_w * 0.004))
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     p.setPen(pen)
     p.setBrush(Qt.BrushStyle.NoBrush)
-    n_strands = 7
+    n_strands = 5
     for i in range(n_strands):
         f = (i + 0.5) / n_strands
-        x0 = int(left + f * (right - left))
-        y0 = max(0, top_y[x0] - 4)
-        x1 = x0 + 14
-        y1 = y0 - 16
+        x0 = float(left + f * head_w)
+        y0 = float(smooth[int(x0)]) - cap_pad * 0.65
+        x1 = x0 + head_w * 0.07
+        y1 = y0 - cap_pad * 0.18
         p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
 
     p.end()
 
-    # QImage → numpy → BGR
     out = qimg.convertToFormat(QImage.Format.Format_RGB888)
     ptr = out.constBits()
     if ptr is None:
