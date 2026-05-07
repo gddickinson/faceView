@@ -95,10 +95,7 @@ class _GpuRenderer:
         try:
             import moderngl
         except ImportError as exc:
-            raise MissingDependency(
-                "moderngl",
-                install_hint="pip install moderngl",
-            ) from exc
+            raise MissingDependency("moderngl", "gpu") from exc
         self._mgl = moderngl
         self.ctx = moderngl.create_context(standalone=True, require=330)
         self.ctx.enable(moderngl.DEPTH_TEST)
@@ -265,8 +262,8 @@ def render_face_faceforge_gpu(
 ) -> np.ndarray:
     if not meshes_available():
         raise MissingDependency(
-            "BodyParts3D STL meshes",
-            install_hint=(
+            "BodyParts3D STL meshes", "gpu",
+            hint=(
                 f"Copy STLs into {mesh_dir()} via "
                 "`python -m tools.copy_anatomy_meshes /path/to/bodyparts3D/stl`."
             ),
@@ -276,8 +273,8 @@ def render_face_faceforge_gpu(
     specs = [s for s in specs_for_layer_set(layer_set) if s.fma in avail]
     if not specs:
         raise MissingDependency(
-            "BodyParts3D STL meshes",
-            install_hint="No STLs found for layer_set; run copy_anatomy_meshes.",
+            "BodyParts3D STL meshes", "gpu",
+            hint="No STLs found for layer_set; run copy_anatomy_meshes.",
         )
 
     yaw = float(getattr(params, "yaw", 0.0)) * 0.6

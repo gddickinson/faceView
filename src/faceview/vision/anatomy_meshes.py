@@ -165,8 +165,8 @@ def load_mesh(name: str) -> TriMesh:
     path = mesh_dir() / f"{name}.stl"
     if not path.exists():
         raise MissingDependency(
-            f"anatomy mesh {name}",
-            install_hint=(
+            f"anatomy mesh {name}", "gpu",
+            hint=(
                 "Run `python -m tools.copy_anatomy_meshes "
                 "/path/to/bodyparts3D/stl` to populate "
                 f"{mesh_dir()} from a local BodyParts3D download."

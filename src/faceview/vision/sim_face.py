@@ -283,6 +283,9 @@ def render_face(params: FaceParams, size: tuple[int, int] = (640, 480)) -> np.nd
     if mode == "faceforge_3d_gpu":
         from faceview.vision.gpu_renderer import render_face_faceforge_gpu
         return render_face_faceforge_gpu(params, size)
+    if mode == "face_warp_2d":
+        from faceview.vision.face_warp import render_face_warp
+        return render_face_warp(params, size)
 
     from faceview.vision.sim_face_parts import (
         draw_brows,

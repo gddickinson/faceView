@@ -81,6 +81,8 @@ faceView/
 │   │   │                        deformable; ~55 fps on CPU.
 │   │   ├── bp3d_landmarks.py    Measure anatomical landmark positions
 │   │   │                        from the BP3D skull (refines 2D template)
+│   │   ├── face_warp.py         Image-warp realistic face — warps a
+│   │   │                        GPU-rendered neutral texture per-frame
 │   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
 │   │                            + coarticulated lip-sync from text
 │   │                            + persona overlay applied per tick
@@ -127,6 +129,8 @@ faceView/
     │                            BP3D rotating head (when meshes present)
     ├── animate_3d_modes.py      Lite-3D talking GIF + emotion grid +
     │                            three-modes comparison panel
+    ├── render_neutral_face_texture.py  Generate the BP3D photo-anatomical
+    │                            face texture for face_warp_2d (one-time)
     ├── copy_anatomy_meshes.py   Copy head+neck STLs from a BodyParts3D dump
     ├── render_personas.py       Persona contact sheet (docs/images/personas.png)
     ├── enroll_owner.py          One-time face-enrollment routine

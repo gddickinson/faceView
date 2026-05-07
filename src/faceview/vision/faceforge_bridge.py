@@ -88,12 +88,12 @@ def render_face_faceforge(
     """
     if not meshes_available():
         raise MissingDependency(
-            "BodyParts3D STL meshes",
-            install_hint=(
+            "BodyParts3D STL meshes", "gpu",
+            hint=(
                 "Copy the head + neck STL subset into "
-                f"{mesh_dir()} via:\n"
-                "  python -m tools.copy_anatomy_meshes "
-                "/path/to/bodyparts3D/stl"
+                f"{mesh_dir()} via "
+                "`python -m tools.copy_anatomy_meshes "
+                "/path/to/bodyparts3D/stl`."
             ),
         )
 
@@ -104,8 +104,8 @@ def render_face_faceforge(
 
     if not specs:
         raise MissingDependency(
-            "BodyParts3D STL meshes",
-            install_hint=(
+            "BodyParts3D STL meshes", "gpu",
+            hint=(
                 f"No STLs matched layer set '{layer_set}' in {mesh_dir()}. "
                 "Run `python -m tools.copy_anatomy_meshes "
                 "/path/to/bodyparts3D/stl` to populate."

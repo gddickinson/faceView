@@ -31,6 +31,10 @@ Track legend:
 | A17 | A | BP3D-derived landmark refinement (measure anatomy off the skull) | infrastructure done; 2D template integration pending |
 | A18 | A | Smooth lite 3D (ellipsoidal Z + midpoint inserts + Loop subdivision + per-vertex Phong) | done |
 | A19 | A | BP3D-aligned 2D landmark proportions (eye line midpoint, narrower head) | done |
+| A20 | A | Image-warp realistic face (`face_warp_2d`) — texture warped per-frame | done |
+| A21 | A | MediaPipe canonical face mesh (468 verts, proper feature topology) | candidate next |
+| A22 | A | Decimated BP3D skin mesh (real anatomy, fewer polys, animatable) | candidate |
+| A23 | A | Multi-angle texture atlas for `face_warp_2d` to support rotation | future |
 
 ## Next (clear winners, queued)
 

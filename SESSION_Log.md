@@ -13,6 +13,50 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-06 — Session 10: Image-warp realistic face
+
+User said the lite 3D still looked bizarre and asked to investigate
+other methods for a realistic face. Investigated multiple approaches:
+
+  * Better mesh topology (hand-crafted rings) — same flat-shading
+    problem; high effort, modest gain.
+  * MediaPipe canonical face mesh (468 verts) — proper topology with
+    feature rings, but heavy work to wire FACS blendshapes.
+  * Decimated BP3D skin mesh — real anatomy at lower density; still
+    polygonal without textures.
+  * 3DMM (FLAME / BFM) — research-grade, heavy data dependency.
+  * **Image-space warp of GPU-rendered texture** — photo-real
+    appearance + cheap CPU warp. Locked to front view but easily
+    paired with `faceforge_3d_gpu` for rotation.
+
+Shipped the image-warp approach as the most lifelike *animated*
+option. New module `vision/face_warp.py`:
+  * Loads a one-time GPU-rendered BP3D neutral face texture from
+    `assets/data/neutral_face.png`.
+  * Per frame: deform the 86 anatomical landmarks via the existing
+    AU pipeline, build Delaunay over the deformed positions, reverse-
+    map every output pixel to its source via barycentric coords,
+    bilinear-sample the texture.
+  * Pure NumPy + scipy — no OpenCV dependency.
+  * ~25 fps on CPU at 320x320 — interactive. Real face appearance
+    from the BP3D source, FACS-driven motion.
+
+New `tools/render_neutral_face_texture.py` regenerates the texture
+via the GPU lifelike pipeline + crops to the face-box convention.
+
+New persona `face_warp_2d` and render mode of the same name routed
+through the existing `render_face` dispatcher.
+
+Tests: 92 → 96. `test_face_warp.py` covers texture-present rendering,
+dispatcher routing, emotion deltas, and graceful error when the
+texture is missing.
+
+Also fixed the `MissingDependency` constructor signature usage
+across `face_warp.py`, `gpu_renderer.py`, `anatomy_meshes.py`,
+`faceforge_bridge.py` — was using wrong kwarg (`install_hint=`)
+instead of the actual signature `(package, extra, hint=)`. Tests
+flushed out the bug now that it actually fires.
+
 ## 2026-05-06 — Session 9: Smoother lite 3D + BP3D-aligned 2D proportions
 
 User pointed out the lite 3D head looked too cuboid and asked for

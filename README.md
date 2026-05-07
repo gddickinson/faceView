@@ -149,6 +149,30 @@ pip install moderngl   # one-time
 
 *BP3D head rotating in real time on the GPU. Same mesh data + materials as the CPU `faceforge_3d` mode, just routed through Metal. Each frame ~28 ms after the one-time mesh upload.*
 
+### Image-warp realistic face (`face_warp_2d`)
+
+The most lifelike *animated* mode. Renders the BP3D photo-anatomical head once at neutral pose via the GPU pipeline, saves the result as a texture, and at runtime warps that texture using piecewise-affine deformation driven by the same FACS-driven landmark pipeline. The source pixels are real medical-imaging anatomy; the warp deforms small triangles so features slide in response to AU activations.
+
+```bash
+# One-time after copy_anatomy_meshes:
+python -m tools.render_neutral_face_texture
+```
+
+<p align="center">
+  <img src="docs/images/face_warp_emotions.png" alt="warp face emotions" width="100%">
+</p>
+
+*Four emotions through `face_warp_2d` — same source texture, different AU-driven landmark deformation per frame.*
+
+<p align="center">
+  <img src="docs/images/face_warp_talking.gif" alt="warp face talking" width="40%">
+  <img src="docs/images/four_modes_compare.png" alt="four mode comparison" width="55%">
+</p>
+
+*Left: warped face speaking — same SpeechEngine + viseme pipeline as the rest of the avatar system, just routed through image warping. Right: four rendering tracks at the same expression — `stylised 2D` (cartoony), `lite 3D mesh` (low-poly), `face warp 2D` (photo-real animated), `GPU lifelike` (full 3D rotatable).*
+
+Pros: photo-real, fast on CPU (~25 fps), uses the existing FACS animation pipeline. Cons: locked to front view (no rotation — pair with `faceforge_3d_gpu` for that).
+
 ### Head 3D lite — animatable middle ground
 
 The CPU lifelike renderer is too heavy to animate, and the stylised 2D path doesn't have depth. `head_3d_lite` sits between them: takes the existing 86 anatomical landmarks, adds hand-tuned Z depth per group (nose tip protrudes, temples recede, ears further back, scalp dome, neck-front), closes the silhouette with ~19 back-of-head and neck points, runs SciPy Delaunay over the front face, and z-sorts the result through QPainter. Result: a low-poly 3D head you can rotate **and** drive with FACS — at ~55 fps on a single CPU core.
@@ -189,7 +213,8 @@ Switchable at runtime via `POST /avatar/persona`:
 | `anatomy_xray` | layered | All five layers translucent — see-through head. |
 | `faceforge_3d` | photo-anatomical | Real BodyParts3D STL meshes — 145 head/neck structures with per-mesh material + Phong shading. Layer sets: `skull_only`, `muscles`, `features`, `lifelike`, `xray`. CPU rasteriser. |
 | `faceforge_3d_gpu` | photo-anatomical | Same as `faceforge_3d` but rendered through Apple Metal-backed OpenGL via `moderngl`. ~36 fps on M1 Max — the only path that animates the lifelike head in real time. Same layer sets. |
-| `head_3d_lite` | 3D animated | ~105-vertex Delaunay-triangulated mesh with hand-tuned Z depth per landmark + back-of-head closure. AU-driven deformation drives expression. Renders ~55 fps on CPU. The animatable middle ground between stylised 2D and photo-anatomical. |
+| `head_3d_lite` | 3D animated | ~140-vertex Delaunay mesh with smooth ellipsoidal Z + Loop subdivision + per-vertex Phong. AU-driven deformation drives expression. Renders ~20 fps on CPU. Honestly: even after smoothing it still looks low-poly — see `face_warp_2d` below for a more lifelike alternative. |
+| `face_warp_2d` | photo-real animated | Renders the BP3D photo-anatomical face once at neutral pose (via the GPU lifelike pipeline), then warps that texture per-frame using piecewise-affine warping driven by the same FACS-driven landmark deformation. Photo-real source + cheap CPU warping = most lifelike *animated* mode. ~25 fps on CPU. Locked to front view (use `faceforge_3d_gpu` for rotation). |
 
 ## The simulated face — building blocks
 
@@ -347,7 +372,7 @@ Then a Claude Code session can call `send_chat`, `speak`, `camera_state`, `list_
 ## Testing
 
 ```bash
-pytest                # 92 tests, all green
+pytest                # 96 tests, all green
 ```
 
 Tests run fully offscreen (`QT_QPA_PLATFORM=offscreen` is set in `tests/conftest.py`) and require only the `[dev]` extra — no real ML model is loaded.
