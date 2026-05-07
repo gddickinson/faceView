@@ -83,6 +83,9 @@ faceView/
 │   │   │                        from the BP3D skull (refines 2D template)
 │   │   ├── face_warp.py         Image-warp realistic face — warps a
 │   │   │                        GPU-rendered neutral texture per-frame
+│   │   ├── head_decimated.py    BP3D skin mesh decimated via vertex
+│   │   │                        clustering; real anatomical head
+│   │   │                        topology at lite-3D polygon count
 │   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
 │   │                            + coarticulated lip-sync from text
 │   │                            + persona overlay applied per tick

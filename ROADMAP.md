@@ -35,6 +35,10 @@ Track legend:
 | A21 | A | MediaPipe canonical face mesh (468 verts, proper feature topology) | candidate next |
 | A22 | A | Decimated BP3D skin mesh (real anatomy, fewer polys, animatable) | candidate |
 | A23 | A | Multi-angle texture atlas for `face_warp_2d` to support rotation | future |
+| A24 | A | TMJ jaw rotation in landmark deformation pipeline | done |
+| A25 | A | Decimated BP3D skin head (real anatomy, vertex-cluster decimated) | done |
+| A26 | A | GPU path for `head_decimated_3d` (current CPU path is ~8 fps) | future |
+| A27 | A | Open-mouth texture variant for face_warp (blend by AU26) | future |
 
 ## Next (clear winners, queued)
 

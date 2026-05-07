@@ -49,16 +49,19 @@ def main() -> int:
                                       layer_set=args.layer_set)
     raw = Image.fromarray(bgr[:, :, ::-1])
 
-    # Hand-tuned crop to align the rendered face with the 86-landmark
-    # face-box: face_oval goes from y=0.08 (hairline_top) to y=0.96
-    # (chin), and from x=0.16 to x=0.84 horizontally.
-    # Original GPU framing has the head from y=20 to y=358.
+    # Hand-tuned crop. The face_oval landmark template has chin at
+    # y=0.96 and hairline_top at y=0.08 — so the head occupies
+    # 0.08..0.96 = 88% of the face-box height. We extend the bottom
+    # to y=1.0 so a few pixels of neck are visible (chin won't sit
+    # on the bottom edge during jaw-open).
     head_top = 20
     head_h = 338
-    unit = head_h / (0.96 - 0.08)            # = ~384 px per face-box unit
+    unit = head_h / (0.96 - 0.08)            # ~384 px per face-box unit
+    # Extend bottom by 4% of unit for neck.
+    extended_h = int(unit + 0.04 * unit)
     top = int(head_top - 0.08 * unit)
     left = int((args.size - unit) / 2)
-    cropped = raw.crop((left, top, left + int(unit), top + int(unit)))
+    cropped = raw.crop((left, top, left + int(unit), top + extended_h))
     out = cropped.resize((args.size, args.size), Image.LANCZOS)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -131,5 +131,12 @@
     "lip_color": "#a85248",
     "background": "#0a0d12",
     "render_mode": "face_warp_2d"
+  },
+  "head_decimated_3d": {
+    "skin_hue": 26.0,
+    "hair_color": "#2a1808",
+    "lip_color": "#a85248",
+    "background": "#0a0d12",
+    "render_mode": "head_decimated_3d"
   }
 }

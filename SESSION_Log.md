@@ -13,6 +13,67 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-07 — Session 11: TMJ jaw + decimated BP3D head + faceforge investigation
+
+User said the lite 3D didn't look like a face at all and asked us
+to learn from faceforge's actual pipeline (jaw on skull, muscles
+on jaw, skin on muscles).
+
+**Faceforge investigation** — read the relevant modules:
+
+  * `anatomy/skull.py`: skull is a SceneNode hierarchy with a
+    `jawPivot` node positioned at the TMJ (temporomandibular joint).
+    Mandible + lower teeth are children of the pivot, so rotating
+    the pivot rotates everything attached.
+  * `anatomy/jaw_muscles.py`: jaw muscles deform via vertex rotation
+    around the same pivot when the jaw angle changes.
+  * `coordination/simulation.py`: the actual formula —
+    ``jaw_angle = AU26 * 0.28 + AU25 * 0.06`` (radians).
+  * Skin is layered on top via skinning weights driven by the
+    deformed bones + muscles.
+
+**TMJ jaw rotation in our pipeline** (`vision/anatomy.py`)
+  * Lifted the same formula. Added `_apply_jaw_rotation` that
+    rotates lower-face landmarks around `TMJ_Y = 0.50` (face-box
+    normalised). Chin drops by `(y - TMJ_Y) * sin(angle)`, lower
+    lip + lip corners follow. Upper face stays fixed.
+  * `deform_landmarks` now does jaw rotation first, then muscle
+    contraction — same order faceforge uses.
+  * Verified: `AU26=1` drops chin from y=0.96 to y=1.087, lip_corner
+    drops by 0.077 — proportional rigid rotation, not stretch.
+
+**Decimated BP3D skin head** (`vision/head_decimated.py`)
+  * Diagnosed why old lite 3D was bizarre: Delaunay over 86 hand-
+    placed points crosses feature boundaries (eye→forehead,
+    lip→cheek), creating spider-web topology.
+  * Fix: start from real anatomy. Load FMA7163 (BP3D skin mesh,
+    full body), crop to top 22% (head + neck), apply BP3D→screen
+    reorient, then **vertex-cluster decimation** in pure NumPy:
+    grid-based bucketing reduces ~30K verts to ~3500 at grid=24.
+  * Render via QPainter Z-sort with backface culling. Result is a
+    recognisable human head + neck + shoulders — no spider web.
+  * ~120 ms/frame at grid=20 (~8 fps). Acceptable for static views;
+    for real-time animation pair with the GPU mode (roadmap A24).
+  * New render mode `head_decimated_3d`, persona of same name.
+
+**Re-rendered face_warp texture** with extended neck region.
+
+**5-way comparison** in `docs/images/five_modes_compare.png`:
+stylised 2D / old lite 3D / decimated head / face warp 2D / GPU
+lifelike. The new decimated head is unmistakably a human shape;
+the old lite 3D was unmistakably not.
+
+Tests: 96 → 99. Three new in `test_head_decimated.py` covering
+decimation output, render frame validity, dispatcher routing —
+all gated on BP3D meshes being present.
+
+Honest limits documented in roadmap:
+  * face_warp can't show open mouth (single closed-mouth texture).
+  * decimated head has no visible eyes/lips at low grid (texture
+    needed for that, GPU path next).
+  * Lite 3D Delaunay-on-landmarks approach is now deprecated; use
+    `head_decimated_3d` instead.
+
 ## 2026-05-06 — Session 10: Image-warp realistic face
 
 User said the lite 3D still looked bizarre and asked to investigate

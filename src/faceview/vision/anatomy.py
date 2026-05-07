@@ -332,23 +332,106 @@ def muscle_activation(muscle: Muscle, au_values: dict[str, float]) -> float:
 MAX_DISPLACEMENT = 0.030
 
 
+# ── Skeletal jaw model ──────────────────────────────────────────────
+#
+# Lifted from faceforge (`coordination/simulation.py`):
+# ``jaw_angle = AU26 * 0.28 + AU25 * 0.06`` radians, applied as a rigid
+# rotation around the temporomandibular joint (TMJ). In our 2D
+# face-box space the TMJ sits where the ear-upper landmarks are
+# (~y=0.50), and the rotation projects to a downward-and-slightly-
+# forward shift of every landmark *below* that line — chin drops
+# most because it's farthest from the hinge.
+#
+# This replaces the old "stretch the lips apart" mouth-open model
+# and makes mouth opening read like real jaw motion.
+
+import math as _math
+
+TMJ_Y = 0.50      # TMJ vertical level in face-box [0,1].
+JAW_AU26_RAD = 0.28
+JAW_AU25_RAD = 0.06
+
+
+def _jaw_angle(au_values: dict[str, float]) -> float:
+    """Same formula as faceforge — radians of mandible rotation."""
+    a26 = float(au_values.get("AU26", 0.0))
+    a25 = float(au_values.get("AU25", 0.0))
+    return a26 * JAW_AU26_RAD + a25 * JAW_AU25_RAD
+
+
+# Landmark groups that move with the mandible. Upper face (forehead,
+# brows, eyes, nose, cheeks above the lip line) stays put.
+_JAW_GROUPS = {
+    "lip_outer_upper", "lip_outer_lower",
+    "lip_inner_upper", "lip_inner_lower",
+    "philtrum",
+}
+# Plus specific face_oval landmarks at the chin / lower jaw.
+_JAW_NAMES = {
+    "chin", "jaw_l1", "jaw_l2", "jaw_l3", "jaw_r1", "jaw_r2", "jaw_r3",
+    "lip_corner_l", "lip_corner_r",
+}
+
+
+def _apply_jaw_rotation(
+    base: list[tuple[float, float]],
+    template: list[Landmark],
+    angle: float,
+) -> list[tuple[float, float]]:
+    """Rotate lower-face landmarks around the TMJ hinge.
+
+    ``angle`` is in radians; positive = jaw open. The 2D projection
+    of a horizontal-axis hinge rotation is a downward translation
+    proportional to ``sin(angle) * (y - tmj_y)``. We also apply a
+    small forward shrink (``1 - cos(angle)``) to mimic the chin
+    moving slightly back as the jaw drops.
+    """
+    if abs(angle) < 1e-6:
+        return base
+    sin_a = _math.sin(angle)
+    cos_a = _math.cos(angle)
+    out: list[tuple[float, float]] = []
+    for (x, y), lm in zip(base, template):
+        # Skip landmarks above the TMJ line / not in the jaw groups.
+        in_jaw = (lm.group in _JAW_GROUPS) or (lm.name in _JAW_NAMES)
+        if not in_jaw or y < TMJ_Y:
+            out.append((x, y))
+            continue
+        d = y - TMJ_Y
+        new_y = TMJ_Y + d * cos_a + d * sin_a   # rotate + drop
+        # No horizontal shift — the hinge axis is horizontal in 2D.
+        # (3D would also pull the chin back; in the front view this
+        # cancels out into a y-shift only.)
+        out.append((x, new_y))
+    return out
+
+
 def deform_landmarks(
     base: list[tuple[float, float]],
     au_values: dict[str, float],
     muscles: list[Muscle] | None = None,
+    template: list[Landmark] | None = None,
 ) -> list[tuple[float, float]]:
-    """Return new (x, y) positions after applying muscle contractions.
+    """Skeletal jaw rotation, then muscle contractions.
 
-    For each landmark, every muscle within its ``radius`` adds a
-    displacement of ``-fiber * activation * weight``, where ``weight``
-    falls off linearly from 1 at the centroid to 0 at the radius. The
-    sign convention is "muscle pulls landmark *along* the fiber", i.e.
-    the landmark is dragged in the fiber direction.
+    Mirrors faceforge's pipeline: (1) jaw rotates around TMJ as a
+    rigid bone; (2) expression muscles deform the soft tissue on top
+    of the moved skeleton. Without (1), AU26 just stretched the lips
+    open — visibly fake. With (1), the chin drops, the lower lip
+    follows, and the upper lip stays anchored to the cranium.
     """
     if muscles is None:
         muscles = load_muscles()
+    if template is None:
+        template = landmark_template()
+
+    # 1. Rigid skeletal jaw rotation.
+    jaw_angle = _jaw_angle(au_values)
+    rotated = _apply_jaw_rotation(base, template, jaw_angle)
+
+    # 2. Muscle contractions on top of the rotated skeleton.
     out: list[tuple[float, float]] = []
-    for x, y in base:
+    for x, y in rotated:
         dx = 0.0
         dy = 0.0
         for m in muscles:
