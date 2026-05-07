@@ -504,17 +504,35 @@ def _is_neck_muscle(name: str) -> bool:
     return any(tok in name for tok in _NECK_MUSCLE_TOKENS)
 
 
+def _blendshape_anchor(model, verts: np.ndarray, name: str,
+                          top_k: int = 60) -> np.ndarray | None:
+    """Centroid of the top-K vertices most affected by a blendshape.
+
+    Blendshape names directly label anatomical regions (mouthSmile_L
+    moves the left lip corner verts, browOuterUp_R moves the right
+    outer brow verts). The centroid of the K verts with the largest
+    delta magnitude for that blendshape is a stable landmark for
+    that region.
+    """
+    idx = model.name_to_idx.get(name)
+    if idx is None:
+        return None
+    mags = np.linalg.norm(model.deltas[idx], axis=1)
+    top = np.argsort(-mags)[:top_k]
+    return verts[top].mean(axis=0)
+
+
 def _ict_feature_points_3d_for(
     identity_weights: dict[str, float] | None = None,
 ) -> dict[str, np.ndarray]:
-    """ICT 5-point feature anchors in the model's local frame.
+    """ICT extended-landmark feature anchors in the model's local frame.
 
-    Computed from the *deformed* mesh (neutral + identity PCA modes)
-    so that per-persona identity changes (smaller-faced young, wider
-    elder, etc.) re-anchor the alignment correctly. Eyelid /
-    lips blendshapes localise eyes + mouth; jaw_L / jaw_R derive
-    from M_Face vertices that sit below the mouth y plane and to
-    each side of x=0.
+    18 anchors covering the head silhouette (crown, temple L/R,
+    chin), the brow line (inner/outer L/R), the mid-face (cheeks
+    L/R, nose tip), the eye line (eye L/R), the mouth line (mouth
+    centre, mouth corners L/R), and the jaw line (jaw L/R).
+    Computed from the *deformed* mesh so per-persona identity
+    weights re-anchor the alignment correctly.
     """
     m = load_ict_model()
     regions = _vertex_regions()
@@ -523,71 +541,154 @@ def _ict_feature_points_3d_for(
     if not eyelid.any() or not lips.any():
         return {}
 
-    # Apply identity-only deformation so feature centroids track
-    # the persona's head shape. Skip non-float entries (mh_target,
-    # etc.).
     iw = {k: float(v) for k, v in (identity_weights or {}).items()
           if isinstance(v, (int, float))}
-    if iw:
-        verts = apply_blendshapes(m, iw)
-    else:
-        verts = m.vertices
+    verts = apply_blendshapes(m, iw) if iw else m.vertices
 
+    out: dict[str, np.ndarray] = {}
+
+    # --- eye line ---
     eyelid_verts = verts[eyelid]
-    left = eyelid_verts[eyelid_verts[:, 0] > 0]
-    right = eyelid_verts[eyelid_verts[:, 0] < 0]
-    lips_verts = verts[lips]
-    if not len(left) or not len(right) or not len(lips_verts):
+    left_eye = eyelid_verts[eyelid_verts[:, 0] > 0]
+    right_eye = eyelid_verts[eyelid_verts[:, 0] < 0]
+    if not len(left_eye) or not len(right_eye):
         return {}
-    mouth_centre = lips_verts.mean(axis=0)
+    out["eye_L"] = left_eye.mean(axis=0)
+    out["eye_R"] = right_eye.mean(axis=0)
 
-    # Jaw-line anchors: M_Face vertices sitting below mouth Y.
+    # --- brow line (blendshape-driven) ---
+    for ict_name, key in [
+        ("browInnerUp_L", "brow_inner_L"),
+        ("browInnerUp_R", "brow_inner_R"),
+        ("browOuterUp_L", "brow_outer_L"),
+        ("browOuterUp_R", "brow_outer_R"),
+    ]:
+        c = _blendshape_anchor(m, verts, ict_name)
+        if c is not None:
+            out[key] = c
+
+    # --- cheeks ---
+    for ict_name, key in [
+        ("cheekPuff_L", "cheek_L"),
+        ("cheekPuff_R", "cheek_R"),
+    ]:
+        c = _blendshape_anchor(m, verts, ict_name)
+        if c is not None:
+            out[key] = c
+
+    # --- nose tip (sneer pulls the alar/tip) ---
+    for ict_name, key in [
+        ("noseSneer_L", "nose_L"),
+        ("noseSneer_R", "nose_R"),
+    ]:
+        c = _blendshape_anchor(m, verts, ict_name)
+        if c is not None:
+            out[key] = c
+
+    # --- mouth line ---
+    lips_verts = verts[lips]
+    out["mouth"] = lips_verts.mean(axis=0)
+    for ict_name, key in [
+        ("mouthSmile_L", "mouth_corner_L"),
+        ("mouthSmile_R", "mouth_corner_R"),
+    ]:
+        c = _blendshape_anchor(m, verts, ict_name)
+        if c is not None:
+            out[key] = c
+
+    # --- jaw / chin / temple / crown / ear — silhouette anchors via
+    # M_Face vertex extrema, NOT centroids. They pin the actual
+    # outline so TPS warp can fit the BP3D anatomy inside the ICT
+    # head shape.
     face_mat_idx = next(
         (i for i, n in enumerate(m.materials) if n == "M_Face"), -1,
+    )
+    backhead_mat_idx = next(
+        (i for i, n in enumerate(m.materials) if n == "M_BackHead"), -1,
     )
     if face_mat_idx >= 0:
         face_v_mask = np.zeros(len(verts), dtype=bool)
         for ti, mi in enumerate(m.tri_materials):
-            if mi == face_mat_idx:
+            if mi == face_mat_idx or mi == backhead_mat_idx:
                 for v in m.triangles[ti]:
                     face_v_mask[v] = True
-        below = verts[face_v_mask & (verts[:, 1] < mouth_centre[1])]
-        if len(below) > 50:
-            jaw_l = below[below[:, 0] > 5].mean(axis=0)
-            jaw_r = below[below[:, 0] < -5].mean(axis=0)
-        else:
-            jaw_l = mouth_centre
-            jaw_r = mouth_centre
-    else:
-        jaw_l = mouth_centre
-        jaw_r = mouth_centre
+        face_v = verts[face_v_mask]
+        mouth_y = float(out["mouth"][1])
+        eye_y = float((out["eye_L"][1] + out["eye_R"][1]) / 2.0)
 
-    return {
-        "eye_L": left.mean(axis=0).astype(np.float32),
-        "eye_R": right.mean(axis=0).astype(np.float32),
-        "mouth": mouth_centre.astype(np.float32),
-        "jaw_L": jaw_l.astype(np.float32),
-        "jaw_R": jaw_r.astype(np.float32),
-    }
+        # Jaw: jawbone-line anchors (already exist as masseter ones
+        # in BP3D — here we anchor on the lower-face surface verts).
+        below_mouth = face_v[face_v[:, 1] < mouth_y]
+        if len(below_mouth) > 50:
+            jaw_l = below_mouth[below_mouth[:, 0] > 5]
+            jaw_r = below_mouth[below_mouth[:, 0] < -5]
+            if len(jaw_l):
+                out["jaw_L"] = jaw_l.mean(axis=0)
+            if len(jaw_r):
+                out["jaw_R"] = jaw_r.mean(axis=0)
+
+            # Chin: lowest 1 % of midline face verts → the chin tip.
+            chin_band = below_mouth[np.abs(below_mouth[:, 0]) < 10]
+            if len(chin_band):
+                y_thr = np.percentile(chin_band[:, 1], 5)
+                tip = chin_band[chin_band[:, 1] < y_thr]
+                if len(tip):
+                    out["chin"] = tip.mean(axis=0)
+
+        # Temple: lateral-most face verts at the eye y level (not the
+        # ear — closer to the brow ridge). Wider band for robustness.
+        eye_band = face_v[
+            (face_v[:, 1] > eye_y - 8) & (face_v[:, 1] < eye_y + 25)
+        ]
+        if len(eye_band) > 50:
+            x_thr_L = np.percentile(eye_band[:, 0], 97)
+            x_thr_R = np.percentile(eye_band[:, 0], 3)
+            t_l = eye_band[eye_band[:, 0] > x_thr_L]
+            t_r = eye_band[eye_band[:, 0] < x_thr_R]
+            if len(t_l):
+                out["temple_L"] = t_l.mean(axis=0)
+            if len(t_r):
+                out["temple_R"] = t_r.mean(axis=0)
+
+        # Crown: highest 0.5 % of face / back-head Y values — the
+        # actual top of the head, not the forehead.
+        if len(face_v):
+            y_thr = np.percentile(face_v[:, 1], 99.5)
+            crown = face_v[face_v[:, 1] > y_thr]
+            if len(crown):
+                out["crown"] = crown.mean(axis=0)
+
+        # Ear-line: lateral-most verts a bit *below* the eye level
+        # (where ears actually sit). Mirror BP3D's ear anchor.
+        ear_band = face_v[
+            (face_v[:, 1] > eye_y - 30) & (face_v[:, 1] < eye_y - 5)
+        ]
+        if len(ear_band) > 30:
+            x_thr_L = np.percentile(ear_band[:, 0], 97)
+            x_thr_R = np.percentile(ear_band[:, 0], 3)
+            e_l = ear_band[ear_band[:, 0] > x_thr_L]
+            e_r = ear_band[ear_band[:, 0] < x_thr_R]
+            if len(e_l):
+                out["ear_L"] = e_l.mean(axis=0)
+            if len(e_r):
+                out["ear_R"] = e_r.mean(axis=0)
+
+    return {k: v.astype(np.float32) for k, v in out.items()}
 
 
 @lru_cache(maxsize=1)
 def _ict_feature_points_3d() -> dict[str, np.ndarray]:
-    """Neutral-mesh 5-point anchors (compat shim for callers without
-    identity weights).
-    """
+    """Neutral-mesh anchors (compat shim for callers without identity)."""
     return _ict_feature_points_3d_for(None)
 
 
 @lru_cache(maxsize=1)
 def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
-    """BP3D 5-point feature anchors in BP3D's local frame.
+    """BP3D extended-landmark feature anchors in BP3D's local frame.
 
-    Eye-L / eye-R from Orbic. Oculi Orb. L/R (ring around the eye →
-    centroid sits on the eye centre). Mouth from Orbicularis Oris
-    (the lip ring muscle). Jaw-L / jaw-R from Masseter Sup. L/R
-    (sit on the mandibular angle / jaw line). Returns None if any
-    needed mesh isn't on disk.
+    Each landmark is the centroid of an FMA-keyed mesh (or pair of
+    meshes for L/R-symmetric structures). Returns None if any mesh
+    is missing on disk.
     """
     try:
         from faceview.vision.anatomy_meshes import (
@@ -595,20 +696,79 @@ def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
         )
     except Exception:
         return None
-    fma = {
-        "eye_L": "FMA46783",   # Orbic. Oculi Orb. L
-        "eye_R": "FMA46782",   # Orbic. Oculi Orb. R
-        "mouth": "FMA46841",   # Orbicularis Oris
-        "jaw_L": "FMA49002",   # Masseter Sup. L
-        "jaw_R": "FMA49001",   # Masseter Sup. R
+
+    fma_single: dict[str, str] = {
+        # Eye line.
+        "eye_L":          "FMA46783",  # Orbic. Oculi Orb. L
+        "eye_R":          "FMA46782",  # Orbic. Oculi Orb. R
+        # Brow line.
+        "brow_inner_L":   "FMA46797",  # Corrugator Sup. L
+        "brow_inner_R":   "FMA46796",  # Corrugator Sup. R
+        "brow_outer_L":   "FMA46760",  # Frontalis L
+        "brow_outer_R":   "FMA46759",  # Frontalis R
+        # Cheeks.
+        "cheek_L":        "FMA46813",  # Zygomatic Maj. L
+        "cheek_R":        "FMA46812",  # Zygomatic Maj. R
+        # Nose alae (Lev. Labii Alae attaches at the nasal sides).
+        "nose_L":         "FMA46804",  # Lev. Labii Alae. L
+        "nose_R":         "FMA46803",  # Lev. Labii Alae. R
+        # Mouth line.
+        "mouth":          "FMA46841",  # Orbicularis Oris (whole ring)
+        "mouth_corner_L": "FMA46824",  # Lev. Anguli Oris L
+        "mouth_corner_R": "FMA46823",  # Lev. Anguli Oris R
+        # Jaw line.
+        "jaw_L":          "FMA49002",  # Masseter Sup. L
+        "jaw_R":          "FMA49001",  # Masseter Sup. R
+        # Temple line.
+        "temple_L":       "FMA49008",  # Temporalis L
+        "temple_R":       "FMA49007",  # Temporalis R
     }
     avail = set(list_available_meshes())
-    if not all(f in avail for f in fma.values()):
+    out: dict[str, np.ndarray] = {}
+    for key, fma in fma_single.items():
+        if fma not in avail:
+            continue
+        out[key] = load_mesh(fma).vertices.mean(axis=0).astype(np.float32)
+
+    # Silhouette anchors via vertex *extrema*, not centroids — these
+    # pin the actual outline, not interior centres.
+    # Crown: topmost (max-y) vertex of the Frontal Bone (FMA52734).
+    if "FMA52734" in avail:
+        v = load_mesh("FMA52734").vertices
+        top = v[v[:, 1] > np.percentile(v[:, 1], 99)]
+        out["crown"] = top.mean(axis=0).astype(np.float32)
+    # Chin: bottom-most vertex of the Mandible (FMA52748).
+    if "FMA52748" in avail:
+        v = load_mesh("FMA52748").vertices
+        bot = v[v[:, 1] < np.percentile(v[:, 1], 1)]
+        # Centred on x=0 (on-midline chin tip).
+        bot = bot[np.abs(bot[:, 0]) < 15]
+        if len(bot):
+            out["chin"] = bot.mean(axis=0).astype(np.float32)
+    # Override temple_L / R with the lateral-most extents of the
+    # Temporalis muscles so they land on the actual head silhouette
+    # rather than the muscle interior.
+    if "FMA49008" in avail:
+        v = load_mesh("FMA49008").vertices  # Temporalis L
+        side = v[v[:, 0] > np.percentile(v[:, 0], 95)]
+        out["temple_L"] = side.mean(axis=0).astype(np.float32)
+    if "FMA49007" in avail:
+        v = load_mesh("FMA49007").vertices  # Temporalis R
+        side = v[v[:, 0] < np.percentile(v[:, 0], 5)]
+        out["temple_R"] = side.mean(axis=0).astype(np.float32)
+    # Side-of-head anchors — widest extent at eye level via Ear mesh
+    # (single combined mesh, split by sign of x).
+    if "FMA52780" in avail:
+        v = load_mesh("FMA52780").vertices
+        right = v[v[:, 0] < np.percentile(v[:, 0], 5)]
+        left = v[v[:, 0] > np.percentile(v[:, 0], 95)]
+        if len(left) and len(right):
+            out["ear_L"] = left.mean(axis=0).astype(np.float32)
+            out["ear_R"] = right.mean(axis=0).astype(np.float32)
+
+    if "eye_L" not in out or "mouth" not in out:
         return None
-    return {
-        k: load_mesh(v).vertices.mean(axis=0).astype(np.float32)
-        for k, v in fma.items()
-    }
+    return out
 
 
 def _project_ict_to_pixel(
@@ -699,58 +859,117 @@ def _project_bp3d_to_pixel(
     return out
 
 
+def _tps_warp(
+    img: np.ndarray, src_pts: np.ndarray, dst_pts: np.ndarray,
+    output_shape: tuple[int, int], regularisation: float = 0.0,
+    border_value: tuple[int, int, int] = (0, 0, 0),
+) -> np.ndarray:
+    """Thin-plate-spline warp via cv2.remap.
+
+    Builds the inverse map (output→input) by solving the TPS linear
+    system for an N-anchor non-rigid warp, then evaluating it on
+    every output pixel. ``regularisation`` adds λI to the kernel
+    matrix — small λ stiffens the warp toward affine, large λ → no
+    bending (pure affine fit).
+
+    src_pts, dst_pts: (N, 2) arrays of corresponding 2D points.
+    output_shape: (H, W) of output image.
+    Returns: warped (H, W, 3) BGR image.
+    """
+    import cv2
+
+    h, w = output_shape
+    n = len(src_pts)
+    if n < 3 or len(src_pts) != len(dst_pts):
+        return img
+
+    # K[i, j] = U(||dst[i] - dst[j]||) — RBF on the *target* points
+    # because we're learning the inverse map (output → input).
+    diff = dst_pts[:, None, :] - dst_pts[None, :, :]
+    R2 = (diff * diff).sum(axis=2).astype(np.float64)
+    eps = 1e-12
+    K = R2 * np.log(R2 + eps)
+    P = np.hstack([np.ones((n, 1)), dst_pts]).astype(np.float64)
+    L = np.zeros((n + 3, n + 3), dtype=np.float64)
+    L[:n, :n] = K + regularisation * np.eye(n)
+    L[:n, n:] = P
+    L[n:, :n] = P.T
+    Y = np.zeros((n + 3, 2), dtype=np.float64)
+    Y[:n] = src_pts
+    try:
+        coefs = np.linalg.solve(L, Y)
+    except np.linalg.LinAlgError:
+        return img
+    rbf_w = coefs[:n]    # (n, 2)
+    aff = coefs[n:]      # (3, 2) — [const, x, y]
+
+    # Pixel grid in output (dst) space.
+    yy, xx = np.meshgrid(np.arange(h), np.arange(w), indexing="ij")
+    grid = np.stack(
+        [xx.ravel().astype(np.float64), yy.ravel().astype(np.float64)],
+        axis=1,
+    )                                  # (H*W, 2)
+    g_diff = grid[:, None, :] - dst_pts[None, :, :].astype(np.float64)
+    g_R2 = (g_diff * g_diff).sum(axis=2)
+    U = g_R2 * np.log(g_R2 + eps)        # (H*W, n)
+    Pg = np.hstack([np.ones((h * w, 1), dtype=np.float64), grid])  # (H*W, 3)
+    map_xy = Pg @ aff + U @ rbf_w        # (H*W, 2) — source positions
+
+    map_x = map_xy[:, 0].reshape(h, w).astype(np.float32)
+    map_y = map_xy[:, 1].reshape(h, w).astype(np.float32)
+    return cv2.remap(
+        img, map_x, map_y,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=tuple(int(c) for c in border_value),
+    )
+
+
 def _align_anatomy_to_ict(
     anatomy: np.ndarray, bg_rgb: tuple[int, int, int],
     specs: list, yaw: float, pitch: float, size: tuple[int, int],
     identity_weights: dict[str, float] | None = None,
-) -> np.ndarray:
-    """5-point feature-anchor warp: eyes / mouth / jaw line up.
+    return_pixels: bool = False,
+):
+    """Multi-landmark TPS warp: BP3D anatomy aligned to ICT features.
 
-    Projects ICT and BP3D anchors to pixel space through each
-    renderer's MVP, then computes a least-squares affine fit
-    (cv2.estimateAffine2D) that maps BP3D's 5 anchors onto ICT's.
-    Eyes overlay exactly; mouth + jaw stay at ICT's lip line and
-    mandibular angle, so the BP3D temporomandibular joint sits at
-    the ICT jaw and the masseter group reads behind ICT's cheeks.
+    Projects ICT + BP3D anchor sets to pixel space through each
+    renderer's MVP (using only the keys present in *both* dicts),
+    then runs a thin-plate-spline warp on the BP3D image so all
+    matched anchors overlay ICT's. The warp is fully non-rigid;
+    distant anchors deform their local region while preserving
+    smoothness elsewhere.
 
-    ``identity_weights`` deforms the ICT mesh by its persona's
-    identity-PCA modes before measuring anchors, so a younger /
-    smaller-faced persona gets correspondingly closer eye spacing
-    and shorter jaw line.
+    Returns the warped image. If ``return_pixels`` is True, also
+    returns ``(ict_pix, bp3_pix, used_keys)`` for the assessment
+    tool to overlay anchor markers.
     """
-    import cv2
-
     w, h = size
     bg_arr = np.array(bg_rgb, dtype=np.float32)
 
     ict_3d = _ict_feature_points_3d_for(identity_weights)
     bp3_3d = _bp3d_feature_points_3d()
     if not ict_3d or not bp3_3d:
-        return anatomy
+        return (anatomy, ({}, {}, [])) if return_pixels else anatomy
 
     ict_pix = _project_ict_to_pixel(ict_3d, yaw, pitch, size,
                                        identity_weights=identity_weights)
     bp3_pix = _project_bp3d_to_pixel(bp3_3d, specs, yaw, pitch, size)
+    used = [k for k in ict_pix if k in bp3_pix]
+    if len(used) < 5:
+        return (anatomy, (ict_pix, bp3_pix, used)) if return_pixels else anatomy
 
-    keys = ["eye_L", "eye_R", "mouth", "jaw_L", "jaw_R"]
-    src = np.array([bp3_pix[k] for k in keys], dtype=np.float32)
-    dst = np.array([ict_pix[k] for k in keys], dtype=np.float32)
-    # Over-determined SIMILARITY transform — uniform scale + rotation
-    # + translation, no shear / non-uniform scale. Keeps BP3D's
-    # natural head proportions; eyes/mouth/jaw don't overlay
-    # *exactly* but they're as close as a rigid fit allows. (Full
-    # affine introduces vertical stretch when the chosen ICT
-    # persona's face proportions diverge from BP3D's medical-scan
-    # head — e.g. female / elder identities.)
-    M, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.LMEDS)
-    if M is None:
-        # Fall back to a 3-point affine on eyes + mouth.
-        M = cv2.getAffineTransform(src[:3], dst[:3])
-    return cv2.warpAffine(
-        anatomy, M, (w, h),
-        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
-        borderValue=tuple(int(c) for c in bg_arr),
+    src = np.array([bp3_pix[k] for k in used], dtype=np.float32)
+    dst = np.array([ict_pix[k] for k in used], dtype=np.float32)
+
+    warped = _tps_warp(
+        anatomy, src, dst, (h, w),
+        regularisation=15.0,
+        border_value=tuple(int(c) for c in bg_arr),
     )
+    if return_pixels:
+        return warped, (ict_pix, bp3_pix, used)
+    return warped
 
 
 def _render_jelly_composite(params, size: tuple[int, int]) -> np.ndarray:
