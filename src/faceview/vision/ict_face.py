@@ -518,27 +518,11 @@ def _per_vertex_colors_for(params) -> np.ndarray:
         if 0 <= vm < len(m.materials) else False for vm in vert_mat_safe
     ])
 
-    # ── Hair cap (top 32%, all sides) with subtle colour noise ──
-    # No Z gate: hair covers the WHOLE top of the head, including
-    # where it meets the forehead at the front.
-    hair_color = np.array(palette["M_HairCap"], dtype=np.float32)
-    hair_y = y_max - y_span * 0.32
-    hair_fade_y = hair_y - y_span * 0.05
-    hair_mask = on_face & (verts[:, 1] > hair_y)
-    fade_mask = on_face & (verts[:, 1] > hair_fade_y) & (verts[:, 1] <= hair_y)
-    # Hair colour with multiplicative noise (~±10%).
-    hair_noise = 1.0 + (rng.standard_normal(n_verts).astype(np.float32) * 0.08)
-    hair_noise = np.clip(hair_noise, 0.7, 1.25)
-    colors[hair_mask] = hair_color * hair_noise[hair_mask, None]
-    # Smooth fade band.
-    if fade_mask.any():
-        t = ((verts[fade_mask, 1] - hair_fade_y) / (hair_y - hair_fade_y))[:, None]
-        colors[fade_mask] = colors[fade_mask] * (1 - t) + hair_color * t
-
-    # ── Eyebrows: a thin band on the forehead just above the eyes ──
-    # ICT eye verts have material M_EyeBlend / M_Sclera*; find the
-    # mean Y of those, take a band 5-9% of head height ABOVE it on
-    # the front of the face.
+    # ── Anchor regions to eye line ─────────────────────────────
+    # The naive Y-band approach catches back-of-head vertices and
+    # creates visible stripes around the head. Anchor each region
+    # to the eye-mean Y and constrain to FRONT-FACING vertices in
+    # a narrow X band centred on the face midline.
     eye_mat_names = {"M_EyeBlend", "M_ScleraLeft", "M_ScleraRight",
                       "M_IrisLeft", "M_IrisRight"}
     eye_idx = np.array([
@@ -546,61 +530,85 @@ def _per_vertex_colors_for(params) -> np.ndarray:
         if 0 <= vert_mat_safe[i] < len(m.materials)
         and m.materials[vert_mat_safe[i]] in eye_mat_names
     ])
-    if len(eye_idx) > 10:
-        eye_y_mean = verts[eye_idx, 1].mean()
-        brow_y_lo = eye_y_mean + y_span * 0.025
-        brow_y_hi = eye_y_mean + y_span * 0.055
-        front_mask = verts[:, 2] > z_mid     # only front of face
-        brow_mask = on_face & front_mask & (verts[:, 1] > brow_y_lo) & (verts[:, 1] < brow_y_hi)
-        if brow_mask.any():
-            brow_noise = np.clip(1.0 + rng.standard_normal(n_verts).astype(np.float32) * 0.06, 0.8, 1.15)
-            colors[brow_mask] = hair_color * brow_noise[brow_mask, None] * 0.9
+    eye_y_mean = (float(verts[eye_idx, 1].mean()) if len(eye_idx) > 10
+                   else (y_min + y_max) / 2)
+    eye_x_centre = ((float(verts[eye_idx, 0].mean()) if len(eye_idx) > 10
+                     else (x_min + x_max) / 2))
+    eye_z_mean = (float(verts[eye_idx, 2].mean()) if len(eye_idx) > 10
+                   else z_max)
+    face_half_w = (x_max - x_min) * 0.30   # inside face only
 
-    # ── Lips: middle band on the front face below the nose ──
-    # Approximate: front-facing M_Face verts at mid-X within a thin
-    # Y band lying lower-mid of the face.
-    lip_color = np.array(_hex_to_rgb_f(getattr(params, "lip_color", "#a44a4a")),
-                          dtype=np.float32)
-    if len(eye_idx) > 10:
-        lip_y_centre = eye_y_mean - y_span * 0.110
-        lip_y_lo = lip_y_centre - y_span * 0.020
-        lip_y_hi = lip_y_centre + y_span * 0.020
-        x_centre = (x_min + x_max) / 2
-        x_half = (x_max - x_min) * 0.18
-        front_mask_strong = verts[:, 2] > z_mid + (z_max - z_mid) * 0.20
-        lip_mask = (on_face & front_mask_strong
-                    & (verts[:, 1] > lip_y_lo) & (verts[:, 1] < lip_y_hi)
-                    & (np.abs(verts[:, 0] - x_centre) < x_half))
-        if lip_mask.any():
-            # Lips are a tinted version of skin — blend lip_color at
-            # 60% so the underlying skin tone shows through. Real
-            # lips read as redder skin, not a paint stripe.
-            colors[lip_mask] = colors[lip_mask] * 0.40 + lip_color * 0.60
+    # Front-facing gate: vertex Z must be near or in front of the
+    # eyes (excludes ears, sides, back of head, neck-back).
+    z_face_thresh = eye_z_mean - y_span * 0.10
+    front_strict = verts[:, 2] > z_face_thresh
+    on_face_front = on_face & front_strict & (
+        np.abs(verts[:, 0] - eye_x_centre) < face_half_w
+    )
 
-    # ── Cheek blush: subtle redder tint on cheek apple regions ──
-    if len(eye_idx) > 10:
-        cheek_y = eye_y_mean - y_span * 0.040
-        cheek_y_lo = cheek_y - y_span * 0.030
-        cheek_y_hi = cheek_y + y_span * 0.030
-        cheek_x_centre = (x_min + x_max) / 2
-        cheek_x_offset = (x_max - x_min) * 0.20
-        front = verts[:, 2] > z_mid + (z_max - z_mid) * 0.10
-        for sign in (-1, 1):
-            cx = cheek_x_centre + sign * cheek_x_offset
-            cheek_mask = (on_face & front
-                          & (verts[:, 1] > cheek_y_lo) & (verts[:, 1] < cheek_y_hi)
-                          & (np.abs(verts[:, 0] - cx) < (x_max - x_min) * 0.06))
-            if cheek_mask.any():
-                # Subtle blush — blend toward a slightly redder skin
-                # tone at only ~10% strength (real face has subtle
-                # blood-flow flush, not rouge).
-                blush = np.array([0.95, 0.62, 0.55], dtype=np.float32)
-                colors[cheek_mask] = colors[cheek_mask] * 0.90 + blush * 0.10
+    hair_color = np.array(palette["M_HairCap"], dtype=np.float32)
 
-    # ── Subtle global skin variation: per-vertex luminance noise ──
+    # ── Hair cap: top of head, all sides (need Y gate, not X gate) ──
+    # Hair covers the cranium dome — leave the X gate off but keep
+    # the Y-band fade so the forehead transition is smooth.
+    hair_y = eye_y_mean + y_span * 0.20
+    hair_fade_y = hair_y - y_span * 0.04
+    hair_mask = on_face & (verts[:, 1] > hair_y)
+    fade_mask = (on_face & (verts[:, 1] > hair_fade_y)
+                 & (verts[:, 1] <= hair_y))
+    hair_noise = 1.0 + (rng.standard_normal(n_verts).astype(np.float32) * 0.06)
+    hair_noise = np.clip(hair_noise, 0.85, 1.15)
+    colors[hair_mask] = hair_color * hair_noise[hair_mask, None]
+    if fade_mask.any():
+        t = ((verts[fade_mask, 1] - hair_fade_y)
+              / max(1e-6, hair_y - hair_fade_y))[:, None]
+        colors[fade_mask] = colors[fade_mask] * (1 - t) + hair_color * t
+
+    # ── Eyebrows: thin front-only band just above eye mean ──
+    brow_y_lo = eye_y_mean + y_span * 0.020
+    brow_y_hi = eye_y_mean + y_span * 0.045
+    brow_mask = (on_face_front
+                 & (verts[:, 1] > brow_y_lo)
+                 & (verts[:, 1] < brow_y_hi))
+    if brow_mask.any():
+        # Soften: blend hair_color 70% with current colour for the
+        # brow band so it reads as eyebrow hair against skin.
+        colors[brow_mask] = (colors[brow_mask] * 0.30
+                              + hair_color * 0.70)
+
+    # ── Lips: very tight band, front-only, narrow X ──
+    lip_color = np.array(
+        _hex_to_rgb_f(getattr(params, "lip_color", "#a44a4a")),
+        dtype=np.float32,
+    )
+    lip_y_centre = eye_y_mean - y_span * 0.105
+    lip_y_lo = lip_y_centre - y_span * 0.012
+    lip_y_hi = lip_y_centre + y_span * 0.012
+    lip_x_half = (x_max - x_min) * 0.13
+    lip_mask = (on_face_front
+                & (verts[:, 1] > lip_y_lo)
+                & (verts[:, 1] < lip_y_hi)
+                & (np.abs(verts[:, 0] - eye_x_centre) < lip_x_half))
+    if lip_mask.any():
+        # 50/50 blend so lips read as redder skin, not paint stripe.
+        colors[lip_mask] = colors[lip_mask] * 0.50 + lip_color * 0.50
+
+    # ── Cheek blush: small radial spots, very subtle ──
+    cheek_y = eye_y_mean - y_span * 0.045
+    for sign in (-1, 1):
+        cx = eye_x_centre + sign * (x_max - x_min) * 0.18
+        cheek_mask = (on_face_front
+                      & (verts[:, 1] > cheek_y - y_span * 0.020)
+                      & (verts[:, 1] < cheek_y + y_span * 0.020)
+                      & (np.abs(verts[:, 0] - cx) < (x_max - x_min) * 0.05))
+        if cheek_mask.any():
+            blush = np.array([0.95, 0.62, 0.55], dtype=np.float32)
+            colors[cheek_mask] = colors[cheek_mask] * 0.92 + blush * 0.08
+
+    # ── Subtle global skin noise (very small) ──
     if on_face.any():
-        skin_noise = 1.0 + rng.standard_normal(n_verts).astype(np.float32) * 0.025
-        skin_noise = np.clip(skin_noise, 0.93, 1.06)
+        skin_noise = 1.0 + rng.standard_normal(n_verts).astype(np.float32) * 0.012
+        skin_noise = np.clip(skin_noise, 0.97, 1.03)
         colors[on_face] *= skin_noise[on_face, None]
 
     return np.clip(colors, 0.0, 1.0).astype(np.float32)
