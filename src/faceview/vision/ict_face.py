@@ -548,13 +548,32 @@ def _ict_feature_points_3d_for(
     out: dict[str, np.ndarray] = {}
 
     # --- eye line ---
-    eyelid_verts = verts[eyelid]
-    left_eye = eyelid_verts[eyelid_verts[:, 0] > 0]
-    right_eye = eyelid_verts[eyelid_verts[:, 0] < 0]
-    if not len(left_eye) or not len(right_eye):
-        return {}
-    out["eye_L"] = left_eye.mean(axis=0)
-    out["eye_R"] = right_eye.mean(axis=0)
+    # Prefer the iris-material vertex centroids (the actual eye
+    # sphere) over eyelid blendshape verts (which sit on the lid
+    # edge). Falls back to the blendshape regions if the iris
+    # materials aren't tagged in this ICT build.
+    iris_l_idx = next((i for i, n in enumerate(m.materials)
+                         if n == "M_IrisLeft"), -1)
+    iris_r_idx = next((i for i, n in enumerate(m.materials)
+                         if n == "M_IrisRight"), -1)
+    iris_verts: dict[str, list[int]] = {"L": [], "R": []}
+    if iris_l_idx >= 0 or iris_r_idx >= 0:
+        for ti, mi in enumerate(m.tri_materials):
+            tag = "L" if mi == iris_l_idx else "R" if mi == iris_r_idx else None
+            if tag is not None:
+                for v in m.triangles[ti]:
+                    iris_verts[tag].append(int(v))
+    if iris_verts["L"] and iris_verts["R"]:
+        out["eye_L"] = verts[np.unique(iris_verts["L"])].mean(axis=0)
+        out["eye_R"] = verts[np.unique(iris_verts["R"])].mean(axis=0)
+    else:
+        eyelid_verts = verts[eyelid]
+        left_eye = eyelid_verts[eyelid_verts[:, 0] > 0]
+        right_eye = eyelid_verts[eyelid_verts[:, 0] < 0]
+        if not len(left_eye) or not len(right_eye):
+            return {}
+        out["eye_L"] = left_eye.mean(axis=0)
+        out["eye_R"] = right_eye.mean(axis=0)
 
     # --- brow line (blendshape-driven) ---
     for ict_name, key in [
@@ -708,9 +727,10 @@ def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
     # right (FMA*_R). The names are chosen to match the ICT
     # screen-position convention, not the underlying anatomy.
     fma_single: dict[str, str] = {
-        # Eye line — screen labels.
-        "eye_L":          "FMA46782",  # screen-L = anat. R (Orbic. Oculi Orb. R)
-        "eye_R":          "FMA46783",  # screen-R = anat. L
+        # Eye line — handled separately below via the Eyeball mesh
+        # (FMA12513) split by sign of x; gives the actual eye-sphere
+        # centre rather than the muscle-ring centroid, which is a
+        # closer match to ICT's iris position.
         # Brow line.
         "brow_inner_L":   "FMA46796",  # Corrugator Sup. R (anat.)
         "brow_inner_R":   "FMA46797",
@@ -739,6 +759,20 @@ def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
         if fma not in avail:
             continue
         out[key] = load_mesh(fma).vertices.mean(axis=0).astype(np.float32)
+
+    # Eye anchors via the Eyeball mesh — the actual eye sphere.
+    # Single combined L+R mesh; split by sign of x. Screen-position
+    # labels: most-negative raw X = screen LEFT after gpu_renderer's
+    # ry180. Centroid of each half = the actual eye centre, which
+    # matches ICT's iris-centroid much more closely than the
+    # Orbicularis Oculi muscle ring did.
+    if "FMA12513" in avail:
+        v = load_mesh("FMA12513").vertices
+        screen_left = v[v[:, 0] < 0]
+        screen_right = v[v[:, 0] > 0]
+        if len(screen_left) and len(screen_right):
+            out["eye_L"] = screen_left.mean(axis=0).astype(np.float32)
+            out["eye_R"] = screen_right.mean(axis=0).astype(np.float32)
 
     # Silhouette anchors via vertex *extrema*, not centroids — these
     # pin the actual outline, not interior centres.
@@ -770,15 +804,13 @@ def _bp3d_feature_points_3d() -> dict[str, np.ndarray] | None:
         v = load_mesh("FMA49008").vertices
         side = v[v[:, 0] > np.percentile(v[:, 0], 95)]     # most-pos raw X
         out["temple_R"] = side.mean(axis=0).astype(np.float32)
-    # Side-of-head anchors via the (combined L+R) Ear mesh. Same
-    # screen-position logic — most-negative raw X = screen LEFT.
-    if "FMA52780" in avail:
-        v = load_mesh("FMA52780").vertices
-        screen_left = v[v[:, 0] < np.percentile(v[:, 0], 5)]
-        screen_right = v[v[:, 0] > np.percentile(v[:, 0], 95)]
-        if len(screen_left) and len(screen_right):
-            out["ear_L"] = screen_left.mean(axis=0).astype(np.float32)
-            out["ear_R"] = screen_right.mean(axis=0).astype(np.float32)
+    # NOTE: deliberately *not* anchoring on the BP3D Ear mesh —
+    # its lateral-most verts sit ~50 px outside ICT's M_Face ear
+    # band (BP3D ears are anatomical pinnae extending past the
+    # head outline; ICT's M_Face is the bald skin envelope). The
+    # ear correspondence is too loose to be useful — Temporalis
+    # already pins the temple band, which constrains head width
+    # well enough.
 
     if "eye_L" not in out or "mouth" not in out:
         return None
