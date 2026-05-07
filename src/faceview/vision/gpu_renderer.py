@@ -89,17 +89,26 @@ class _GpuMesh:
 
 
 class _GpuRenderer:
-    """Persistent moderngl context + cached mesh VBOs."""
+    """Persistent moderngl context + cached mesh VBOs.
 
-    def __init__(self) -> None:
+    If ``ctx`` is provided we share an existing moderngl context
+    (e.g. the ICT renderer's). moderngl 5.x has no API for switching
+    between two standalone contexts in the same thread — so when a
+    caller (the jelly composite) needs both ICT and BP3D rendering,
+    it must hand its context in here so we don't try to alternate.
+    """
+
+    def __init__(self, ctx=None) -> None:
         try:
             import moderngl
         except ImportError as exc:
             raise MissingDependency("moderngl", "gpu") from exc
         self._mgl = moderngl
-        self.ctx = moderngl.create_context(standalone=True, require=330)
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
+        if ctx is None:
+            ctx = moderngl.create_context(standalone=True, require=330)
+            ctx.enable(moderngl.DEPTH_TEST)
+            ctx.enable(moderngl.BLEND)
+        self.ctx = ctx
         self.prog = self.ctx.program(vertex_shader=VERT_SHADER,
                                        fragment_shader=FRAG_SHADER)
         self._meshes: dict[str, _GpuMesh] = {}

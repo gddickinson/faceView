@@ -377,5 +377,11 @@
     "render_mode": "ict_face_3d",
     "identity_weights": {},
     "style": "xray"
+  },
+  "ict_jelly": {
+    "background": "#000810",
+    "render_mode": "ict_face_3d",
+    "identity_weights": {},
+    "style": "jelly"
   }
 }

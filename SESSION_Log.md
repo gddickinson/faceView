@@ -13,6 +13,81 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-07 — Session 21: Hairless xray + mood skin + glowing eyes + jelly anatomy
+
+User: "the Claude animated head with x-ray rendering is one of the best
+images for the avatar. No hair... mood-driven skin tones, glowing
+eyes, can we merge faceforge anatomy with the head for jelly-person
+effects?"
+
+Tackled in priority order: small visual wins first, then the bigger
+anatomy underlay.
+
+**Hairless xray** — `style=="xray"` skips the scalp Y-band so the
+ICT head reads as a bare skull. Avoids the green-hair uncanny look
+and matches the medical-glow aesthetic.
+
+**Mood-driven skin tone (xray)** — `_xray_mood_offset(params)`
+computes a small RGB delta from live AU values and mixes it into
+M_Face / M_BackHead before render:
+- AU12 (smile)        → green-cyan lift
+- AU4  (brow lower)   → red shift (anger)
+- AU15 (corner drop)  → cool blue (sad)
+- AU5  (lid raise)    → pale (fear)
+- AU25 (jaw open)     → magenta hot core (open mouth → glow)
+
+**Glowing eyes** — added a `v_emit` per-vertex attribute and a
+`u_emit_pulse` shader uniform. `_MATERIAL_EMISSIVE` baked from the
+ICT material map (iris/sclera/lacrimal/teeth glow; rest 0). Pulse is
+a per-style `(base, amp, hz)` time-modulated scalar (xray pulses
+~0.5 Hz, neon ~0.6, cyberpunk ~0.7, transparent ~0.4). Brightened
+xray iris colour to (0.30, 0.95, 1.00) so the glow reads.
+
+**CPU bloom post-process** — sci-fi modes get a Gaussian blur of
+bright pixels added back over the original. ~3 ms at 320×320.
+Halos the eye/teeth glow and gives a soft scifi rim around the
+head. Per-style amplitude tuned (xray strongest at 0.45).
+
+**Jelly-anatomy underlay** — new `style=="jelly"` mode composites
+BP3D head anatomy behind a translucent ICT xray skin:
+- `_render_jelly_composite` renders ICT (xray) and BP3D anatomy,
+  per-pixel alpha-blends them. Skin pixels semi-translucent
+  (0.05 + luma/255 * 0.85, mid-tone skin attenuated 0.35×); eye/
+  teeth glow stays opaque.
+- Cool tint + brightness lift on BP3D so muscles read against
+  cyan skin instead of warm bone.
+- Soft Gaussian silhouette mask of the ICT head clips BP3D to
+  inside the ICT outline.
+- Final bloom over composite halos the glow through both layers.
+
+**moderngl context-sharing** — moderngl 5.12 has no API for
+switching between two standalone GL contexts in the same thread
+(verified empirically: second renderer's draws turn into black
+frames). `_GpuRenderer.__init__` now accepts an optional `ctx`
+parameter, and ict_face's `_shared_anatomy_renderer` builds one
+that reuses the ICT renderer's context. Cold start ~5s
+(shader compile + mesh upload), warm ~90 ms per frame.
+
+**Anatomy alignment** — user noted "anatomy is much larger than
+the animation". Two fixes:
+1. Drop cervical vertebrae + neck muscle group from the rendered
+   spec list (`_NECK_MUSCLE_TOKENS`: Cap., Colli, Sterno, Thyro,
+   Hyoid, Scalene, Levator Scap, Omohyoid, Platysma, Digastric).
+   142 specs → ~110 head-only.
+2. `_align_anatomy_to_ict`: width-based uniform scale (0.96 ×
+   ict_w / bp3d_w) + bbox-centroid translation. No aspect
+   distortion; anatomy sits *just inside* the ICT silhouette so
+   the bloom halo frames it.
+
+Personas: added `ict_jelly` to `personas.json`. Live-verified
+through HTTP /avatar/persona — switches mid-session.
+
+Showcase images:
+- `docs/images/ict_xray_moods.png` — 6 moods, hairless xray + tint
+- `docs/images/ict_xray_glow.png` — 8-frame eye-pulse strip
+- `docs/images/ict_jelly_moods.png` — 6 moods, jelly underlay
+- `docs/images/live_*.png` — full-GUI captures via /screenshot
+
 ## 2026-05-07 — Session 20: Sci-fi color profiles
 
 User asked for stylised color profiles: "transparent, neon, cyberpunk

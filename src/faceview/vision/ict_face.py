@@ -127,8 +127,8 @@ _SCIFI_PALETTES: dict[str, dict[str, tuple[float, float, float]]] = {
         "M_Teeth":        (0.95, 0.98, 1.00),     # bright bone
         "M_ScleraLeft":   (0.95, 0.98, 1.00),
         "M_ScleraRight":  (0.95, 0.98, 1.00),
-        "M_IrisLeft":     (0.10, 0.18, 0.25),     # dark sockets
-        "M_IrisRight":    (0.10, 0.18, 0.25),
+        "M_IrisLeft":     (0.30, 0.95, 1.00),     # glowing cyan
+        "M_IrisRight":    (0.30, 0.95, 1.00),
         "M_LacrimalFluid":(0.85, 0.95, 1.00),
         "M_EyeBlend":     (0.20, 0.40, 0.50),
         "M_EyeOcclusion": (0.04, 0.08, 0.12),
@@ -163,6 +163,47 @@ def _shader_overrides_for_style(style: str) -> dict:
     return {}
 
 
+def _xray_mood_offset(params) -> tuple[float, float, float]:
+    """Mood-driven RGB delta added on top of the xray skin palette.
+
+    Reads live AU values off ``params`` and produces a small RGB
+    shift that's mixed into the xray skin / back-of-head colours
+    only — iris / teeth / sclera stay constant so the glow eyes and
+    bone-white teeth read consistently.
+
+    Mood mapping:
+      * AU12 (smile)        → warm green-cyan tint (lift)
+      * AU4  (brow lower)   → red shift (anger)
+      * AU15 (corner drop)  → cool blue shift (sad)
+      * AU5  (lid raise)    → pale boost (fear)
+      * AU25 (jaw open)     → hot magenta core (open mouth → glow)
+    """
+    smile = max(0.0, float(getattr(params, "smile", 0.0)))
+    brow_low = float(getattr(params, "brow_lower", 0.0))
+    drop = float(getattr(params, "lip_corner_drop", 0.0))
+    lid_raise = float(getattr(params, "upper_lid_raise", 0.0))
+    jaw = float(getattr(params, "jaw_open", 0.0))
+    inner_brow = float(getattr(params, "inner_brow_raise", 0.0))
+
+    # Per-mood RGB delta in [0..1] colour space; small magnitudes so
+    # the xray base reads as the dominant tone.
+    happy = (-0.05, 0.18, 0.10)            # green-cyan lift
+    angry = (0.30, -0.10, -0.05)            # red shift
+    sad   = (-0.05, -0.05, 0.18)            # cool blue
+    fear  = (0.10, 0.10, 0.10)              # pale (and inner brow raise sensitises it)
+    open_ = (0.20, -0.05, 0.10)             # magenta-hot core when mouth opens
+
+    sad_w = max(drop, inner_brow * 0.6)
+    fear_w = lid_raise * 0.7
+    dr = (smile * happy[0] + brow_low * angry[0] + sad_w * sad[0]
+          + fear_w * fear[0] + jaw * open_[0])
+    dg = (smile * happy[1] + brow_low * angry[1] + sad_w * sad[1]
+          + fear_w * fear[1] + jaw * open_[1])
+    db = (smile * happy[2] + brow_low * angry[2] + sad_w * sad[2]
+          + fear_w * fear[2] + jaw * open_[2])
+    return float(dr), float(dg), float(db)
+
+
 def _material_palette(params) -> dict[str, tuple[float, float, float]]:
     """Build a per-material colour palette driven by the persona.
 
@@ -173,10 +214,22 @@ def _material_palette(params) -> dict[str, tuple[float, float, float]]:
 
     When ``persona.style`` is not ``"natural"`` we replace the
     palette wholesale with a sci-fi preset — neon / transparent /
-    cyberpunk / xray.
+    cyberpunk / xray. The ``xray`` preset is further modulated by
+    live AU mood (red for anger, cool for sad, pale for fear, etc.).
     """
     style = getattr(params, "_persona_style", "natural")
     if style in _SCIFI_PALETTES:
+        if style == "xray":
+            base = dict(_SCIFI_PALETTES["xray"])
+            dr, dg, db = _xray_mood_offset(params)
+            for mat in ("M_Face", "M_BackHead"):
+                r, g, b = base[mat]
+                base[mat] = (
+                    float(np.clip(r + dr, 0.0, 1.0)),
+                    float(np.clip(g + dg, 0.0, 1.0)),
+                    float(np.clip(b + db, 0.0, 1.0)),
+                )
+            return base
         return _SCIFI_PALETTES[style]
 
     sat = float(getattr(params, "_persona_skin_sat", 0.32))
@@ -209,6 +262,44 @@ def _material_palette(params) -> dict[str, tuple[float, float, float]]:
 # Subsurface scattering colour — softer warm tint, scaled down so it
 # doesn't overwhelm the base skin.
 _SSS_TINT = (0.62, 0.36, 0.30)
+
+
+# Per-material emissive base (0..1). Drives the glowing-eye effect
+# in sci-fi modes. Iris / sclera / lacrimal pop; teeth glow softly
+# (xray bone-bright); rest are 0. Modulated per-frame by
+# ``u_emit_pulse`` — natural style sets it to 0 → no glow.
+_MATERIAL_EMISSIVE: dict[str, float] = {
+    "M_IrisLeft":     1.0,
+    "M_IrisRight":    1.0,
+    "M_ScleraLeft":   0.55,
+    "M_ScleraRight":  0.55,
+    "M_LacrimalFluid":0.65,
+    "M_Teeth":        0.30,
+    "M_GumsTongue":   0.15,
+}
+
+
+# Per-style emissive pulse parameters. (base, amp, hz) — output
+# pulse is base + amp * sin(2π hz t). Natural mode is (0, 0, 0).
+_STYLE_PULSE: dict[str, tuple[float, float, float]] = {
+    "neon":        (2.20, 0.50, 0.6),
+    "transparent": (1.20, 0.30, 0.4),
+    "cyberpunk":   (1.80, 0.50, 0.7),
+    "xray":        (2.40, 0.70, 0.5),
+}
+
+
+def _emit_pulse_for(style: str) -> float:
+    """Time-varying emissive pulse magnitude for the given style.
+
+    Reads ``time.monotonic`` so the pulse advances frame-to-frame
+    without needing the avatar tick to plumb a phase argument.
+    """
+    if style not in _STYLE_PULSE:
+        return 0.0
+    base, amp, hz = _STYLE_PULSE[style]
+    import math, time
+    return float(base + amp * math.sin(2.0 * math.pi * hz * time.monotonic()))
 
 
 # Per-material specular intensity (A43). Eyes get high mirror-like
@@ -346,6 +437,12 @@ def render_face_ict(
     size: tuple[int, int] = (480, 480),
 ) -> np.ndarray:
     """Render the ICT face, deformed by params' AU values translated to ARKit."""
+    # Jelly composite mode: anatomy underlay + translucent xray skin.
+    # Diverts before the standard GL path because it composes two
+    # renderers; falls back to plain xray if BP3D meshes aren't built.
+    if getattr(params, "_persona_style", "natural") == "jelly":
+        return _render_jelly_composite(params, size)
+
     from faceview.vision.anatomy import face_params_to_au_values
     from faceview.vision.arkit_blendshapes import au_to_arkit_values
 
@@ -371,12 +468,254 @@ def render_face_ict(
     bgr = _render_via_moderngl(verts, model.triangles, size,
                                   yaw, pitch, params)
 
+    # Sci-fi bloom — extract bright pixels and add a blurred halo back
+    # over the original. Reads as glowing eyes / hot teeth / etc.
+    style = getattr(params, "_persona_style", "natural")
+    if style != "natural":
+        bgr = _apply_bloom(bgr, style)
+
     # 2D hair overlay (off by default — the procedural overlay is
     # rough; the bald ICT head reads cleaner). Set
     # ``params._enable_hair = True`` if you want to opt in.
     if getattr(params, "_enable_hair", False):
         bgr = _composite_hair_overlay(bgr, params, yaw)
     return bgr
+
+
+# Tokens identifying neck / throat / suprahyoid muscles in the BP3D
+# muscle catalog. We exclude these from the jelly-mode anatomy so
+# the BP3D layer only fills the head (skull + face muscles + eyes
+# + ears + nose) — matching ICT's head silhouette.
+_NECK_MUSCLE_TOKENS = (
+    "Cap.",          # Longus Capitis / Rectus Cap. / Obliquus Cap.
+    "Colli",         # Longus Colli
+    "Sterno",        # Sternocleidomastoid / Sternohyoid / Sternothyroid
+    "Thyro",         # Thyrohyoid
+    "Hyoid",         # Stylohyoid / Mylohyoid / Geniohyoid / Sternohyoid (suffix)
+    "Scalene",
+    "Levator Scap",  # Levator Scapulae
+    "Omohyoid",
+    "Platysma",
+    "Digastric",
+)
+
+
+def _is_neck_muscle(name: str) -> bool:
+    return any(tok in name for tok in _NECK_MUSCLE_TOKENS)
+
+
+def _align_anatomy_to_ict(
+    anatomy: np.ndarray, ict: np.ndarray, bg_rgb: tuple[int, int, int],
+) -> np.ndarray:
+    """Uniform-scale + centre BP3D anatomy onto ICT's head footprint.
+
+    The two renderers normalise to their own bboxes so the rendered
+    head sizes differ. We measure each foreground bbox, compute a
+    single uniform scale factor (no aspect distortion) that matches
+    BP3D's bbox HEIGHT to ICT's bbox HEIGHT, then translate so the
+    bbox vertical *and* horizontal centres align. That keeps the
+    skull cap on the head crown, the eye sockets near the ICT eyes,
+    and the cervical spine centred on the neck.
+    """
+    import cv2
+
+    h, w, _ = ict.shape
+    bg_arr = np.array(bg_rgb, dtype=np.float32)
+
+    def fg_bbox(img: np.ndarray) -> tuple[int, int, int, int] | None:
+        diff = np.linalg.norm(img.astype(np.float32) - bg_arr[None, None, :],
+                                axis=2)
+        mask = diff > 20.0
+        ys, xs = np.where(mask)
+        if not len(xs):
+            return None
+        return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+    a_box = fg_bbox(anatomy)
+    i_box = fg_bbox(ict)
+    if a_box is None or i_box is None:
+        return anatomy
+
+    ax0, ay0, ax1, ay1 = a_box
+    ix0, iy0, ix1, iy1 = i_box
+
+    # Width is the more reliable size cue once neck content is
+    # filtered out — both ICT and BP3D heads have similar ear-to-ear
+    # widths even when overall bbox heights differ. Slight downscale
+    # (0.96) keeps the anatomy *just inside* the ICT silhouette so
+    # the bloom halo around the ICT face frames it.
+    a_w = max(1, ax1 - ax0 + 1)
+    i_w = max(1, ix1 - ix0 + 1)
+    scale = (i_w / a_w) * 0.96
+
+    a_crop = anatomy[ay0:ay1 + 1, ax0:ax1 + 1]
+    new_w = max(1, int(round(a_crop.shape[1] * scale)))
+    new_h = max(1, int(round(a_crop.shape[0] * scale)))
+    a_resized = cv2.resize(a_crop, (new_w, new_h),
+                            interpolation=cv2.INTER_LINEAR)
+
+    # Target top-left so the resized bbox centre matches ICT centre.
+    icx = (ix0 + ix1) / 2.0
+    icy = (iy0 + iy1) / 2.0
+    tx = int(round(icx - new_w / 2.0))
+    ty = int(round(icy - new_h / 2.0))
+
+    out = np.zeros_like(ict)
+    out[:, :] = bg_arr.astype(np.uint8)
+    # Source/dest cropping for boundary handling.
+    sx0 = max(0, -tx)
+    sy0 = max(0, -ty)
+    dx0 = max(0, tx)
+    dy0 = max(0, ty)
+    cw = max(0, min(new_w - sx0, w - dx0))
+    ch = max(0, min(new_h - sy0, h - dy0))
+    if cw > 0 and ch > 0:
+        out[dy0:dy0 + ch, dx0:dx0 + cw] = a_resized[sy0:sy0 + ch,
+                                                       sx0:sx0 + cw]
+    return out
+
+
+def _render_jelly_composite(params, size: tuple[int, int]) -> np.ndarray:
+    """Anatomy-underlay jelly-person mode.
+
+    Renders BP3D head anatomy (skull / muscles / eyes / cartilages)
+    at the same yaw/pitch as the ICT face, then alpha-blends an xray
+    ICT skin over it. Skin pixels go translucent so the anatomy
+    shows through; eye / teeth glows stay opaque so they read as
+    self-lit through the skin.
+
+    The BP3D and ICT meshes have different topologies (no vertex
+    correspondence) so only **head pose and jaw open** sync — smile,
+    pucker, and other ICT blendshape deformations don't propagate
+    onto the BP3D anatomy. For a translucent xray look that's
+    acceptable; the deeper anatomy is mostly bone (rigid) and the
+    mismatch is hidden behind the ICT lip surface.
+    """
+    import cv2
+
+    # First render the ICT face with style temporarily set to xray
+    # so the palette + shaders + pulses all do the right thing.
+    style_in = getattr(params, "_persona_style", "natural")
+    params._persona_style = "xray"
+    try:
+        ict_bgr = render_face_ict(params, size)
+    finally:
+        params._persona_style = style_in
+
+    # Render the BP3D anatomy underlay through a GpuRenderer that
+    # *shares the ICT moderngl context*. moderngl 5.x exposes no
+    # context-switch API, so two standalone contexts in the same
+    # thread can't alternate — sharing the context keeps both
+    # renderers usable in one composite.
+    try:
+        from faceview.vision.anatomy_meshes import (
+            list_available_meshes, meshes_available,
+        )
+        if not meshes_available():
+            return ict_bgr
+        from faceview.vision.anatomy_catalog import specs_for_layer_set
+    except Exception:
+        return ict_bgr
+
+    avail = set(list_available_meshes())
+    raw_specs = [s for s in specs_for_layer_set("features") if s.fma in avail]
+    # Restrict to head-only meshes — drop cervical vertebrae and the
+    # neck-muscle group so the BP3D anatomy doesn't extend below the
+    # ICT chin/collar line.
+    specs = [s for s in raw_specs if s.category != "vertebra"
+             and not _is_neck_muscle(s.name)]
+    if not specs:
+        return ict_bgr
+
+    yaw = float(getattr(params, "yaw", 0.0)) * 0.6
+    pitch = float(getattr(params, "pitch", 0.0)) * 0.4
+    bg_rgb = _hex_to_rgb(getattr(params, "background", "#000810"))
+    try:
+        anatomy_bgr = _shared_anatomy_renderer().render(
+            specs, size, yaw=yaw, pitch=pitch, bg=bg_rgb,
+        )
+    except Exception:
+        return ict_bgr
+
+    # Match BP3D head footprint to ICT head footprint with a uniform
+    # scale + centroid translation (no aspect-distorting bbox stretch).
+    anatomy_bgr = _align_anatomy_to_ict(anatomy_bgr, ict_bgr, bg_rgb)
+
+    # Cool-tint and brighten the anatomy so it reads as part of the
+    # xray aesthetic instead of warm bone — crush warm channels hard
+    # and lift overall brightness so muscles/skull pop through skin.
+    anatomy_f = anatomy_bgr.astype(np.float32)
+    cool_tint = np.array([1.80, 1.40, 0.35], dtype=np.float32)  # BGR
+    anatomy_bgr = np.clip(anatomy_f * cool_tint + 12.0,
+                            0, 255).astype(np.uint8)
+
+    # Build per-pixel alpha for the ICT layer. Pixels much brighter
+    # than background are face/eyes/teeth → high alpha (opaque).
+    # Mid-tone skin → low alpha (anatomy shows through).
+    import cv2
+    luma = ict_bgr.max(axis=2).astype(np.float32)
+    bg_ref = max(np.array(bg_rgb).max(), 8.0)
+    face_mask_hard = (luma > bg_ref + 12).astype(np.uint8)
+    # Soft silhouette mask of the ICT head — used to clip the BP3D
+    # anatomy so it only shows inside the ICT outline (BP3D extends
+    # further down into the neck/shoulders).
+    silhouette = cv2.GaussianBlur(face_mask_hard.astype(np.float32),
+                                    (0, 0), sigmaX=4.0, sigmaY=4.0)
+    silhouette = np.clip(silhouette, 0.0, 1.0)
+
+    # Skin α scales smoothly with luminance — bright glow ~0.85,
+    # plain skin ~0.20. Lower baseline lets the anatomy show
+    # clearly through neutral skin tones too.
+    alpha = np.clip(0.05 + (luma / 255.0) * 0.85, 0.0, 0.92)
+    alpha = alpha * face_mask_hard.astype(np.float32)
+    # Knock down bright-but-not-glowing pixels (face highlights from
+    # SSS terminator) so we don't get a thick opaque cyan band on the
+    # forehead/cheeks. Glow regions (~250+) stay opaque.
+    bright_skin = (luma > 130) & (luma < 230)
+    alpha[bright_skin] *= 0.35
+
+    # Clip anatomy to the ICT silhouette: outside the silhouette
+    # show plain background; inside, show anatomy.
+    bg_color = np.array([bg_rgb[2], bg_rgb[1], bg_rgb[0]],
+                          dtype=np.float32)  # bg_rgb is RGB; cv2 is BGR
+    s3 = silhouette[:, :, None]
+    anatomy_clipped = (anatomy_bgr.astype(np.float32) * s3
+                       + bg_color * (1.0 - s3))
+
+    a3 = alpha[:, :, None]
+    composite = ict_bgr.astype(np.float32) * a3 \
+        + anatomy_clipped * (1.0 - a3)
+    out = np.clip(composite, 0.0, 255.0).astype(np.uint8)
+
+    # Re-apply a softer bloom over the composite so the eye glow
+    # halos through the anatomy underlay.
+    return _apply_bloom(out, "xray")
+
+
+def _apply_bloom(bgr: np.ndarray, style: str) -> np.ndarray:
+    """Cheap bloom — Gaussian blur of bright pixels mixed back in.
+
+    Pulls a high-pass mask above ``threshold``, blurs it large, and
+    additively blends. Per-style amplitude tunes the strength.
+    Total cost ≈ 3 ms at 320×320 (cv2 GaussianBlur).
+    """
+    import cv2  # already imported at top in test paths
+    amp = {"neon": 0.35, "transparent": 0.20,
+           "cyberpunk": 0.30, "xray": 0.45}.get(style, 0.0)
+    if amp <= 0:
+        return bgr
+    threshold = 180  # luminance cutoff (0..255)
+    # Build a mask of bright pixels.
+    luma = bgr.max(axis=2)
+    mask = (luma > threshold).astype(np.uint8)
+    if not mask.any():
+        return bgr
+    bright = bgr * mask[:, :, None]
+    # Wide Gaussian halo.
+    blurred = cv2.GaussianBlur(bright, (0, 0), sigmaX=8.0, sigmaY=8.0)
+    out = np.clip(bgr.astype(np.float32) + blurred.astype(np.float32) * amp,
+                   0.0, 255.0).astype(np.uint8)
+    return out
 
 
 def _composite_hair_overlay(bgr: np.ndarray, params, yaw: float) -> np.ndarray:
@@ -562,15 +901,16 @@ def _render_via_moderngl(
     span = float(np.linalg.norm(vmax - vmin))
     scale = 1.6 / max(span, 1e-6)
 
-    rend._style_uniforms = _shader_overrides_for_style(
-        getattr(params, "_persona_style", "natural")
-    )
+    style = getattr(params, "_persona_style", "natural")
+    rend._style_uniforms = _shader_overrides_for_style(style)
+    rend._emit_pulse = _emit_pulse_for(style)
     return rend.render(
         verts=verts.astype(np.float32),
         normals=vert_norms.astype(np.float32),
         triangles=triangles.astype(np.uint32),
         vert_colors=_per_vertex_colors_for(params).astype(np.float32),
         vert_spec=_per_vertex_specular().astype(np.float32),
+        vert_emit=_per_vertex_emissive().astype(np.float32),
         centre=centre.astype(np.float32),
         scale=float(scale),
         yaw=yaw, pitch=pitch,
@@ -716,13 +1056,13 @@ def _per_vertex_colors_for(params) -> np.ndarray:
     # lip/brow/cheek post-processing which is meant for natural skin.
     style = getattr(params, "_persona_style", "natural")
     if style != "natural":
-        # Add subtle hair-region brightening even in sci-fi mode for visual structure.
-        regions_sf = _vertex_regions()
-        # Scalp Y heuristic still applies.
-        hair_y = verts[:, 1].max() - (verts[:, 1].max() - verts[:, 1].min()) * 0.32
-        hair_mask_sf = on_face & (verts[:, 1] > hair_y)
-        if hair_mask_sf.any():
-            colors[hair_mask_sf] = hair_color
+        # Xray is hairless — bare skull look avoids the uncanny
+        # valley and matches the medical-glow aesthetic.
+        if style != "xray":
+            hair_y = verts[:, 1].max() - (verts[:, 1].max() - verts[:, 1].min()) * 0.32
+            hair_mask_sf = on_face & (verts[:, 1] > hair_y)
+            if hair_mask_sf.any():
+                colors[hair_mask_sf] = hair_color
         return np.clip(colors, 0.0, 1.0).astype(np.float32)
 
     # ── Hair cap (Y heuristic — no hair blendshapes in ICT) ──
@@ -789,6 +1129,26 @@ def _per_vertex_colors() -> np.ndarray:
 
 
 @lru_cache(maxsize=1)
+def _per_vertex_emissive() -> np.ndarray:
+    """Per-vertex emissive intensity, baked from material map.
+
+    Always passed into the GL pipeline; per-frame ``u_emit_pulse``
+    scales it (0 in natural mode → invisible)."""
+    m = load_ict_model()
+    n_verts = len(m.vertices)
+    accum = np.zeros(n_verts, dtype=np.float64)
+    counts = np.zeros(n_verts, dtype=np.int32)
+    for ti, mat_idx in enumerate(m.tri_materials):
+        e = (_MATERIAL_EMISSIVE.get(m.materials[mat_idx], 0.0)
+             if 0 <= mat_idx < len(m.materials) else 0.0)
+        for v in m.triangles[ti]:
+            accum[v] += e
+            counts[v] += 1
+    counts = np.maximum(counts, 1)
+    return (accum / counts).astype(np.float32)
+
+
+@lru_cache(maxsize=1)
 def _per_vertex_specular() -> np.ndarray:
     """Per-vertex specular intensity (A43): eyes wet, skin matte."""
     m = load_ict_model()
@@ -814,14 +1174,17 @@ in vec3 in_pos;
 in vec3 in_norm;
 in vec3 in_color;
 in float in_spec;
+in float in_emit;
 out vec3 v_norm;
 out vec3 v_color;
 out float v_spec;
+out float v_emit;
 void main() {
     gl_Position = u_mvp * vec4(in_pos, 1.0);
     v_norm = u_norm_mat * in_norm;
     v_color = in_color;
     v_spec = in_spec;
+    v_emit = in_emit;
 }
 """
 
@@ -843,9 +1206,11 @@ uniform vec3 u_sss_tint;
 uniform float u_ambient;
 uniform float u_specular;
 uniform float u_shininess;
+uniform float u_emit_pulse;
 in vec3 v_norm;
 in vec3 v_color;
 in float v_spec;
+in float v_emit;
 out vec4 frag;
 void main() {
     vec3 n = normalize(v_norm);
@@ -888,6 +1253,12 @@ void main() {
     vec3 diffuse = (1.0 - u_ambient) * wrap * v_color;
     vec3 col = ambient + diffuse + sss + spec + rim;
 
+    // Emissive — eyes / teeth glow in sci-fi modes. Pulse scalar is
+    // 0 in natural mode so this term vanishes there. Adding the
+    // emissive bypasses Lambertian shading so iris reads as a
+    // self-lit panel rather than a recessed wet surface.
+    col += v_emit * u_emit_pulse * v_color;
+
     frag = vec4(col, 1.0);
 }
 """
@@ -904,6 +1275,7 @@ class _ICTRenderer:
         self._fbo = None
         self._fbo_size: tuple[int, int] | None = None
         self._style_uniforms: dict = {}
+        self._emit_pulse: float = 0.0
 
     def _ensure_fbo(self, w: int, h: int) -> None:
         if self._fbo_size == (w, h) and self._fbo is not None:
@@ -925,6 +1297,7 @@ class _ICTRenderer:
         triangles: np.ndarray,
         vert_colors: np.ndarray,
         vert_spec: np.ndarray,
+        vert_emit: np.ndarray,
         centre: np.ndarray,
         scale: float,
         yaw: float,
@@ -967,17 +1340,20 @@ class _ICTRenderer:
         self.prog["u_ambient"].value = self._style_uniforms.get("ambient", 0.32)
         self.prog["u_specular"].value = self._style_uniforms.get("specular", 0.30)
         self.prog["u_shininess"].value = self._style_uniforms.get("shininess", 22.0)
+        self.prog["u_emit_pulse"].value = float(self._emit_pulse)
 
         vbo = self.ctx.buffer(verts.tobytes())
         nbo = self.ctx.buffer(normals.tobytes())
         cbo = self.ctx.buffer(vert_colors.tobytes())
         sbo = self.ctx.buffer(vert_spec.tobytes())
+        ebo = self.ctx.buffer(vert_emit.tobytes())
         ibo = self.ctx.buffer(triangles.tobytes())
         vao = self.ctx.vertex_array(self.prog, [
             (vbo, "3f", "in_pos"),
             (nbo, "3f", "in_norm"),
             (cbo, "3f", "in_color"),
             (sbo, "1f", "in_spec"),
+            (ebo, "1f", "in_emit"),
         ], ibo)
         vao.render(self.mgl.TRIANGLES)
         vao.release()
@@ -985,6 +1361,7 @@ class _ICTRenderer:
         nbo.release()
         cbo.release()
         sbo.release()
+        ebo.release()
         ibo.release()
 
         data = self._fbo.read(components=3)
@@ -996,6 +1373,20 @@ class _ICTRenderer:
 @lru_cache(maxsize=1)
 def _ensure_renderer() -> _ICTRenderer:
     return _ICTRenderer()
+
+
+@lru_cache(maxsize=1)
+def _shared_anatomy_renderer():
+    """BP3D anatomy GpuRenderer sharing the ICT moderngl context.
+
+    Built lazily on first jelly-composite call. Sharing the context
+    avoids the moderngl-5 multi-context limitation (no context-
+    switching API → only one standalone context can be active per
+    thread → second renderer's draws turn into black frames).
+    """
+    from faceview.vision.gpu_renderer import _GpuRenderer
+    ict = _ensure_renderer()
+    return _GpuRenderer(ctx=ict.ctx)
 
 
 def _hex_to_rgb(c: str) -> tuple[int, int, int]:
