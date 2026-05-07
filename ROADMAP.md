@@ -22,6 +22,7 @@ Track legend:
 | A2 | A | Coarticulation: blended viseme windows (attack + release) | done |
 | S1 | S | Service ops: `set_emotion`, `set_persona`, `avatar_say` (HTTP + MCP) | done |
 | R2 | R | Persona showcase render + README block | done |
+| A7 | A | Anatomical renderer (86 landmarks + 43 muscles, 4 render modes) | done |
 
 ## Next (clear winners, queued)
 
@@ -46,6 +47,8 @@ Track legend:
 | S5 | S | MCP `set_face_params` raw passthrough | For experiments — bypass FACS, set FaceParams directly. |
 | A5 | A | Multiple face-shape presets (round / oval / heart) | Geometry params on FaceParams. |
 | A6 | A | Auto-AVSR ONNX VSR upgrade (true lip reading) | Keep current visemes path; add real VSR as opt-in. Heavy. |
+| A8 | A | True 3D head via QOpenGLWidget + faceforge STL meshes | Bring across BodyParts3D meshes + skinning. Multi-week. |
+| A9 | A | Per-muscle activation curves (not just max) for richer overlays | Replace `muscle_activation` max with weighted-sum + clip. |
 | X1 | X | Local LLM backend (Ollama) | Pluggable client behind `llm.client` interface. |
 | X2 | X | Streaming TTS (Kokoro / Piper) | Replace pyttsx3 demo; keep pyttsx3 as fallback. |
 | X3 | X | Web UI mode (server + browser frontend) | Headless faceView, browser renders via WS. |
@@ -53,6 +56,15 @@ Track legend:
 ---
 
 ## Done
+
+### 2026-05-06 — Session 5
+- A7 anatomical renderer: 86-point landmark template + 43 expression
+  muscles (lifted from faceforge) drive AU-based 2D vertex
+  displacement. Three new render modes (`anatomical`,
+  `anatomy_overlay`, `wireframe`) toggleable via `Persona.render_mode`.
+- New tools/animate_anatomical.py renders comparison demo and emotion
+  grid into docs/images/.
+- Tests: 48 → 63.
 
 ### 2026-05-06 — Sessions 1-3
 - Project scaffolding, conda env, package metadata, INTERFACE.md, CLAUDE.md.

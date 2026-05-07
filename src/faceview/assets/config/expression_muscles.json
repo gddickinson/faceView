@@ -1,0 +1,280 @@
+[
+  {
+    "name": "Frontalis R",
+    "auMap": {
+      "AU1": 0.7,
+      "AU2": 0.7
+    }
+  },
+  {
+    "name": "Frontalis L",
+    "auMap": {
+      "AU1": 0.7,
+      "AU2": 0.7
+    }
+  },
+  {
+    "name": "Orbic. Oculi Orb. R",
+    "auMap": {
+      "AU6": 0.8
+    }
+  },
+  {
+    "name": "Orbic. Oculi Orb. L",
+    "auMap": {
+      "AU6": 0.8
+    }
+  },
+  {
+    "name": "Orbic. Oculi Palp. R",
+    "auMap": {
+      "AU6": 0.4,
+      "blink": 1.0
+    }
+  },
+  {
+    "name": "Orbic. Oculi Palp. L",
+    "auMap": {
+      "AU6": 0.4,
+      "blink": 1.0
+    }
+  },
+  {
+    "name": "Corrugator Sup. R",
+    "auMap": {
+      "AU4": 1.0
+    }
+  },
+  {
+    "name": "Corrugator Sup. L",
+    "auMap": {
+      "AU4": 1.0
+    }
+  },
+  {
+    "name": "Procerus R",
+    "auMap": {
+      "AU4": 0.5,
+      "AU9": 0.8
+    }
+  },
+  {
+    "name": "Procerus L",
+    "auMap": {
+      "AU4": 0.5,
+      "AU9": 0.8
+    }
+  },
+  {
+    "name": "Nasalis R",
+    "auMap": {
+      "AU9": 0.6
+    }
+  },
+  {
+    "name": "Nasalis L",
+    "auMap": {
+      "AU9": 0.6
+    }
+  },
+  {
+    "name": "Depr. Septi Nasi R",
+    "auMap": {
+      "AU9": 0.4,
+      "AU25": 0.3
+    }
+  },
+  {
+    "name": "Depr. Septi Nasi L",
+    "auMap": {
+      "AU9": 0.4,
+      "AU25": 0.3
+    }
+  },
+  {
+    "name": "Zygomatic Maj. R",
+    "auMap": {
+      "AU12": 1.0
+    }
+  },
+  {
+    "name": "Zygomatic Maj. L",
+    "auMap": {
+      "AU12": 1.0
+    }
+  },
+  {
+    "name": "Zygomatic Min. R",
+    "auMap": {
+      "AU12": 0.5,
+      "AU6": 0.3
+    }
+  },
+  {
+    "name": "Zygomatic Min. L",
+    "auMap": {
+      "AU12": 0.5,
+      "AU6": 0.3
+    }
+  },
+  {
+    "name": "Lev. Labii Sup. R",
+    "auMap": {
+      "AU9": 0.5,
+      "AU12": 0.3
+    }
+  },
+  {
+    "name": "Lev. Labii Sup. L",
+    "auMap": {
+      "AU9": 0.5,
+      "AU12": 0.3
+    }
+  },
+  {
+    "name": "Lev. Labii Alae. R",
+    "auMap": {
+      "AU9": 0.9
+    }
+  },
+  {
+    "name": "Lev. Labii Alae. L",
+    "auMap": {
+      "AU9": 0.9
+    }
+  },
+  {
+    "name": "Lev. Anguli Oris R",
+    "auMap": {
+      "AU12": 0.6
+    }
+  },
+  {
+    "name": "Lev. Anguli Oris L",
+    "auMap": {
+      "AU12": 0.6
+    }
+  },
+  {
+    "name": "Orbicularis Oris",
+    "auMap": {
+      "AU25": 0.7,
+      "AU20": 0.4,
+      "AU22": 0.8
+    }
+  },
+  {
+    "name": "Depr. Anguli Oris R",
+    "auMap": {
+      "AU15": 1.0
+    }
+  },
+  {
+    "name": "Depr. Anguli Oris L",
+    "auMap": {
+      "AU15": 1.0
+    }
+  },
+  {
+    "name": "Depr. Labii Inf. R",
+    "auMap": {
+      "AU25": 0.5,
+      "AU26": 0.4
+    }
+  },
+  {
+    "name": "Depr. Labii Inf. L",
+    "auMap": {
+      "AU25": 0.5,
+      "AU26": 0.4
+    }
+  },
+  {
+    "name": "Mentalis R",
+    "auMap": {
+      "AU25": 0.4
+    }
+  },
+  {
+    "name": "Mentalis L",
+    "auMap": {
+      "AU25": 0.4
+    }
+  },
+  {
+    "name": "Risorius R",
+    "auMap": {
+      "AU20": 0.8
+    }
+  },
+  {
+    "name": "Risorius L",
+    "auMap": {
+      "AU20": 0.8
+    }
+  },
+  {
+    "name": "Buccinator R",
+    "auMap": {
+      "AU20": 0.3,
+      "AU6": 0.2
+    }
+  },
+  {
+    "name": "Buccinator L",
+    "auMap": {
+      "AU20": 0.3,
+      "AU6": 0.2
+    }
+  },
+  {
+    "name": "Platysma R",
+    "auMap": {
+      "AU20": 0.5
+    }
+  },
+  {
+    "name": "Platysma L",
+    "auMap": {
+      "AU20": 0.5
+    }
+  },
+  {
+    "name": "Occipitalis R",
+    "auMap": {
+      "AU1": 0.15,
+      "AU2": 0.15
+    }
+  },
+  {
+    "name": "Occipitalis L",
+    "auMap": {
+      "AU1": 0.15,
+      "AU2": 0.15
+    }
+  },
+  {
+    "name": "Temporoparietalis R",
+    "auMap": {
+      "AU6": 0.1
+    }
+  },
+  {
+    "name": "Temporoparietalis L",
+    "auMap": {
+      "AU6": 0.1
+    }
+  },
+  {
+    "name": "Lev. Palpebrae Sup. R",
+    "auMap": {
+      "AU5": 1.0
+    }
+  },
+  {
+    "name": "Lev. Palpebrae Sup. L",
+    "auMap": {
+      "AU5": 1.0
+    }
+  }
+]

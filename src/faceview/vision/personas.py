@@ -24,12 +24,19 @@ from faceview.vision.sim_face import FaceParams
 
 @dataclass
 class Persona:
-    """Static appearance overlay for the procedural face."""
+    """Static appearance overlay for the procedural face.
+
+    ``render_mode`` selects the renderer family (``stylised`` /
+    ``anatomical`` / ``anatomy_overlay`` / ``wireframe``). The default
+    stays on ``stylised`` so existing tests and personas keep their
+    look.
+    """
     name: str
     skin_hue: float = 28.0
     hair_color: str = "#2c1810"
     lip_color: str = "#a44a4a"
     background: str = "#0c0f14"
+    render_mode: str = "stylised"
 
 
 @lru_cache(maxsize=1)
@@ -54,6 +61,7 @@ def load_persona(name: str) -> Persona:
         hair_color=str(raw.get("hair_color", "#2c1810")),
         lip_color=str(raw.get("lip_color", "#a44a4a")),
         background=str(raw.get("background", "#0c0f14")),
+        render_mode=str(raw.get("render_mode", "stylised")),
     )
 
 
@@ -63,6 +71,7 @@ def apply_persona(params: FaceParams, persona: Persona) -> FaceParams:
     params.hair_color = persona.hair_color
     params.lip_color = persona.lip_color
     params.background = persona.background
+    params.render_mode = persona.render_mode
     return params
 
 

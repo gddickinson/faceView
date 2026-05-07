@@ -73,6 +73,32 @@ Appearance is decoupled from animation. The dynamic AU state (mouth open, brow u
 
 Visemes are not played as discrete steps. Each viseme contributes during a triangular envelope (40 ms attack, 60 ms release) around its phoneme slot, and `viseme_blend_at()` returns a per-AU weighted-max across active envelopes. The result is continuous AU trajectories: an outgoing viseme fades down as the incoming one ramps up, instead of snapping. The avatar's smoothing layer then sits on top.
 
+### Anatomical renderer
+
+A second renderer is shipped alongside the stylised one. It is built on a hand-curated 86-point landmark template at canonical face proportions (rule of thirds, eye spacing, lip rest position) and the **43 expression muscles** lifted from [FaceForge's anatomy app](https://github.com/gddickinson/face_app)'s catalogue, with each muscle's AU map preserved. Every AU activation resolves through the muscle layer to produce 2D vertex displacements with anatomical direction — zygomaticus major lifts the lip corner up *and* outward, levator labii alaeque nasi pulls the upper lip and nasal wing together, mentalis pushes the lower lip up via the chin pad — before any drawing happens.
+
+<p align="center">
+  <img src="docs/images/anatomical_emotions.png" alt="anatomical face — 8 emotions" width="100%">
+</p>
+
+*Eight FACS-driven emotions rendered through the anatomical pipeline. Same model — only the AU mix changes. Note the nasolabial fold appearing on smiles, the cupid's bow + vermillion border on lips, the mentolabial sulcus under the lower lip, the limbal ring on each iris, and AU9-driven nasal wrinkle on disgust.*
+
+<p align="center">
+  <img src="docs/images/anatomical_talking.gif" alt="anatomical avatar speaking" width="48%">
+  <img src="docs/images/anatomical_overlay.gif" alt="anatomy overlay during speech" width="48%">
+</p>
+
+*Left: anatomical talking avatar — same FACS / phoneme / viseme pipeline as the stylised version, just routed through the muscle-driven landmark deformation. Right: the **anatomy overlay** mode shows each muscle glowing in proportion to its current activation, fiber direction drawn as a tick. Watch zygomaticus light up on a smile, orbicularis oris contract for `OO`, mentalis fire when the jaw closes.*
+
+Three modes are exposed via a `Persona`'s `render_mode` field, switchable at runtime via `POST /avatar/persona`:
+
+| Mode | Use |
+|---|---|
+| `stylised` | Default — the layered cartoony pipeline. Cheap, expressive, persona-friendly. |
+| `anatomical` | Muscle-driven 2D portrait with shaded skin, real eye anatomy, cupid's bow, mentolabial sulcus. |
+| `anatomy_overlay` | Same as anatomical plus a translucent muscle-activation layer. Inspection / teaching / debugging emotion presets. |
+| `wireframe` | Landmark dots + group polylines on a dark background. Cheap, deterministic, shows the underlying template. |
+
 ## The simulated face — building blocks
 
 `FaceParams` is the renderer's input (yaw / pitch / eye_open / jaw_open / smile / brow_raise / pupil_x / pupil_y / skin_hue). `FaceState` is the animation pipeline's input (12 FACS AUs + head pose + gaze + blink). The bridge is `face_state_to_params()`. A `SimCameraWorker` posts `FRAME` events identical in shape to the real `CameraWorker`'s output, plus matching `PRESENCE / MOUTH_ACTIVITY / EMOTION / IDENTITY` events.
@@ -229,7 +255,7 @@ Then a Claude Code session can call `send_chat`, `speak`, `camera_state`, `list_
 ## Testing
 
 ```bash
-pytest                # 48 tests, all green, <2 s
+pytest                # 63 tests, all green, <2 s
 ```
 
 Tests run fully offscreen (`QT_QPA_PLATFORM=offscreen` is set in `tests/conftest.py`) and require only the `[dev]` extra — no real ML model is loaded.

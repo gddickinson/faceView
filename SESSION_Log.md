@@ -13,6 +13,45 @@
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
 
+## 2026-05-06 — Session 5: Anatomical renderer
+
+- Investigated faceforge (3D OpenGL anatomy app at
+  `/Volumes/GeorgeDrive/claude_test/face_app/faceforge`). It's far
+  heavier than would fit cleanly into faceView (BodyParts3D STL
+  meshes, OpenGL skinning, ~6,300 lines of anatomy code), but its
+  43-muscle expression catalogue with AU maps was directly liftable.
+- Bundled `assets/config/expression_muscles.json` — trimmed catalogue
+  (name + AU map only), no STL refs.
+- New `vision/anatomy.py` (382 lines): 86-point landmark template
+  generated programmatically at canonical face proportions
+  (rule-of-thirds, eye spacing, lip rest), plus a `MUSCLE_LAYOUT`
+  table giving each muscle a 2D centroid, fiber direction, and
+  influence radius. `deform_landmarks(base, au_values)` applies
+  every active muscle's pull to every landmark within its radius.
+- New `vision/sim_face_anatomical.py` (198 lines) + helper module
+  `sim_face_anatomical_parts.py` (~520 lines) — anatomically grounded
+  2D renderer. Layered: hair-back, skin oval, side/brow/nasolabial
+  shading, cheek apples, hair-front, brows with hair strokes, eyes
+  (sclera + iris with limbal ring + pupil + specular + lashes), nose
+  (bridge shadow + alar wings + nostrils + AU9 wrinkle), mouth
+  (cupid's bow + cavity + teeth strip), mentolabial sulcus.
+- Three render modes via `Persona.render_mode`:
+  `anatomical` (default for anatomical persona), `anatomy_overlay`
+  (translucent muscle layer with fiber-direction ticks), `wireframe`
+  (landmark dots + group polylines). The stylised renderer remains
+  the default for backward compatibility.
+- `sim_face.render_face` now dispatches based on `params.render_mode`,
+  so the avatar pipeline picks up the new modes via persona only —
+  no other code changes.
+- Three new personas in `personas.json`: `anatomical`,
+  `anatomy_overlay`, `wireframe`.
+- Demo: `tools/animate_anatomical.py` produces
+  `docs/images/anatomical_talking.gif`,
+  `anatomical_overlay.gif`, `anatomical_compare.gif` (side-by-side
+  stylised vs anatomical) and an emotion grid PNG.
+- Tests: 48 → 63 (+8 anatomy unit tests, +7 render-mode dispatch
+  smoke tests). All green.
+
 ## 2026-05-06 — Session 4: Roadmap + personas + coarticulation + CI
 
 - Added `ROADMAP.md` — five tracks (R/L/A/S/X) covering reliability, the

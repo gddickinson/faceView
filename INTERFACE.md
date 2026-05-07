@@ -48,18 +48,27 @@ faceView/
 │   │   ├── visemes.py           15-class viseme alphabet → AU targets
 │   │   ├── speech.py            Text → ARPAbet phonemes → timed visemes;
 │   │   │                        viseme_blend_at coarticulation envelope
-│   │   ├── personas.py          Persona overlay (skin/hair/lip/bg) + loader
-│   │   ├── sim_face_parts.py    Brow/eye/cheek/nose/mouth helpers
+│   │   ├── personas.py          Persona overlay (skin/hair/lip/bg/render_mode) + loader
+│   │   ├── sim_face_parts.py    Brow/eye/cheek/nose/mouth helpers (stylised)
+│   │   ├── anatomy.py           86-pt landmarks + 43 expression muscles +
+│   │   │                        AU-driven landmark deformation
+│   │   ├── sim_face_anatomical.py  Anatomical renderer entry + dispatcher
+│   │   ├── sim_face_anatomical_parts.py Anatomical feature drawers
+│   │   │                        (skin/cheeks/brows/eyes/nose/mouth/hair)
+│   │   ├── sim_face_anatomy_overlay.py  Muscle activation overlay +
+│   │   │                        wireframe debug renderer
 │   │   └── avatar.py            TalkingAvatar — idle (blink/breath/saccade)
 │   │                            + coarticulated lip-sync from text
 │   │                            + persona overlay applied per tick
 │   └── assets/
 │       ├── config/
-│       │   ├── au_definitions.json   12 FACS AU id→name map
-│       │   ├── expressions.json      12 emotion presets (AU dicts)
-│       │   └── personas.json         Bundled appearance presets
+│       │   ├── au_definitions.json     12 FACS AU id→name map
+│       │   ├── expressions.json        12 emotion presets (AU dicts)
+│       │   ├── expression_muscles.json 43 expression muscles + AU maps
+│       │   │                            (lifted from faceforge)
+│       │   └── personas.json           Bundled appearance presets
 │       └── data/
-│           └── cmu_dict_compact.json 150-word CMU pronouncing dict
+│           └── cmu_dict_compact.json   150-word CMU pronouncing dict
 │   ├── llm/
 │   │   ├── claude_client.py     anthropic SDK; demo fallback if no key
 │   │   └── conversation.py      Message-history dataclass + serialization
@@ -81,6 +90,7 @@ faceView/
     ├── run_headless.py          Offscreen launch + smoke screenshot
     ├── capture_gui_screenshots.py  Drives GUI states for README images
     ├── animate_talking.py       Talking-avatar GIF + strip + monitor PNG
+    ├── animate_anatomical.py    Anatomical-mode GIFs + emotion grid
     ├── render_personas.py       Persona contact sheet (docs/images/personas.png)
     ├── enroll_owner.py          One-time face-enrollment routine
     └── run_mcp_server.py        Standalone MCP entry for Claude Code config
@@ -99,7 +109,9 @@ every push, archiving the screenshot as a build artefact.
 | `Screenshotter` | `gui/screenshotter.py` | `capture(widget, path)` works in live + offscreen modes |
 | `ClaudeClient` | `llm/claude_client.py` | `async stream(messages)` → token chunks; demo fallback |
 | `Service` | `server/service.py` | `send_chat`, `screenshot`, `camera_state`, `speak`, `list_events`, plus avatar ops `set_emotion`, `set_persona`, `avatar_say`, `list_personas`. Used by both HTTP and MCP adapters. |
-| `Persona` | `vision/personas.py` | Static appearance overlay (skin_hue / hair / lip / background) applied to every `FaceParams` at render time. |
+| `Persona` | `vision/personas.py` | Static appearance overlay (skin_hue / hair / lip / background / render_mode) applied to every `FaceParams` at render time. |
+| `Muscle` | `vision/anatomy.py` | One of 43 expression muscles. Centroid + fiber direction + AU map drive landmark displacement during anatomical rendering. |
+| `Landmark` | `vision/anatomy.py` | 86 anatomically-positioned points in a normalised face box. Drives the anatomical renderer. |
 | `FaceState` | `vision/face_state.py` | 12 FACS Action Units + head pose + gaze + blink. The animation pipeline's primary state. |
 | `TalkingAvatar` | `vision/avatar.py` | Owns FaceState; ticks combine baseline emotion + idle (blink/breath/saccade) + utterance lip-sync. |
 | `SpeechEngine` | `vision/speech.py` | Text → ARPAbet phonemes (CMU dict + letter rules) → timed visemes → AU targets. |

@@ -59,6 +59,11 @@ class FaceParams:
     hair_color: str = "#2c1810"
     lip_color: str = "#a44a4a"
 
+    # Renderer selection. "stylised" = the layered cartoony pipeline below.
+    # "anatomical" / "anatomy_overlay" / "wireframe" route to
+    # ``vision.sim_face_anatomical.render_face_anatomical`` instead.
+    render_mode: str = "stylised"
+
     # AU-grade detail (all 0..1, defaults 0 → ignored by old call-sites)
     mouth_pucker: float = 0.0       # AU22 lip funneler — pulls lips inward and forward
     mouth_stretch: float = 0.0      # AU20 lip stretch — widens the mouth horizontally
@@ -253,7 +258,17 @@ def _draw_hair(p: QPainter, ctx: dict, params: FaceParams) -> None:
 
 
 def render_face(params: FaceParams, size: tuple[int, int] = (640, 480)) -> np.ndarray:
-    """Render a face with the given parameters; return a BGR uint8 array."""
+    """Render a face with the given parameters; return a BGR uint8 array.
+
+    Dispatches to the anatomical renderer when ``params.render_mode`` is
+    one of ``anatomical`` / ``anatomy_overlay`` / ``wireframe``. Defaults
+    to the layered stylised pipeline (the cartoony look used since v0.1).
+    """
+    mode = getattr(params, "render_mode", "stylised") or "stylised"
+    if mode in ("anatomical", "anatomy_overlay", "wireframe"):
+        from faceview.vision.sim_face_anatomical import render_face_anatomical
+        return render_face_anatomical(params, size, mode=mode)  # type: ignore[arg-type]
+
     from faceview.vision.sim_face_parts import (
         draw_brows,
         draw_cheeks,
