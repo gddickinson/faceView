@@ -125,11 +125,17 @@ def _to_ict_frame(verts: np.ndarray,
     """
     if len(verts) == 0:
         return verts
-    # 1. Axis swap: new_x = old_x, new_y = old_z, new_z = -old_y
+    # 1. Axis swap to ICT frame:
+    #    body x → ICT x  (lateral, identical convention)
+    #    body z → ICT y  (height up)
+    #    body y → ICT z  (depth, flipped to make face forward)
+    # The body OBJ was authored with -Y as the "front" direction;
+    # flipping to +Z (ICT's forward) means we negate twice and
+    # actually take +Y → ICT z. Net effect: body faces +Z (camera).
     swapped = np.column_stack([
         verts[:, 0],
         verts[:, 2],
-        -verts[:, 1],
+        verts[:, 1],
     ]).astype(np.float32)
 
     # 2. Centre laterally (subtract midline).
@@ -139,22 +145,24 @@ def _to_ict_frame(verts: np.ndarray,
     z_mid = (swapped[:, 2].min() + swapped[:, 2].max()) / 2
     swapped[:, 2] -= z_mid
 
-    # 3. Scale: body (head-removed) height is ~87 % of original
-    # full-body height. We want the headless body to span ~5 ICT
-    # head heights below the ICT bust. ICT head-only height (chin
-    # to crown) ≈ head_h * 0.55. Aim for total avatar height
-    # 6.5 × head height; body fills the lower ~5.5.
+    # 3. Scale: realistic human is ~7.5 head-heights tall; headless
+    # body fills ~6.5 of those. ICT head-only span ≈ ict_y_span × 0.55.
     body_h = swapped[:, 1].max() - swapped[:, 1].min()
     ict_head_h = (ict_verts_ref[:, 1].max() - ict_verts_ref[:, 1].min()) * 0.55
-    scale = (ict_head_h * 5.5) / max(body_h, 1e-6)
+    scale = (ict_head_h * 6.5) / max(body_h, 1e-6)
     swapped *= scale
 
-    # 4. Translate: ICT bust bottom is the lowest ICT y. Body's
-    # SHOULDER LINE (now max-Y after head removal) goes there.
-    # Overlap a bit so the bust + shoulders read as continuous.
+    # 4. Translate: line up the body's neck top (now max-Y after
+    # head removal) with the ICT chin so the head sits directly
+    # on the body's shoulders. The ICT bust mesh that extends below
+    # the chin is hidden inside the body's upper torso.
     body_top_y = swapped[:, 1].max()
-    ict_bottom_y = ict_verts_ref[:, 1].min()
-    swapped[:, 1] += (ict_bottom_y - body_top_y) + 2.0
+    y_min = float(ict_verts_ref[:, 1].min())
+    y_max = float(ict_verts_ref[:, 1].max())
+    # ICT chin sits ~50 % up from y_min. Body top should reach that
+    # so head appears to grow out of the body.
+    chin_y = y_min + (y_max - y_min) * 0.50
+    swapped[:, 1] += (chin_y - body_top_y)
     return swapped
 
 
