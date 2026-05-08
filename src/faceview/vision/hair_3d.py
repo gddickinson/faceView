@@ -423,7 +423,7 @@ def _mouth_anchor(ict_verts: np.ndarray, model
 
 
 def gen_tongue_mesh(ict_verts: np.ndarray, model,
-                      color_hex: str = "#5a1820",
+                      color_hex: str = "#b04050",
                       *,
                       extend: float = 0.5,
                       lateral: float = 0.0,
@@ -464,13 +464,14 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
     head_h = float(ict_verts[:, 1].max() - ict_verts[:, 1].min())
 
     # ── anatomical anchors (in ICT model coordinates) ──
-    # Root: back of the throat. The tongue is a long muscle that
-    # extends far back to the hyoid bone / pharyngeal wall —
-    # anchor it well behind the lip line and below it, so the
-    # extension up + over the lower teeth is anatomically real.
+    # Root: deep in the mouth on the mandibular floor. We anchor it
+    # just inside the visible mouth cavity (any further back and the
+    # ICT face mesh occludes the tongue's back end). Keeps the
+    # tongue clearly visible inside an open mouth while still
+    # reading as "rooted at the back".
     root = np.array([0.0,
-                       centre[1] - head_h * 0.04,
-                       centre[2] - head_w * 0.16], dtype=np.float32)
+                       centre[1] - head_h * 0.025,
+                       centre[2] - head_w * 0.085], dtype=np.float32)
     # Lip exit: where the tongue passes between the lips. Slightly
     # forward of the lip-ring centroid, on the midline.
     lip_exit = np.array([0.0,
@@ -531,14 +532,16 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
     # you clearly see the body rising over the lower teeth.
     int_mid = (root + lip_exit) * 0.5
     int_ctrl = int_mid.copy()
-    # Arch rises ABOVE the lip-exit Y so the path clearly bends up
-    # over the lower teeth before exiting. Scale rises with jaw_open.
-    int_ctrl[1] += head_h * (0.030 + 0.025 * jaw_open)
+    # Arch lifts the body slightly above the midline of root-to-
+    # lip-exit so the path curves up over the lower teeth — but
+    # NOT above the lip-exit Y itself (would collide with upper
+    # teeth / palate). Scale rises gently with jaw_open.
+    int_ctrl[1] += head_h * (0.012 + 0.010 * jaw_open)
 
     rings = int_rings + ext_rings
     segs = 14
-    base_width = head_w * 0.06
-    base_height = head_w * 0.03
+    base_width = head_w * 0.075
+    base_height = head_w * 0.035
 
     def bezier(p0, p1, p2, t):
         return ((1 - t) ** 2 * p0

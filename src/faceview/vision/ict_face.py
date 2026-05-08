@@ -742,7 +742,7 @@ def render_face_ict(
             # transforms so the tongue follows the head.
             tm = gen_tongue_mesh(
                 pre_rotation_verts, model,
-                color_hex="#5a1820",
+                color_hex="#b04050",
                 extend=extend,
                 lateral=float(getattr(params, "_tongue_lateral", 0.0)),
                 vertical=float(getattr(params, "_tongue_vertical", 0.0)),
