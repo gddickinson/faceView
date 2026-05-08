@@ -172,6 +172,55 @@ def pre_tongue_out(params, u: float, intensity: float) -> None:
     params.smile = max(getattr(params, "smile", 0.0), e * 0.25)
 
 
+def _set_direct(params, name: str, value: float) -> None:
+    """Helper: set/raise an entry in params.direct_blendshapes."""
+    direct = getattr(params, "direct_blendshapes", None) or {}
+    direct[name] = max(direct.get(name, 0.0), value)
+    params.direct_blendshapes = direct
+
+
+def pre_pupils_huge(params, u: float, intensity: float) -> None:
+    """Drive PupilDilate_L/R blendshapes — pupils enlarge dramatically."""
+    e = _env(u) * intensity
+    _set_direct(params, "PupilDilate_L", e)
+    _set_direct(params, "PupilDilate_R", e)
+
+
+def pre_pupils_pinpoint(params, u: float, intensity: float) -> None:
+    """Pupils constrict tiny (shock / bright light). Dilation negative
+    isn't a thing — we widen the eyes via squint suppression instead."""
+    e = _env(u) * intensity
+    params.upper_lid_raise = max(getattr(params, "upper_lid_raise", 0.0),
+                                    e * 0.6)
+
+
+def pre_jaw_forward(params, u: float, intensity: float) -> None:
+    """Underbite / aggressive jaw thrust."""
+    _set_direct(params, "jawForward", _env(u) * intensity * 0.85)
+
+
+def pre_mouth_to_left(params, u: float, intensity: float) -> None:
+    """Mouth slides to the screen-left (annoyance / thinking)."""
+    _set_direct(params, "mouthLeft", _env(u) * intensity * 0.85)
+
+
+def pre_mouth_to_right(params, u: float, intensity: float) -> None:
+    _set_direct(params, "mouthRight", _env(u) * intensity * 0.85)
+
+
+def pre_mouth_funnel(params, u: float, intensity: float) -> None:
+    """Lip funnel — horn-shape forward."""
+    _set_direct(params, "mouthFunnel", _env(u) * intensity * 0.9)
+
+
+def pre_cheeks_puff(params, u: float, intensity: float) -> None:
+    """Both cheeks puff out (holding breath / chubby cheek emote)."""
+    e = _env(u) * intensity * 0.85
+    _set_direct(params, "cheekPuff_L", e)
+    _set_direct(params, "cheekPuff_R", e)
+    params.lip_press = max(getattr(params, "lip_press", 0.0), e * 0.6)
+
+
 HANDLERS = {
     "eyes_huge":      pre_eyes_huge,
     "eyes_closed":    pre_eyes_closed,
@@ -194,4 +243,11 @@ HANDLERS = {
     "head_nod":       pre_head_nod,
     "head_recoil":    pre_head_recoil,
     "tongue_out":     pre_tongue_out,
+    "pupils_huge":    pre_pupils_huge,
+    "pupils_pinpoint":pre_pupils_pinpoint,
+    "jaw_forward":    pre_jaw_forward,
+    "mouth_to_left":  pre_mouth_to_left,
+    "mouth_to_right": pre_mouth_to_right,
+    "mouth_funnel":   pre_mouth_funnel,
+    "cheeks_puff":    pre_cheeks_puff,
 }

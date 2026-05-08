@@ -90,6 +90,20 @@ REGISTRY: list[EffectSpec] = [
     EffectSpec("tongue_out", "warp", Stage.PRE, "Tongue out 👅",
                  "Stick tongue out (PreFX opens jaw, PostFX draws tongue)",
                  1.6),
+    EffectSpec("pupils_huge", "warp", Stage.PRE, "Pupils dilate",
+                 "Real PupilDilate blendshape — pupils enlarge", 1.5),
+    EffectSpec("pupils_pinpoint", "warp", Stage.PRE, "Pupils pinpoint",
+                 "Eyes wide, pupils tiny (shock)", 1.0),
+    EffectSpec("jaw_forward", "warp", Stage.PRE, "Jaw forward",
+                 "Aggressive underbite thrust", 1.0),
+    EffectSpec("mouth_to_left", "warp", Stage.PRE, "Mouth ← left",
+                 "Mouth slides screen-left (annoyance)", 1.2),
+    EffectSpec("mouth_to_right", "warp", Stage.PRE, "Mouth → right",
+                 "Mouth slides screen-right", 1.2),
+    EffectSpec("mouth_funnel", "warp", Stage.PRE, "Mouth funnel",
+                 "Lip funnel — horn shape forward", 1.2),
+    EffectSpec("cheeks_puff", "warp", Stage.PRE, "Cheeks puff",
+                 "Hold-breath chubby cheeks", 1.5),
     EffectSpec("head_shake", "warp", Stage.PRE, "Head shake (no)", "", 1.5),
     EffectSpec("head_nod", "warp", Stage.PRE, "Head nod (yes)", "", 1.5),
     EffectSpec("head_recoil", "warp", Stage.PRE, "Head recoil (shock)", "", 0.8),
@@ -128,8 +142,8 @@ REGISTRY: list[EffectSpec] = [
                  "Pink brain overlay", 0.8),
     EffectSpec("xray_flash", "anatomy", Stage.POST, "X-ray flash",
                  "Photo negative flash", 0.5),
-    EffectSpec("vein_show", "anatomy", Stage.POST, "Vein show",
-                 "Forehead veins (anger)", 1.5),
+    # vein_show removed — BP3D doesn't ship real venous anatomy and
+    # the procedural version didn't read as anatomical.
 
     # Comic
     EffectSpec("shock_lines", "comic", Stage.POST, "Shock lines",

@@ -84,6 +84,13 @@ class FaceParams:
     lip_tighten: float = 0.0        # AU23 — lips drawn tight, narrowed
     lip_press: float = 0.0          # AU24 — lips pressed together
 
+    # Direct ICT blendshape pass-through. Whatever name → value pairs
+    # are in this dict get added to the ARKit coefficient stream
+    # before rendering. Used for blendshapes that don't fit the
+    # 12-AU vocabulary cleanly (PupilDilate_L/R, jawForward, mouthLeft,
+    # mouthRight, mouthFunnel, mouthClose, cheekPuff_L/R, etc.).
+    direct_blendshapes: dict = None
+
     # Convenience constructors
     @classmethod
     def neutral(cls) -> "FaceParams":

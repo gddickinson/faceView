@@ -166,6 +166,22 @@ class EffectsPanel(QDialog):
         add_slider("head_gender", "Head gender (♀ → ♂)",
                      -1.0, 1.0, 0.05, 0.0)
 
+        form.addRow(_separator())
+
+        # Direct ICT blendshape sliders.
+        add_slider("pupil_dilate", "Pupil dilate", 0.0, 1.0, 0.02, 0.0)
+        add_slider("jaw_forward", "Jaw forward (underbite)",
+                     0.0, 1.0, 0.02, 0.0)
+        add_slider("jaw_left_right", "Jaw left ↔ right",
+                     -1.0, 1.0, 0.02, 0.0)
+        add_slider("mouth_left_right", "Mouth pose left ↔ right",
+                     -1.0, 1.0, 0.02, 0.0)
+        add_slider("mouth_funnel", "Mouth funnel (lip horn)",
+                     0.0, 1.0, 0.02, 0.0)
+        add_slider("mouth_close", "Mouth close (active purse)",
+                     0.0, 1.0, 0.02, 0.0)
+        add_slider("cheek_puff", "Cheeks puff", 0.0, 1.0, 0.02, 0.0)
+
         layout.addLayout(form)
 
         # Eye colour picker.

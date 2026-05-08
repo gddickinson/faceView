@@ -55,6 +55,15 @@ class SliderState:
     # Identity-blend slider (mixed into params.identity_weights).
     head_age: float = 0.0    # -1 (young) ..0..+1 (elder)
     head_gender: float = 0.0 # -1 (female) ..0..+1 (male)
+    # Direct blendshape sliders — drive ICT shapes that don't fit the
+    # AU vocabulary. All are 0..1 unless noted.
+    pupil_dilate: float = 0.0     # 0 = constricted, 1 = dilated
+    jaw_forward: float = 0.0      # protrude jaw forward
+    jaw_left_right: float = 0.0   # -1 = jaw left, +1 = jaw right
+    mouth_left_right: float = 0.0 # -1 = mouth left, +1 = mouth right
+    mouth_funnel: float = 0.0     # forward funnel (lips horn-shape)
+    mouth_close: float = 0.0      # active lip-close (separate from pucker)
+    cheek_puff: float = 0.0       # both cheeks puffed (holding breath)
 
 
 class EffectsRuntime:
@@ -200,6 +209,38 @@ class EffectsRuntime:
                                           + s.head_gender * 2.0)
         if iw:
             params.identity_weights = iw
+
+        # Direct blendshape sliders — populate params.direct_blendshapes
+        # so the renderer feeds them into the ICT coefficient stream.
+        direct = dict(getattr(params, "direct_blendshapes", None) or {})
+        if abs(s.pupil_dilate) > 1e-3:
+            v = float(np.clip(s.pupil_dilate, 0.0, 1.0))
+            direct["PupilDilate_L"] = v
+            direct["PupilDilate_R"] = v
+        if abs(s.jaw_forward) > 1e-3:
+            direct["jawForward"] = float(np.clip(s.jaw_forward, 0.0, 1.0))
+        if abs(s.jaw_left_right) > 1e-3:
+            v = float(np.clip(s.jaw_left_right, -1.0, 1.0))
+            if v > 0:
+                direct["jawRight"] = v
+            else:
+                direct["jawLeft"] = -v
+        if abs(s.mouth_left_right) > 1e-3:
+            v = float(np.clip(s.mouth_left_right, -1.0, 1.0))
+            if v > 0:
+                direct["mouthRight"] = v
+            else:
+                direct["mouthLeft"] = -v
+        if abs(s.mouth_funnel) > 1e-3:
+            direct["mouthFunnel"] = float(np.clip(s.mouth_funnel, 0.0, 1.0))
+        if abs(s.mouth_close) > 1e-3:
+            direct["mouthClose"] = float(np.clip(s.mouth_close, 0.0, 1.0))
+        if abs(s.cheek_puff) > 1e-3:
+            v = float(np.clip(s.cheek_puff, 0.0, 1.0))
+            direct["cheekPuff_L"] = v
+            direct["cheekPuff_R"] = v
+        if direct:
+            params.direct_blendshapes = direct
 
         # Active PreFX.
         with self._lock:

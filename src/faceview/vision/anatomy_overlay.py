@@ -36,19 +36,48 @@ def _anatomy_renderer():
 @lru_cache(maxsize=8)
 def _layer_specs(layer: str) -> list:
     """Resolve the BP3D mesh spec list for a named layer."""
-    from faceview.vision.anatomy_catalog import specs_for_layer_set
+    from faceview.vision.anatomy_catalog import MeshSpec, specs_for_layer_set
     from faceview.vision.anatomy_meshes import list_available_meshes
     avail = set(list_available_meshes())
     if layer == "skull_only":
         return [s for s in specs_for_layer_set("skull_only")
                  if s.fma in avail and s.category == "bone"]
     if layer == "brain":
-        # Brain isn't in our STL set; fall back to skull_only as a
-        # placeholder. The post handler will re-tint it pink so it
-        # reads as brain on top of the head.
-        return [s for s in specs_for_layer_set("skull_only")
-                 if s.fma in avail and s.category == "bone"]
+        return _brain_specs(avail)
     raise ValueError(f"unknown anatomy layer: {layer}")
+
+
+def _brain_specs(avail: set[str]) -> list:
+    """Build a MeshSpec list from assets/config/anatomy/brain.json.
+
+    BP3D brain meshes (81 in total: cerebellum, pons, medulla, ~22
+    cerebral gyri, corpus callosum, optic chiasm, etc.) — provides
+    the actual brain anatomy for the brain_flash effect rather than
+    a procedural cartoon overlay.
+    """
+    import json
+    from faceview.assets import assets_dir
+    from faceview.vision.anatomy_catalog import MeshSpec
+
+    path = assets_dir() / "config" / "anatomy" / "brain.json"
+    if not path.exists():
+        return []
+    try:
+        defs = json.loads(path.read_text())
+    except Exception:
+        return []
+    specs = []
+    for i, d in enumerate(defs):
+        fma = d.get("stl")
+        if not fma or fma not in avail:
+            continue
+        col = int(d.get("color", 13413034))
+        rgb = ((col >> 16) & 0xff, (col >> 8) & 0xff, col & 0xff)
+        specs.append(MeshSpec(
+            fma=fma, name=d.get("name", fma), category="brain",
+            color=rgb, opacity=1.0, shininess=4.0, draw_order=i,
+        ))
+    return specs
 
 
 def render_anatomy_overlay(
@@ -95,10 +124,16 @@ def render_anatomy_overlay(
 
 def fit_overlay_to_head(overlay: np.ndarray, target_bgr: np.ndarray,
                           bg_rgb: tuple[int, int, int],
+                          *, scale_factor: float = 1.0,
                           ) -> np.ndarray:
     """Crop+rescale BP3D overlay so its head footprint matches the
     target ICT image's head footprint. Approximate fit via bbox of
     foreground pixels.
+
+    ``scale_factor`` shrinks (<1.0) or enlarges (>1.0) the overlay
+    relative to the bbox-match. For skull/brain anatomy that should
+    sit *inside* the skin envelope, pass ~0.78–0.85 so the bone
+    outline reads as recessed under the skin.
     """
     h, w, _ = target_bgr.shape
     bg = np.array(bg_rgb, dtype=np.float32)
@@ -120,7 +155,7 @@ def fit_overlay_to_head(overlay: np.ndarray, target_bgr: np.ndarray,
     ix0, iy0, ix1, iy1 = i_box
     a_w = max(1, ax1 - ax0 + 1)
     i_w = max(1, ix1 - ix0 + 1)
-    scale = i_w / a_w
+    scale = (i_w / a_w) * float(scale_factor)
     a_crop = overlay[ay0:ay1 + 1, ax0:ax1 + 1]
     new_w = max(1, int(a_crop.shape[1] * scale))
     new_h = max(1, int(a_crop.shape[0] * scale))

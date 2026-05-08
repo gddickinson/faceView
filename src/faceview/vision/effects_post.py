@@ -221,10 +221,15 @@ def post_electric_arcs(bgr: np.ndarray, u: float, intensity: float) -> np.ndarra
 # ── Anatomy flashes ───────────────────────────────────────────────
 
 
-def _real_anatomy_overlay(bgr: np.ndarray, layer: str
-                              ) -> np.ndarray | None:
+def _real_anatomy_overlay(bgr: np.ndarray, layer: str,
+                            scale_factor: float = 0.82
+                            ) -> np.ndarray | None:
     """Try to render the real BP3D anatomy mesh aligned to bgr's
-    head footprint. Returns None if BP3D meshes aren't on disk."""
+    head footprint. Returns None if BP3D meshes aren't on disk.
+
+    ``scale_factor`` shrinks the overlay so the skull/brain reads
+    as sitting INSIDE the skin envelope rather than overlapping it.
+    """
     try:
         from faceview.vision.anatomy_overlay import (
             fit_overlay_to_head, render_anatomy_overlay,
@@ -235,7 +240,8 @@ def _real_anatomy_overlay(bgr: np.ndarray, layer: str
     raw = render_anatomy_overlay(layer, (w, h), bg_rgb=(0, 8, 16))
     if raw is None:
         return None
-    return fit_overlay_to_head(raw, bgr, (0, 8, 16))
+    return fit_overlay_to_head(raw, bgr, (0, 8, 16),
+                                 scale_factor=scale_factor)
 
 
 def post_skull_flash(bgr: np.ndarray, u: float, intensity: float, *,
@@ -264,38 +270,147 @@ def post_skull_flash(bgr: np.ndarray, u: float, intensity: float, *,
 
 def post_brain_flash(bgr: np.ndarray, u: float, intensity: float, *,
                       features: dict | None = None) -> np.ndarray:
-    """Brief brain flash. Uses the BP3D skull as a base, restricts to
-    the upper head region, and tints pink to read as brain."""
-    a = intensity * math.sin(u * math.pi) * 0.85
-    brain = _real_anatomy_overlay(bgr, "brain")
+    """Brief brain flash using the real BP3D brain meshes.
+
+    Renders the 81-mesh BP3D brain (cerebellum + 22 cerebral gyri +
+    corpus callosum + brainstem + commissures + chiasm + tracts)
+    via the same gpu_renderer pipeline as the skull, scales it
+    inside the ICT head footprint, alpha-blends over the face.
+    Falls back to a luma-mask pink tint if BP3D meshes are absent.
+    """
     h, w, _ = bgr.shape
+    # Cap peak alpha so the head remains visible behind the brain
+    # — full replace looks like a brain on its own with no context.
+    a = intensity * math.sin(u * math.pi) * 0.7
+    if a <= 0.02:
+        return bgr
+
+    brain = _real_anatomy_overlay(bgr, "brain", scale_factor=0.7)
+    # Translate the brain image upward so it sits in the upper head
+    # (cerebrum level) instead of at the head bbox centre. ICT head
+    # span is ~190 px at 320 sz so an offset of -50 ≈ 25 % of head
+    # height puts the brain at the actual cranial cavity.
+    if brain is not None:
+        bbox = _ict_head_bbox(bgr)
+        if bbox is not None:
+            shift = -int((bbox[3] - bbox[1]) * 0.25)
+            M = np.array([[1, 0, 0], [0, 1, shift]], dtype=np.float32)
+            brain = cv2.warpAffine(
+                brain, M, (w, h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 8, 16),
+            )
     if brain is None:
-        # Fallback path.
+        # Fallback when BP3D brain meshes aren't on disk.
         luma = bgr.max(axis=2).astype(np.float32)
         head_mask = (luma > np.percentile(luma, 60)).astype(np.float32)
         yy = np.arange(h)[:, None] / h
         head_mask *= (yy < 0.5).astype(np.float32).repeat(w, axis=1)
-        brain_f = np.stack([
+        pink = np.stack([
             head_mask * 140, head_mask * 100, head_mask * 220,
         ], axis=-1).astype(np.float32)
-        out = bgr.astype(np.float32) * (1 - a) + brain_f * a
-    else:
-        # Real anatomy: pink tint + restrict to upper-half y so it
-        # reads as the brain region, not the full skull.
-        yy = np.arange(h)[:, None] / h
-        upper_mask = (yy < 0.55).astype(np.float32).repeat(w, axis=1)
-        pink = brain.astype(np.float32) * np.array([0.85, 0.60, 1.20],
-                                                        dtype=np.float32)
-        pink = np.clip(pink, 0, 255) * upper_mask[:, :, None]
-        out = bgr.astype(np.float32) * (1 - a) + pink * a
-    # Add gyri-like low-frequency noise for texture.
-    rng = np.random.default_rng(17)
-    noise = rng.random((h // 8, w // 8)).astype(np.float32) * 50
-    noise = cv2.resize(noise, (w, h), interpolation=cv2.INTER_LINEAR)
-    luma = bgr.max(axis=2)
-    head_mask_simple = (luma > 80).astype(np.float32)
-    out += noise[:, :, None] * head_mask_simple[:, :, None] * a * 0.25
+        return np.clip(bgr.astype(np.float32) * (1 - a)
+                        + pink * a, 0, 255).astype(np.uint8)
+
+    # Real anatomy: gentle pink shift + restrict to upper-half so the
+    # brain reads as INSIDE the cranium, not over the lower face.
+    yy = np.arange(h)[:, None] / h
+    upper_mask = (yy < 0.55).astype(np.float32).repeat(w, axis=1)
+    brain_f = brain.astype(np.float32)
+    # Boost saturation toward pink (per-pixel multiplier, not blanket).
+    pink_tint = np.array([0.85, 0.65, 1.10], dtype=np.float32)
+    brain_f = np.clip(brain_f * pink_tint, 0, 255) * upper_mask[:, :, None]
+    out = bgr.astype(np.float32) * (1 - a) + brain_f * a
     return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def _draw_brain_anatomy_DEPRECATED(canvas: np.ndarray, cx: int, cy_top: int,
+                          half_w: int, height: int) -> None:
+    """Procedural cerebrum + cerebellum drawn into ``canvas`` (BGR).
+
+    Anatomical layout:
+      - Two cerebral hemispheres (left + right ovals) above
+      - Central longitudinal fissure between them
+      - Cerebellum lump at the back-bottom
+      - Brainstem stub
+      - Sulci/gyri texture as wavy lines
+
+    Caller positions it via head-feature pixel anchors so the brain
+    sits in the upper head where it would actually be.
+    """
+    pink = (140, 110, 200)
+    pink_dark = (95, 60, 150)
+    pink_light = (180, 160, 230)
+
+    # Hemispheres — two overlapping ellipses.
+    hemi_w = int(half_w * 0.95)
+    hemi_h = int(height * 0.78)
+    cy = cy_top + hemi_h // 2
+    cv2.ellipse(canvas, (cx - hemi_w // 2 + 4, cy),
+                  (hemi_w, hemi_h), 0, 0, 360, pink, -1, cv2.LINE_AA)
+    cv2.ellipse(canvas, (cx + hemi_w // 2 - 4, cy),
+                  (hemi_w, hemi_h), 0, 0, 360, pink, -1, cv2.LINE_AA)
+    # Outline.
+    cv2.ellipse(canvas, (cx - hemi_w // 2 + 4, cy),
+                  (hemi_w, hemi_h), 0, 0, 360, pink_dark, 1, cv2.LINE_AA)
+    cv2.ellipse(canvas, (cx + hemi_w // 2 - 4, cy),
+                  (hemi_w, hemi_h), 0, 0, 360, pink_dark, 1, cv2.LINE_AA)
+
+    # Longitudinal fissure (central groove).
+    cv2.line(canvas, (cx, cy_top + 4), (cx, cy + hemi_h - 4),
+              pink_dark, 2, cv2.LINE_AA)
+
+    # Sulci / gyri — wavy horizontal lines.
+    for k in range(6):
+        y = cy_top + int((k + 1) / 7 * hemi_h * 1.6)
+        if y > cy + hemi_h:
+            break
+        amp = 4 + (k % 2) * 2
+        pts = []
+        for x in range(cx - hemi_w + 6, cx + hemi_w - 6, 4):
+            wave = int(math.sin((x - cx) * 0.06 + k * 0.4) * amp)
+            pts.append((x, y + wave))
+        for a, b in zip(pts[:-1], pts[1:]):
+            cv2.line(canvas, a, b, pink_dark, 1, cv2.LINE_AA)
+
+    # Cerebellum at the back-bottom (rendered as small striped lump).
+    cb_w = int(hemi_w * 0.55)
+    cb_h = int(hemi_h * 0.38)
+    cb_y = cy + hemi_h - cb_h // 3
+    cv2.ellipse(canvas, (cx, cb_y), (cb_w, cb_h), 0, 0, 360,
+                  pink_dark, -1, cv2.LINE_AA)
+    cv2.ellipse(canvas, (cx, cb_y), (cb_w, cb_h), 0, 0, 360,
+                  pink, 1, cv2.LINE_AA)
+    # Cerebellar folia (parallel stripes).
+    for k in range(5):
+        sy = cb_y - cb_h + int((k / 4) * cb_h * 1.5)
+        cv2.ellipse(canvas, (cx, sy), (cb_w - 6, max(2, cb_h // 6)),
+                      0, 0, 180, pink_light, 1, cv2.LINE_AA)
+
+    # Brainstem — small vertical pill below the cerebellum.
+    stem_y0 = cb_y + cb_h // 2
+    stem_y1 = stem_y0 + int(hemi_h * 0.22)
+    cv2.line(canvas, (cx, stem_y0), (cx, stem_y1),
+              pink_dark, max(3, half_w // 18), cv2.LINE_AA)
+
+
+def _ict_head_bbox(bgr: np.ndarray) -> tuple[int, int, int, int] | None:
+    """Detect the ICT head bbox from the rendered image.
+
+    The xray-young default renders against a near-black background;
+    foreground pixels are bright cyan. Find the bbox of pixels
+    brighter than the background. Returns (x0, y0, x1, y1) or None
+    if nothing rendered.
+    """
+    luma = bgr.max(axis=2)
+    ys, xs = np.where(luma > 30)
+    if not len(xs):
+        return None
+    return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+
+# (Duplicate post_brain_flash removed — the real-BP3D version
+# above supersedes the procedural-cartoon implementation.)
 
 
 def post_xray_flash(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
@@ -532,22 +647,88 @@ def post_dark_pupils(bgr: np.ndarray, u: float, intensity: float, *,
     return out
 
 
+def _draw_vein_branch(out: np.ndarray, start: tuple[int, int],
+                        direction_deg: float, length: int,
+                        depth: int, colour: tuple[int, int, int],
+                        rng: np.random.Generator) -> None:
+    """Recursive procedural vein — bezier-ish jagged branch with
+    sub-branches at random points. Depth = recursion limit."""
+    if depth <= 0 or length < 6:
+        return
+    x, y = start
+    angle = math.radians(direction_deg)
+    pts = [(x, y)]
+    seg = max(4, length // 5)
+    for _ in range(5):
+        # Slight angle wobble for organic curves.
+        angle += (rng.random() - 0.5) * 0.18
+        x += int(math.cos(angle) * seg)
+        y += int(math.sin(angle) * seg)
+        pts.append((x, y))
+    thickness = max(1, depth - 1)
+    for a, b in zip(pts[:-1], pts[1:]):
+        cv2.line(out, a, b, colour, thickness, cv2.LINE_AA)
+    # Random sub-branches at one or two of the joint points.
+    for branch_idx in (2, 3):
+        if rng.random() < 0.6:
+            bx, by = pts[branch_idx]
+            sub_dir = direction_deg + (rng.random() - 0.5) * 60
+            sub_len = int(length * (0.45 + rng.random() * 0.25))
+            _draw_vein_branch(out, (bx, by), sub_dir, sub_len,
+                                depth - 1, colour, rng)
+
+
 def post_vein_show(bgr: np.ndarray, u: float, intensity: float, *,
                     features: dict | None = None) -> np.ndarray:
+    """Anatomical forehead + temporal vein pattern.
+
+    Models:
+      - Frontal vein pair (median, branching upward from glabella)
+      - Superficial temporal artery branches (curving up from
+        temple toward the parietal area)
+
+    Anchored on forehead + temple feature pixels so the veins land
+    on the right facial regions.
+    """
     h, w, _ = bgr.shape
     out = bgr.copy()
+    a = intensity * math.sin(u * math.pi)
+    if a < 0.05:
+        return out
+
     rng = np.random.default_rng(13)
+    colour = (75, 75, 200)
+
     fx, fy = _forehead(features, h, w)
-    fy = fy + 20  # closer to actual forehead skin
-    for _ in range(int(4 * intensity)):
-        x, y = fx + rng.integers(-40, 40), fy + rng.integers(-10, 10)
-        for _ in range(5):
-            nx = x + rng.integers(-12, 12)
-            ny = y + rng.integers(-4, 4)
-            cv2.line(out, (x, y), (nx, ny),
-                      (60, 60, 180), 1, cv2.LINE_AA)
-            x, y = nx, ny
-    return out
+    # Glabella ≈ between the brows; forehead anchor sits above it.
+    if features and "brow_L" in features and "brow_R" in features:
+        glabella_x = int((features["brow_L"][0] + features["brow_R"][0]) / 2)
+        glabella_y = int((features["brow_L"][1] + features["brow_R"][1]) / 2) - 8
+    else:
+        glabella_x, glabella_y = fx, fy + 30
+
+    forehead_top = max(0, glabella_y - int(h * 0.20))
+    base_len = max(20, glabella_y - forehead_top)
+
+    # Frontal vein pair — branches upward from glabella, slight V-fan.
+    for sign in (-1, +1):
+        start = (glabella_x + sign * 4, glabella_y)
+        # 270° = straight up; tilt outward by 8°.
+        _draw_vein_branch(out, start, 270 + sign * 8,
+                            base_len, 3, colour, rng)
+
+    # Superficial temporal arteries — curve upward from each temple.
+    tl = _temple(features, h, w, "left")
+    tr = _temple(features, h, w, "right")
+    for start, side in ((tl, -1), (tr, +1)):
+        for k in range(2):
+            ang = 250 + side * (5 + k * 6)
+            _draw_vein_branch(out, start, ang,
+                                int(base_len * 0.85), 3, colour, rng)
+
+    # Blend back at intensity.
+    return cv2.addWeighted(bgr, 1.0 - 0.0, out, 1.0, 0) if a >= 1 else \
+        cv2.addWeighted(bgr, 1.0 - a, out, a, 0)
 
 
 def post_grayscale(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
@@ -585,7 +766,6 @@ HANDLERS = {
     "skull_flash":          post_skull_flash,
     "brain_flash":          post_brain_flash,
     "xray_flash":           post_xray_flash,
-    "vein_show":            post_vein_show,
     "vaporwave":            post_vaporwave,
     "dark_pupils":          post_dark_pupils,
     "tongue_out":           post_tongue_out,

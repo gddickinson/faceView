@@ -632,7 +632,16 @@ def render_face_ict(
     raw_iw = getattr(params, "identity_weights", {}) or {}
     identity_w = {k: float(v) for k, v in raw_iw.items()
                    if isinstance(v, (int, float))}
-    full_coefs = {**arkit_coefs, **identity_w}
+    # Direct blendshape pass-through — slider sliders + PreFX warps
+    # may set named ICT blendshapes (PupilDilate_L/R, jawForward,
+    # mouthLeft, mouthRight, mouthFunnel, mouthClose, cheekPuff_L/R)
+    # that don't fit the 12-AU vocabulary. These merge in last so
+    # they can override AU-derived values when user wants explicit
+    # control.
+    direct = getattr(params, "direct_blendshapes", None) or {}
+    direct_clean = {k: float(v) for k, v in direct.items()
+                       if isinstance(v, (int, float))}
+    full_coefs = {**arkit_coefs, **identity_w, **direct_clean}
     verts = apply_blendshapes(model, full_coefs)
 
     yaw = float(getattr(params, "yaw", 0.0)) * 0.6
