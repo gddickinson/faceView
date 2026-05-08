@@ -697,9 +697,11 @@ def render_face_ict(
     # the neck rotation baked in, so project at zero global yaw/pitch.
     try:
         feat = _project_features(model, verts, 0.0, 0.0, size)
-        # Stash effective pose so anatomy overlays (skull/brain) can
-        # render at the same orientation as the ICT face.
-        feat["_yaw"] = float(yaw + cam_yaw)
+        # Stash effective pose for anatomy overlays. BP3D's gpu
+        # renderer applies a pre-rotation that mirrors X, so its
+        # yaw direction is opposite ICT's — negate yaw to match.
+        # Pitch stays the same (no Y/Z mirror in pre-rotation).
+        feat["_yaw"] = float(-(yaw + cam_yaw))
         feat["_pitch"] = float(pitch + cam_pitch)
         params._feature_pixels = feat
     except Exception:
