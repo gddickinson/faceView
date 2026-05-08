@@ -15,9 +15,9 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QColorDialog, QDialog, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout,
-    QHBoxLayout, QLabel, QPushButton, QScrollArea, QSlider, QTabWidget,
-    QVBoxLayout, QWidget,
+    QColorDialog, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QFrame,
+    QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSlider,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from faceview.vision.effects import REGISTRY, specs_by_category
@@ -184,6 +184,36 @@ class EffectsPanel(QDialog):
 
         layout.addLayout(form)
 
+        form.addRow(_separator())
+
+        # Hair style dropdown + colour picker.
+        hair_row = QHBoxLayout()
+        hair_row.addWidget(QLabel("Hair style:"))
+        self.hair_combo = QComboBox(self)
+        try:
+            from faceview.vision.hair_overlay import list_styles
+            for s in list_styles():
+                self.hair_combo.addItem(s)
+        except Exception:
+            self.hair_combo.addItems(["none"])
+        self.hair_combo.currentTextChanged.connect(
+            lambda s: self.runtime.set_slider("hair_style", s))
+        hair_row.addWidget(self.hair_combo, 1)
+        layout.addLayout(hair_row)
+
+        hair_color_row = QHBoxLayout()
+        hair_color_row.addWidget(QLabel("Hair colour:"))
+        self.hair_swatch = QLabel("    ")
+        self.hair_swatch.setMinimumWidth(60)
+        self.hair_swatch.setStyleSheet(
+            "background:#3a2418; border:1px solid #888;")
+        pick_hair = QPushButton("Pick…")
+        pick_hair.clicked.connect(self._pick_hair_color)
+        hair_color_row.addWidget(self.hair_swatch)
+        hair_color_row.addWidget(pick_hair)
+        hair_color_row.addStretch(1)
+        layout.addLayout(hair_color_row)
+
         # Eye colour picker.
         eye_row = QHBoxLayout()
         eye_row.addWidget(QLabel("Eye glow colour:"))
@@ -204,6 +234,16 @@ class EffectsPanel(QDialog):
         layout.addWidget(reset_all)
         layout.addStretch(1)
         return w
+
+    def _pick_hair_color(self) -> None:
+        col = QColorDialog.getColor(parent=self)
+        if not col.isValid():
+            return
+        hex_ = col.name()
+        self.hair_swatch.setStyleSheet(
+            f"background:{hex_}; border:1px solid #888;")
+        self.runtime.set_slider("hair_color", hex_)
+
 
     def _pick_eye_color(self) -> None:
         col = QColorDialog.getColor(parent=self)
