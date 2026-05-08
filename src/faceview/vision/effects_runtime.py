@@ -72,6 +72,9 @@ class SliderState:
     tongue_curl: float = 0.0      # -1 droop ↔ +1 arch
     tongue_taper: float = 0.4     # 0 blunt ↔ 1 pointed
     talking_tongue: float = 1.0   # 0 disable, 1 show tongue during speech
+    # Full-body avatar — show the body mesh below the head.
+    show_body: float = 0.0        # 0 hide, 1 show
+    body_morph: float = 0.0       # -1 female, +1 male
     # Hair overlay — procedural style + colour.
     hair_style: str = "none"      # see hair_overlay.STYLES
     hair_color: str = "#3a2418"   # hex string
@@ -239,6 +242,11 @@ class EffectsRuntime:
         if s.hair_style and s.hair_style != "none":
             params._slider_hair_style = s.hair_style
             params._slider_hair_color = s.hair_color
+
+        # Full-body avatar.
+        if s.show_body > 0.5:
+            params._show_body = True
+            params._body_morph = float(s.body_morph)
 
         # 3D tongue — slider-driven shape parameters override the
         # PreFX-warp's static protrusion when the tongue is visible.

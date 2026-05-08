@@ -82,6 +82,7 @@ class EffectsPanel(QDialog):
         self.tabs.addTab(self._build_camera_tab(), "🎥 Camera")
         self.tabs.addTab(self._build_colours_tab(), "🎨 Colours")
         self.tabs.addTab(self._build_tongue_tab(), "👅 Tongue")
+        self.tabs.addTab(self._build_body_tab(), "🧍 Body")
         root.addWidget(self.tabs, 1)
 
     # ── helpers ────────────────────────────────────────────────
@@ -289,6 +290,41 @@ class EffectsPanel(QDialog):
         eye_row.addStretch(1)
         layout.addLayout(eye_row)
 
+        layout.addStretch(1)
+        return w
+
+    # ── Body tab ───────────────────────────────────────────────
+
+    def _build_body_tab(self) -> QWidget:
+        w = QWidget(self)
+        layout = QVBoxLayout(w)
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+
+        info = QLabel(
+            "Full-body avatar (CC0 from MakeHuman base mesh bundle).\n"
+            "Toggle on to attach a body below the head; the\n"
+            "male↔female slider blends between the two reference\n"
+            "topologies. The head still tracks expression / pose;\n"
+            "the body is static and rotates with the camera only.")
+        info.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(info)
+
+        for key, label, lo, hi, step, default in [
+            ("show_body",  "Show body (off ↔ on)",     0.0, 1.0, 1.0, 0.0),
+            ("body_morph", "Morph (♀ ↔ ♂)",           -1.0, 1.0, 0.05, 0.0),
+        ]:
+            slider, value_label, _ = self._labelled_slider(
+                key, lo, hi, step, default, "{:.2f}",
+            )
+            wrap = QWidget(self)
+            row = QHBoxLayout(wrap)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(slider, 1)
+            row.addWidget(value_label)
+            form.addRow(label, wrap)
+
+        layout.addLayout(form)
         layout.addStretch(1)
         return w
 

@@ -729,6 +729,31 @@ def render_face_ict(
                 extras.append(hm)
         except Exception:
             pass
+    if getattr(params, "_show_body", False):
+        try:
+            from faceview.vision.body_3d import gen_body_mesh
+            from faceview.vision.hair_3d import HairMesh
+            bm = gen_body_mesh(
+                pre_rotation_verts,
+                morph=float(getattr(params, "_body_morph", 0.0)),
+            )
+            if bm is not None:
+                # The body sits below the neck — neck rotation's
+                # smoothstep weight is 0 in that region, so skip
+                # neck rotation entirely. Only apply camera orbit.
+                ict_centre = (pre_rotation_verts.min(axis=0)
+                                  + pre_rotation_verts.max(axis=0)) / 2.0
+                if abs(cam_yaw) > 1e-3 or abs(cam_pitch) > 1e-3:
+                    bm.verts[:] = _apply_camera_orbit(
+                        bm.verts, cam_yaw, cam_pitch, pivot=ict_centre,
+                    )
+                extras.append(HairMesh(
+                    verts=bm.verts, tris=bm.tris, colors=bm.colors,
+                    specular=bm.specular, emissive=bm.emissive,
+                ))
+        except Exception as e:
+            print(f"body err: {e}")
+
     if getattr(params, "_show_tongue", False):
         try:
             from faceview.vision.hair_3d import gen_tongue_mesh
@@ -1034,10 +1059,17 @@ def _render_via_moderngl(
     np.add.at(vert_norms, all_tris[:, 2], tri_norms)
     vert_norms /= np.maximum(np.linalg.norm(vert_norms, axis=1, keepdims=True), 1e-9)
 
-    # Centre + scale to fit (using ICT-only bbox so hair doesn't
-    # alter the head's framing).
-    vmin = verts.min(axis=0)
-    vmax = verts.max(axis=0)
+    # Centre + scale to fit. When a large extra (body) is present
+    # we use the combined bbox so the whole avatar fits in frame;
+    # for small extras (hair, tongue) we keep the ICT bbox so the
+    # head fills the frame normally.
+    if extra_verts is not None and len(extra_verts) > 1000:
+        # Probably a body mesh — fit to combined bbox.
+        bbox_src = np.vstack([verts, extra_verts])
+    else:
+        bbox_src = verts
+    vmin = bbox_src.min(axis=0)
+    vmax = bbox_src.max(axis=0)
     centre = (vmin + vmax) / 2
     span = float(np.linalg.norm(vmax - vmin))
     scale = 1.6 / max(span, 1e-6)
