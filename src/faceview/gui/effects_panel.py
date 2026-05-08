@@ -79,6 +79,8 @@ class EffectsPanel(QDialog):
             icon = _CATEGORY_ICONS.get(cat, "")
             self.tabs.addTab(tab, f"{icon} {cat}".strip())
         self.tabs.addTab(self._build_sliders_tab(), "🎚 Sliders")
+        self.tabs.addTab(self._build_camera_tab(), "🎥 Camera")
+        self.tabs.addTab(self._build_colours_tab(), "🎨 Colours")
         root.addWidget(self.tabs, 1)
 
     # ── helpers ────────────────────────────────────────────────
@@ -184,18 +186,66 @@ class EffectsPanel(QDialog):
 
         layout.addLayout(form)
 
-        form.addRow(_separator())
+        # Reset all sliders.
+        reset_all = QPushButton("Reset all sliders")
+        reset_all.clicked.connect(self._reset_sliders)
+        layout.addWidget(reset_all)
+        layout.addStretch(1)
+        return w
 
-        # Camera orbit — rotate the whole head around at constant
-        # distance from the camera.
-        add_slider("camera_yaw", "Camera yaw (orbit ↺ ↻)",
-                     -3.14, 3.14, 0.05, 0.0)
-        add_slider("camera_pitch", "Camera pitch (above ↕ below)",
-                     -1.2, 1.2, 0.05, 0.0)
+    # ── Camera tab ─────────────────────────────────────────────
 
-        form.addRow(_separator())
+    def _build_camera_tab(self) -> QWidget:
+        w = QWidget(self)
+        layout = QVBoxLayout(w)
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
-        # Hair style dropdown + colour picker.
+        info = QLabel(
+            "Camera orbit — rotates the whole head around its centre at\n"
+            "fixed distance, independent of the head's own talking-pose.")
+        info.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(info)
+
+        self._cam_sliders = []  # so reset can re-set them
+        for key, label, lo, hi, step, default in [
+            ("camera_yaw", "Camera yaw (orbit ↺ ↻)", -3.14, 3.14, 0.05, 0.0),
+            ("camera_pitch", "Camera pitch (above ↕ below)", -1.2, 1.2, 0.05, 0.0),
+        ]:
+            slider, value_label, default_val = self._labelled_slider(
+                key, lo, hi, step, default, "{:.2f}",
+            )
+            wrap = QWidget(self)
+            row = QHBoxLayout(wrap)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(slider, 1)
+            row.addWidget(value_label)
+            form.addRow(label, wrap)
+            self._cam_sliders.append((slider, default_val))
+
+        layout.addLayout(form)
+
+        # Reset view button.
+        reset_view = QPushButton("Reset view (front)")
+        reset_view.clicked.connect(self._reset_camera)
+        layout.addWidget(reset_view)
+        layout.addStretch(1)
+        return w
+
+    # ── Colours tab ────────────────────────────────────────────
+
+    def _build_colours_tab(self) -> QWidget:
+        w = QWidget(self)
+        layout = QVBoxLayout(w)
+
+        info = QLabel(
+            "Hair style + colour, eye glow colour. Drag the\n"
+            "Skin hue / saturation sliders on the Sliders tab\n"
+            "for full skin recolour.")
+        info.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(info)
+
+        # Hair style dropdown.
         hair_row = QHBoxLayout()
         hair_row.addWidget(QLabel("Hair style:"))
         self.hair_combo = QComboBox(self)
@@ -210,6 +260,7 @@ class EffectsPanel(QDialog):
         hair_row.addWidget(self.hair_combo, 1)
         layout.addLayout(hair_row)
 
+        # Hair colour picker.
         hair_color_row = QHBoxLayout()
         hair_color_row.addWidget(QLabel("Hair colour:"))
         self.hair_swatch = QLabel("    ")
@@ -223,7 +274,7 @@ class EffectsPanel(QDialog):
         hair_color_row.addStretch(1)
         layout.addLayout(hair_color_row)
 
-        # Eye colour picker.
+        # Eye glow colour picker.
         eye_row = QHBoxLayout()
         eye_row.addWidget(QLabel("Eye glow colour:"))
         self.eye_swatch = QLabel("    ")
@@ -237,12 +288,36 @@ class EffectsPanel(QDialog):
         eye_row.addStretch(1)
         layout.addLayout(eye_row)
 
-        # Reset all sliders.
-        reset_all = QPushButton("Reset all sliders")
-        reset_all.clicked.connect(self._reset_sliders)
-        layout.addWidget(reset_all)
         layout.addStretch(1)
         return w
+
+    def _labelled_slider(self, key: str, lo: float, hi: float,
+                            step: float, default: float, fmt: str
+                            ) -> tuple[QSlider, QLabel, int]:
+        """Helper used by camera tab — returns (slider, value_label,
+        default_step_position) so callers can also wire reset."""
+        slider = QSlider(Qt.Orientation.Horizontal)
+        n_steps = int((hi - lo) / step)
+        slider.setRange(0, n_steps)
+        cur = int((default - lo) / step)
+        slider.setValue(cur)
+        value_label = QLabel(fmt.format(default))
+        value_label.setMinimumWidth(50)
+
+        def on_change(val: int) -> None:
+            v = lo + val * step
+            value_label.setText(fmt.format(v))
+            self.runtime.set_slider(key, v)
+
+        slider.valueChanged.connect(on_change)
+        return slider, value_label, cur
+
+    def _reset_camera(self) -> None:
+        """Reset camera-orbit sliders to centred / front view."""
+        for slider, default_step in self._cam_sliders:
+            slider.setValue(default_step)
+        self.runtime.set_slider("camera_yaw", 0.0)
+        self.runtime.set_slider("camera_pitch", 0.0)
 
     def _pick_hair_color(self) -> None:
         col = QColorDialog.getColor(parent=self)
