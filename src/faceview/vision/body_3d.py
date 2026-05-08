@@ -139,28 +139,28 @@ def _to_ict_frame(verts: np.ndarray,
     z_mid = (swapped[:, 2].min() + swapped[:, 2].max()) / 2
     swapped[:, 2] -= z_mid
 
-    # 3. Scale: body height (after swap) is roughly 1.64. Want the
-    # body to be ~6× the ICT head height. ICT head only (chin to
-    # crown) is roughly head_h * 0.55 ≈ 18.6 units. So total avatar
-    # height ≈ 6 × 18.6 = 112; body span 1.64 → scale 68.
+    # 3. Scale: body (head-removed) height is ~87 % of original
+    # full-body height. We want the headless body to span ~5 ICT
+    # head heights below the ICT bust. ICT head-only height (chin
+    # to crown) ≈ head_h * 0.55. Aim for total avatar height
+    # 6.5 × head height; body fills the lower ~5.5.
     body_h = swapped[:, 1].max() - swapped[:, 1].min()
     ict_head_h = (ict_verts_ref[:, 1].max() - ict_verts_ref[:, 1].min()) * 0.55
-    scale = (ict_head_h * 6.0) / max(body_h, 1e-6)
+    scale = (ict_head_h * 5.5) / max(body_h, 1e-6)
     swapped *= scale
 
-    # 4. Translate: ICT bust bottom is at y_min of ICT verts. Body
-    # NECK top is at body's max-Y. Put body's neck top a bit below
-    # ICT bust bottom (so they overlap and the head sits on the body).
+    # 4. Translate: ICT bust bottom is the lowest ICT y. Body's
+    # SHOULDER LINE (now max-Y after head removal) goes there.
+    # Overlap a bit so the bust + shoulders read as continuous.
     body_top_y = swapped[:, 1].max()
     ict_bottom_y = ict_verts_ref[:, 1].min()
-    # Overlap by 5 units (the bust collar).
-    swapped[:, 1] += (ict_bottom_y - body_top_y) + 5.0
+    swapped[:, 1] += (ict_bottom_y - body_top_y) + 2.0
     return swapped
 
 
 def gen_body_mesh(ict_verts_ref: np.ndarray,
                     morph: float = 0.0,
-                    color_hex: str = "#5a8aaa") -> BodyMesh | None:
+                    color_hex: str = "#3a7088") -> BodyMesh | None:
     """Generate a body mesh in ICT coordinates.
 
     ``morph`` ∈ [-1, 1] interpolates between fully-female (-1) and
