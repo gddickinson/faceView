@@ -464,27 +464,29 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
     head_h = float(ict_verts[:, 1].max() - ict_verts[:, 1].min())
 
     # ── anatomical anchors (in ICT model coordinates) ──
-    # Root: pharyngeal level — deep in the throat. The ICT face
-    # mesh has a closed mouth cavity that opens with jaw_open;
-    # the tongue body needs to extend well back so when looking
-    # into an open mouth the user sees the body trailing back into
-    # the throat (rather than starting at the lip line).
+    # The tongue's UPPER SURFACE (which is what's visible) sits
+    # near the lip line, NOT at mandibular-floor level. Anchoring
+    # the centerline near the lip line keeps the body inside the
+    # mouth cavity instead of dipping through the chin skin.
+    # Root: pharyngeal level — well behind the lips, but only
+    # slightly below the lip line in Y so the body stays inside
+    # the visible mouth.
     root = np.array([0.0,
-                       centre[1] - head_h * 0.035,
-                       centre[2] - head_w * 0.22], dtype=np.float32)
-    # Lip exit: where the tongue passes between the lips. Slightly
-    # forward of the lip-ring centroid, on the midline.
+                       centre[1] - head_h * 0.008,
+                       centre[2] - head_w * 0.20], dtype=np.float32)
+    # Lip exit: between the lips, on the midline.
     lip_exit = np.array([0.0,
                             centre[1] - head_h * 0.002,
                             centre[2] + lip_r * 0.20], dtype=np.float32)
 
-    # Jaw open drops the mandible — root (attached to mandible)
-    # drops fully, lip exit drops less (lies between upper-lip-
-    # stationary and lower-lip-fully-down).
+    # Jaw open drops both root + lip exit, but only mildly — the
+    # tongue is attached to the mandible so it follows partially
+    # when jaw drops, but not the full bone displacement (the
+    # muscle pivots upward as it stretches).
     if jaw_open > 0.01:
         drop = head_h * 0.10 * jaw_open
-        root[1] -= drop
-        lip_exit[1] -= drop * 0.4
+        root[1] -= drop * 0.30        # was 1.0 — was dipping into chin
+        lip_exit[1] -= drop * 0.30
 
     # ── tip (depends on extension sign) ──
     if extend < 0.0:
@@ -532,16 +534,15 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
     # you clearly see the body rising over the lower teeth.
     int_mid = (root + lip_exit) * 0.5
     int_ctrl = int_mid.copy()
-    # Arch lifts the body slightly above the midline of root-to-
-    # lip-exit so the path curves up over the lower teeth — but
-    # NOT above the lip-exit Y itself (would collide with upper
-    # teeth / palate). Scale rises gently with jaw_open.
-    int_ctrl[1] += head_h * (0.012 + 0.010 * jaw_open)
+    # Slight arch — keeps path inside the mouth cavity. Root + lip
+    # exit are now both close to the lip line so this is a gentle
+    # rise rather than a steep climb.
+    int_ctrl[1] += head_h * (0.005 + 0.005 * jaw_open)
 
     rings = int_rings + ext_rings
     segs = 14
     base_width = head_w * 0.075
-    base_height = head_w * 0.035
+    base_height = head_w * 0.020   # flatter — tube fits inside mouth
 
     def bezier(p0, p1, p2, t):
         return ((1 - t) ** 2 * p0
