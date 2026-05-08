@@ -67,6 +67,12 @@ class SliderState:
     # Hair overlay — procedural style + colour.
     hair_style: str = "none"      # see hair_overlay.STYLES
     hair_color: str = "#3a2418"   # hex string
+    # Camera orbit — rotates the *whole scene* around the head
+    # centroid at fixed distance. Independent of the head's own
+    # talking-sway pose. Both in radians (-π..π for yaw, -π/2..π/2
+    # for pitch). 0 = front view.
+    camera_yaw: float = 0.0
+    camera_pitch: float = 0.0
 
 
 class EffectsRuntime:
@@ -213,6 +219,19 @@ class EffectsRuntime:
         if iw:
             params.identity_weights = iw
 
+        # Camera orbit — set as separate attributes the renderer
+        # reads (independent of head's own pose).
+        if abs(s.camera_yaw) > 1e-3:
+            params._camera_yaw = float(s.camera_yaw)
+        if abs(s.camera_pitch) > 1e-3:
+            params._camera_pitch = float(s.camera_pitch)
+
+        # 3D hair — pass-through attributes the renderer picks up
+        # to assemble the hair mesh and append to the GL pass.
+        if s.hair_style and s.hair_style != "none":
+            params._slider_hair_style = s.hair_style
+            params._slider_hair_color = s.hair_color
+
         # Direct blendshape sliders — populate params.direct_blendshapes
         # so the renderer feeds them into the ICT coefficient stream.
         direct = dict(getattr(params, "direct_blendshapes", None) or {})
@@ -262,34 +281,6 @@ class EffectsRuntime:
             except Exception:
                 pass
 
-    def _apply_hair(self, bgr: np.ndarray,
-                      feature_pixels: dict | None) -> np.ndarray:
-        """Composite the chosen hair style on top of the rendered face.
-
-        Detects the head bbox from the foreground and uses the
-        forehead feature pixel for hairline placement. No-op when
-        ``hair_style == "none"``.
-        """
-        if self.sliders.hair_style == "none":
-            return bgr
-        try:
-            from faceview.vision.hair_overlay import apply_hair
-        except Exception:
-            return bgr
-        # Head bbox via foreground pixels (cheap luma threshold).
-        luma = bgr.max(axis=2)
-        ys, xs = np.where(luma > 30)
-        if not len(xs):
-            return bgr
-        head_bbox = (int(xs.min()), int(ys.min()),
-                       int(xs.max()), int(ys.max()))
-        forehead_y = None
-        if feature_pixels and "forehead" in feature_pixels:
-            forehead_y = int(feature_pixels["forehead"][1])
-        return apply_hair(bgr, self.sliders.hair_style,
-                            self.sliders.hair_color, head_bbox, forehead_y)
-
-
     def apply_post(self, bgr: np.ndarray, *,
                     feature_pixels: Optional[dict] = None) -> np.ndarray:
         """Apply all active PostFX to the rendered BGR.
@@ -301,9 +292,6 @@ class EffectsRuntime:
         ignore the kwarg.
         """
         feat = feature_pixels or {}
-        # Apply persistent hair overlay first so PostFX (smoke,
-        # sparkles, glitch, scanlines) all draw over the hair too.
-        bgr = self._apply_hair(bgr, feat)
         with self._lock:
             actives = list(self._active)
             now = time.monotonic()

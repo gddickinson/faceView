@@ -186,12 +186,21 @@ class EffectsPanel(QDialog):
 
         form.addRow(_separator())
 
+        # Camera orbit — rotate the whole head around at constant
+        # distance from the camera.
+        add_slider("camera_yaw", "Camera yaw (orbit ↺ ↻)",
+                     -3.14, 3.14, 0.05, 0.0)
+        add_slider("camera_pitch", "Camera pitch (above ↕ below)",
+                     -1.2, 1.2, 0.05, 0.0)
+
+        form.addRow(_separator())
+
         # Hair style dropdown + colour picker.
         hair_row = QHBoxLayout()
         hair_row.addWidget(QLabel("Hair style:"))
         self.hair_combo = QComboBox(self)
         try:
-            from faceview.vision.hair_overlay import list_styles
+            from faceview.vision.hair_3d import list_styles
             for s in list_styles():
                 self.hair_combo.addItem(s)
         except Exception:

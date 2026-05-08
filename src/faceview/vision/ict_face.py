@@ -445,6 +445,27 @@ _ARKIT_TO_ICT: dict[str, str] = {
 }
 
 
+def _apply_camera_orbit(
+    verts: np.ndarray, yaw: float, pitch: float,
+) -> np.ndarray:
+    """Rotate the whole scene around the mesh centroid.
+
+    Used for the camera-orbit slider so the user can view the head
+    from any angle without changing the head's own pose. The mesh
+    centroid is the orbit pivot; distance from camera is preserved
+    automatically since rotation about a point doesn't translate.
+    """
+    centre = (verts.min(axis=0) + verts.max(axis=0)) / 2.0
+    cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
+    cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
+    Ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]],
+                    dtype=np.float32)
+    Rx = np.array([[1, 0, 0], [0, cp_, -sp_], [0, sp_, cp_]],
+                    dtype=np.float32)
+    R = Ry @ Rx
+    return ((verts - centre) @ R.T + centre).astype(np.float32)
+
+
 def _apply_neck_rotation(
     verts: np.ndarray, yaw: float, pitch: float,
 ) -> np.ndarray:
@@ -653,6 +674,15 @@ def render_face_ict(
     # CPU and then render with zero global rotation.
     verts = _apply_neck_rotation(verts, yaw, pitch)
 
+    # Camera orbit — rotates the WHOLE scene (head + bust together)
+    # around the mesh centroid at fixed distance. Slider-driven
+    # via params._camera_yaw/_pitch. Applied AFTER neck skinning so
+    # the head's natural pose stacks with the orbit view.
+    cam_yaw = float(getattr(params, "_camera_yaw", 0.0))
+    cam_pitch = float(getattr(params, "_camera_pitch", 0.0))
+    if abs(cam_yaw) > 1e-3 or abs(cam_pitch) > 1e-3:
+        verts = _apply_camera_orbit(verts, cam_yaw, cam_pitch)
+
     # Stash feature pixel positions on params so PostFX (tears, blush,
     # heart eyes, sweat drops, !? marks) can anchor on the actual eye
     # / cheek / forehead / mouth-corner positions. Verts already have
@@ -664,8 +694,32 @@ def render_face_ict(
     except Exception:
         params._feature_pixels = {}
 
-    bgr = _render_via_moderngl(verts, model.triangles, size,
-                                  0.0, 0.0, params)
+    # Procedural 3D hair — built once per frame on the deformed
+    # ICT verts so the crown anchor follows identity / blendshape
+    # changes. Appended to the GL pass so it gets the same shader
+    # (including specular + bloom) as the head.
+    hair_style = getattr(params, "_slider_hair_style", "none")
+    hair_color = getattr(params, "_slider_hair_color", "#3a2418")
+    hair_extra = None
+    if hair_style and hair_style != "none":
+        try:
+            from faceview.vision.hair_3d import gen_hair_mesh
+            hair_extra = gen_hair_mesh(hair_style, verts, hair_color)
+        except Exception:
+            hair_extra = None
+
+    if hair_extra is not None:
+        bgr = _render_via_moderngl(
+            verts, model.triangles, size, 0.0, 0.0, params,
+            extra_verts=hair_extra.verts,
+            extra_tris=hair_extra.tris,
+            extra_colors=hair_extra.colors,
+            extra_spec=hair_extra.specular,
+            extra_emit=hair_extra.emissive,
+        )
+    else:
+        bgr = _render_via_moderngl(verts, model.triangles, size,
+                                      0.0, 0.0, params)
 
     # Sci-fi bloom — extract bright pixels and add a blurred halo back
     # over the original. Reads as glowing eyes / hot teeth / etc.
@@ -867,29 +921,58 @@ def _render_via_moderngl(
     size: tuple[int, int],
     yaw: float, pitch: float,
     params,
+    *,
+    extra_verts: np.ndarray | None = None,
+    extra_tris: np.ndarray | None = None,
+    extra_colors: np.ndarray | None = None,
+    extra_spec: np.ndarray | None = None,
+    extra_emit: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Render through moderngl with a Phong shader. GPU-only path."""
+    """Render through moderngl with a Phong shader. GPU-only path.
+
+    ``extra_*`` arrays append a secondary mesh (e.g. procedural 3D
+    hair) to the ICT vertex stream so it gets the same MVP and
+    shader treatment. extra_tris should already be offset by the
+    ICT vertex count or by 0 — we apply the offset here.
+    """
     try:
         import moderngl
     except ImportError as exc:
         raise MissingDependency("moderngl", "gpu") from exc
 
-    # Cache the renderer in a module global to keep the GL context alive.
     rend = _ensure_renderer()
 
-    # Compute per-vertex normals (averaged from incident triangles).
-    v0 = verts[triangles[:, 0]]
-    v1 = verts[triangles[:, 1]]
-    v2 = verts[triangles[:, 2]]
+    # Combine ICT mesh with extras.
+    ict_n = len(verts)
+    ict_colors = _per_vertex_colors_for(params).astype(np.float32)
+    ict_spec = _per_vertex_specular().astype(np.float32)
+    ict_emit = _per_vertex_emissive().astype(np.float32)
+    if extra_verts is not None and len(extra_verts) > 0:
+        all_verts = np.vstack([verts, extra_verts]).astype(np.float32)
+        all_tris = np.vstack([
+            triangles, extra_tris.astype(np.int32) + ict_n,
+        ]).astype(np.int32)
+        all_colors = np.vstack([ict_colors, extra_colors.astype(np.float32)])
+        all_spec = np.concatenate([ict_spec, extra_spec.astype(np.float32)])
+        all_emit = np.concatenate([ict_emit, extra_emit.astype(np.float32)])
+    else:
+        all_verts, all_tris = verts.astype(np.float32), triangles
+        all_colors, all_spec, all_emit = ict_colors, ict_spec, ict_emit
+
+    # Per-vertex normals (averaged from incident triangles).
+    v0 = all_verts[all_tris[:, 0]]
+    v1 = all_verts[all_tris[:, 1]]
+    v2 = all_verts[all_tris[:, 2]]
     tri_norms = np.cross(v1 - v0, v2 - v0)
     tri_norms /= np.maximum(np.linalg.norm(tri_norms, axis=1, keepdims=True), 1e-9)
-    vert_norms = np.zeros_like(verts)
-    np.add.at(vert_norms, triangles[:, 0], tri_norms)
-    np.add.at(vert_norms, triangles[:, 1], tri_norms)
-    np.add.at(vert_norms, triangles[:, 2], tri_norms)
+    vert_norms = np.zeros_like(all_verts)
+    np.add.at(vert_norms, all_tris[:, 0], tri_norms)
+    np.add.at(vert_norms, all_tris[:, 1], tri_norms)
+    np.add.at(vert_norms, all_tris[:, 2], tri_norms)
     vert_norms /= np.maximum(np.linalg.norm(vert_norms, axis=1, keepdims=True), 1e-9)
 
-    # Centre + scale to fit.
+    # Centre + scale to fit (using ICT-only bbox so hair doesn't
+    # alter the head's framing).
     vmin = verts.min(axis=0)
     vmax = verts.max(axis=0)
     centre = (vmin + vmax) / 2
@@ -901,12 +984,12 @@ def _render_via_moderngl(
     pulse_scale = float(getattr(params, "_slider_emit_pulse_scale", 1.0) or 1.0)
     rend._emit_pulse = _emit_pulse_for(style, scale=pulse_scale)
     return rend.render(
-        verts=verts.astype(np.float32),
+        verts=all_verts,
         normals=vert_norms.astype(np.float32),
-        triangles=triangles.astype(np.uint32),
-        vert_colors=_per_vertex_colors_for(params).astype(np.float32),
-        vert_spec=_per_vertex_specular().astype(np.float32),
-        vert_emit=_per_vertex_emissive().astype(np.float32),
+        triangles=all_tris.astype(np.uint32),
+        vert_colors=all_colors,
+        vert_spec=all_spec,
+        vert_emit=all_emit,
         centre=centre.astype(np.float32),
         scale=float(scale),
         yaw=yaw, pitch=pitch,
