@@ -483,10 +483,12 @@ def _apply_neck_rotation(
     y_min = float(verts[:, 1].min())
     y_max = float(verts[:, 1].max())
     span = max(1e-6, y_max - y_min)
-    # Neck base ≈ 30 % up from the bottom of the bust; transition
-    # band runs to ≈ 50 % (just below the chin).
-    y_neck = y_min + span * 0.30
-    y_head = y_min + span * 0.55
+    # Neck base ≈ 22 % up from the bottom of the bust; "head fully
+    # rotates" boundary at ≈ 38 % so the chin (around 30 % of span)
+    # gets nearly full rotation. Earlier 0.30/0.55 left the chin
+    # in the transition band, distorting the lower face on shake/nod.
+    y_neck = y_min + span * 0.22
+    y_head = y_min + span * 0.38
 
     y = verts[:, 1]
     t = np.clip((y - y_neck) / max(1e-6, y_head - y_neck), 0.0, 1.0)
@@ -575,13 +577,6 @@ def _project_features(
         top = np.argsort(-mags)[:top_k]
         return project(verts[top].mean(axis=0))
 
-    cheek_l = from_blendshape("cheekPuff_L")
-    cheek_r = from_blendshape("cheekPuff_R")
-    if cheek_l:
-        out["cheek_L"] = cheek_l
-    if cheek_r:
-        out["cheek_R"] = cheek_r
-
     brow_l = from_blendshape("browOuterUp_L")
     brow_r = from_blendshape("browOuterUp_R")
     if brow_l:
@@ -594,7 +589,8 @@ def _project_features(
         # Move ~40 px above the inner-brow centroid for "above forehead".
         out["forehead"] = (fh[0], max(0.0, fh[1] - 40.0))
 
-    # Mouth centroid + corners.
+    # Mouth centroid + corners — must be computed BEFORE cheek anchor
+    # since cheek is derived geometrically from eye+mouth_corner.
     mouth_c = from_blendshape("mouthClose", top_k=80)
     if mouth_c:
         out["mouth"] = mouth_c
@@ -604,6 +600,18 @@ def _project_features(
         out["mouth_corner_L"] = mc_l
     if mc_r:
         out["mouth_corner_R"] = mc_r
+
+    # Cheek apple — derive geometrically. The apple sits ~30 % down
+    # from the eye toward the mouth corner. ICT blendshape regions
+    # for cheekPuff/Squint cluster around the mouth corners
+    # themselves, which is too low for blush placement.
+    def _lerp(p1, p2, t):
+        return (p1[0] * (1 - t) + p2[0] * t,
+                p1[1] * (1 - t) + p2[1] * t)
+    if "eye_L" in out and "mouth_corner_L" in out:
+        out["cheek_L"] = _lerp(out["eye_L"], out["mouth_corner_L"], 0.30)
+    if "eye_R" in out and "mouth_corner_R" in out:
+        out["cheek_R"] = _lerp(out["eye_R"], out["mouth_corner_R"], 0.30)
 
     chin = from_blendshape("jawOpen", top_k=80)
     if chin:
@@ -688,9 +696,12 @@ def render_face_ict(
     # / cheek / forehead / mouth-corner positions. Verts already have
     # the neck rotation baked in, so project at zero global yaw/pitch.
     try:
-        params._feature_pixels = _project_features(
-            model, verts, 0.0, 0.0, size,
-        )
+        feat = _project_features(model, verts, 0.0, 0.0, size)
+        # Stash effective pose so anatomy overlays (skull/brain) can
+        # render at the same orientation as the ICT face.
+        feat["_yaw"] = float(yaw + cam_yaw)
+        feat["_pitch"] = float(pitch + cam_pitch)
+        params._feature_pixels = feat
     except Exception:
         params._feature_pixels = {}
 

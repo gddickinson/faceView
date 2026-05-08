@@ -222,10 +222,15 @@ def post_electric_arcs(bgr: np.ndarray, u: float, intensity: float) -> np.ndarra
 
 
 def _real_anatomy_overlay(bgr: np.ndarray, layer: str,
-                            scale_factor: float = 0.82
+                            scale_factor: float = 0.82,
+                            yaw: float = 0.0, pitch: float = 0.0,
                             ) -> np.ndarray | None:
     """Try to render the real BP3D anatomy mesh aligned to bgr's
     head footprint. Returns None if BP3D meshes aren't on disk.
+
+    ``yaw`` / ``pitch`` (radians) rotate the anatomy to match the
+    ICT face's current pose + camera orbit so the skull/brain track
+    head movement instead of being frozen at one orientation.
 
     ``scale_factor`` shrinks the overlay so the skull/brain reads
     as sitting INSIDE the skin envelope rather than overlapping it.
@@ -237,7 +242,9 @@ def _real_anatomy_overlay(bgr: np.ndarray, layer: str,
     except Exception:
         return None
     h, w, _ = bgr.shape
-    raw = render_anatomy_overlay(layer, (w, h), bg_rgb=(0, 8, 16))
+    raw = render_anatomy_overlay(layer, (w, h),
+                                    yaw=yaw, pitch=pitch,
+                                    bg_rgb=(0, 8, 16))
     if raw is None:
         return None
     return fit_overlay_to_head(raw, bgr, (0, 8, 16),
@@ -248,7 +255,13 @@ def post_skull_flash(bgr: np.ndarray, u: float, intensity: float, *,
                       features: dict | None = None) -> np.ndarray:
     """Brief skull flash. Uses the real BP3D skull mesh if available,
     falls back to a luma-mask bone-tint stand-in."""
-    skull = _real_anatomy_overlay(bgr, "skull_only")
+    yaw = float((features or {}).get("_yaw", 0.0))
+    pitch = float((features or {}).get("_pitch", 0.0))
+    # Tighter scale — skull should sit clearly INSIDE the skin
+    # silhouette, not match its outline.
+    skull = _real_anatomy_overlay(bgr, "skull_only",
+                                     scale_factor=0.62,
+                                     yaw=yaw, pitch=pitch)
     a = intensity * math.sin(u * math.pi)
     if skull is None:
         # Fallback: tint bright luma regions bone-white.
@@ -285,7 +298,10 @@ def post_brain_flash(bgr: np.ndarray, u: float, intensity: float, *,
     if a <= 0.02:
         return bgr
 
-    brain = _real_anatomy_overlay(bgr, "brain", scale_factor=0.7)
+    yaw = float((features or {}).get("_yaw", 0.0))
+    pitch = float((features or {}).get("_pitch", 0.0))
+    brain = _real_anatomy_overlay(bgr, "brain", scale_factor=0.7,
+                                     yaw=yaw, pitch=pitch)
     # Translate the brain image upward so it sits in the upper head
     # (cerebrum level) instead of at the head bbox centre. ICT head
     # span is ~190 px at 320 sz so an offset of -50 ≈ 25 % of head
@@ -639,11 +655,17 @@ def post_dark_pupils(bgr: np.ndarray, u: float, intensity: float, *,
     h, w, _ = bgr.shape
     out = bgr.copy()
     eye_l, eye_r = _eye_centres(features, h, w)
-    r = int(14 + 10 * intensity * math.sin(u * math.pi))
-    if r < 4:
+    # Pupil radius scales with the inter-eye distance — that gives
+    # a sensible iris size regardless of frame resolution + head zoom.
+    eye_dist = max(20.0, math.hypot(eye_l[0] - eye_r[0],
+                                         eye_l[1] - eye_r[1]))
+    base_r = int(eye_dist * 0.10)  # ~10 % of inter-eye gap
+    r = int(base_r + base_r * 0.5 * intensity * math.sin(u * math.pi))
+    if r < 3:
         return out
     for ex, ey in (eye_l, eye_r):
-        cv2.circle(out, (ex, ey), r, (0, 0, 0), -1, cv2.LINE_AA)
+        cv2.circle(out, (int(ex), int(ey)), r, (0, 0, 0),
+                    -1, cv2.LINE_AA)
     return out
 
 
