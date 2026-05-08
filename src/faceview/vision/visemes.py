@@ -52,6 +52,46 @@ class AUTarget:
                 "AU22": self.AU22, "AU20": self.AU20, "AU12": self.AU12}
 
 
+# Tongue-position targets per viseme. Each tuple is
+# (extend, vertical, lateral, taper). Values are in [-1, 1] to
+# match the slider ranges. extend ≈ -0.4 = "just barely visible
+# behind the teeth"; +0.05 = "tip at the lip line"; +0.4 = "tip
+# protrudes" (only for /th/ — between-teeth sounds).
+# vertical: +1 = tip up to alveolar/palate, -1 = down on floor.
+# lateral: side-shift (most consonants are midline).
+TONGUE_POSE: dict[str, tuple[float, float, float, float]] = {
+    "REST": (-0.85,  0.0, 0.0, 0.30),
+    # Bilabials — tongue rests low on floor.
+    "PP":   (-0.85,  -0.15, 0.0, 0.30),
+    # Labio-dentals — tongue at lower-front, doesn't help much.
+    "FF":   (-0.55,  -0.10, 0.0, 0.40),
+    # Inter-dentals — tongue tip BETWEEN teeth (visible).
+    "TH":   ( 0.10,   0.20, 0.0, 0.65),
+    # Alveolars — tip touches the ridge behind upper teeth.
+    "DD":   (-0.30,   0.55, 0.0, 0.55),
+    # Sibilants — tip near alveolar, slightly retracted.
+    "SS":   (-0.40,   0.45, 0.0, 0.50),
+    # Post-alveolars — tip back of alveolar, body bunched.
+    "SH":   (-0.45,   0.30, 0.0, 0.55),
+    # Velars — tongue back arched up, tip stays low.
+    "KK":   (-0.55,  -0.15, 0.0, 0.30),
+    # Rhotic — tip curled back.
+    "RR":   (-0.45,   0.20, 0.0, 0.55),
+    # Open vowels — tongue low, central.
+    "AA":   (-0.65,  -0.40, 0.0, 0.30),
+    # Mid front vowels — tongue mid-front.
+    "EH":   (-0.55,   0.10, 0.0, 0.30),
+    # High front vowels — tongue high-front.
+    "IH":   (-0.50,   0.50, 0.0, 0.30),
+    # Mid-back rounded — tongue mid-back.
+    "OH":   (-0.60,  -0.20, 0.0, 0.30),
+    # High back rounded — tongue high-back.
+    "UH":   (-0.55,   0.20, 0.0, 0.30),
+    # Glides — tongue mid + rounded lips.
+    "WW":   (-0.55,   0.10, 0.0, 0.35),
+}
+
+
 VISEMES: dict[str, AUTarget] = {
     "REST": AUTarget(0.0, 0.0, 0.0, 0.0, 0.0),
     "PP":   AUTarget(0.0, 0.05, 0.0, 0.0, 0.0),

@@ -301,9 +301,11 @@ class EffectsPanel(QDialog):
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         info = QLabel(
-            "Dynamic 3D tongue. The mesh is rooted at the back of the\n"
-            "mouth and bends along a Bézier curve driven by these\n"
-            "sliders. Set Extend = -1 to retract entirely.")
+            "Dynamic 3D tongue. Rooted at the back of the mouth, bends\n"
+            "along a Bézier curve. Set Extend = -1 to retract — when\n"
+            "retracted (and Talking-tongue is on), the tongue is driven\n"
+            "by the active speech viseme so it moves naturally inside\n"
+            "the mouth as the avatar talks.")
         info.setStyleSheet("color: #888; font-style: italic;")
         layout.addWidget(info)
 
@@ -315,6 +317,7 @@ class EffectsPanel(QDialog):
                                                                   -1.0, 1.0,  0.0),
             ("tongue_curl",     "Curl (droop ↔ arch)",          -1.0, 1.0,  0.0),
             ("tongue_taper",    "Taper (flat ↔ pointed)",        0.0, 1.0,  0.4),
+            ("talking_tongue",  "Talking tongue (off ↔ on)",     0.0, 1.0,  1.0),
         ]:
             slider, value_label, default_step = self._labelled_slider(
                 key, lo, hi, 0.05, default, "{:.2f}",

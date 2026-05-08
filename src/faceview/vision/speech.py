@@ -159,6 +159,47 @@ def _viseme_weight(tv: TimedViseme, t: float, attack: float, release: float) -> 
     return 1.0
 
 
+def tongue_pose_at(
+    timeline: list[TimedViseme],
+    t: float,
+    *,
+    attack: float = 0.040,
+    release: float = 0.060,
+) -> tuple[float, float, float, float] | None:
+    """Blend tongue (extend, vertical, lateral, taper) per viseme.
+
+    Returns the weighted sum of TONGUE_POSE entries for the active
+    visemes (same envelope as viseme_blend_at). When no viseme is
+    active, returns None — caller can decide REST or hide.
+    """
+    from faceview.vision.visemes import TONGUE_POSE
+    if not timeline:
+        return None
+    weights = []
+    poses = []
+    for tv in timeline:
+        if t <= tv.start_time - attack:
+            break
+        if t >= tv.end_time + release:
+            continue
+        w = _viseme_weight(tv, t, attack, release)
+        if w <= 0.0:
+            continue
+        pose = TONGUE_POSE.get(tv.viseme, TONGUE_POSE["REST"])
+        weights.append(w)
+        poses.append(pose)
+    if not weights:
+        return None
+    total = sum(weights)
+    if total <= 1e-6:
+        return None
+    e = sum(w * p[0] for w, p in zip(weights, poses)) / total
+    v = sum(w * p[1] for w, p in zip(weights, poses)) / total
+    l = sum(w * p[2] for w, p in zip(weights, poses)) / total
+    tp = sum(w * p[3] for w, p in zip(weights, poses)) / total
+    return float(e), float(v), float(l), float(tp)
+
+
 def viseme_blend_at(
     timeline: list[TimedViseme],
     t: float,

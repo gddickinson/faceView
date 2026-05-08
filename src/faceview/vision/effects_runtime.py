@@ -71,6 +71,7 @@ class SliderState:
     tongue_vertical: float = 0.0  # -1 over lower lip ↔ +1 over upper lip
     tongue_curl: float = 0.0      # -1 droop ↔ +1 arch
     tongue_taper: float = 0.4     # 0 blunt ↔ 1 pointed
+    talking_tongue: float = 1.0   # 0 disable, 1 show tongue during speech
     # Hair overlay — procedural style + colour.
     hair_style: str = "none"      # see hair_overlay.STYLES
     hair_color: str = "#3a2418"   # hex string
@@ -241,13 +242,49 @@ class EffectsRuntime:
 
         # 3D tongue — slider-driven shape parameters override the
         # PreFX-warp's static protrusion when the tongue is visible.
-        if s.tongue_extend > -0.95:
+        manual_tongue = s.tongue_extend > -0.95
+        tongue_extend_active = -1.0
+        if manual_tongue:
             params._show_tongue = True
             params._tongue_extend = float(s.tongue_extend)
             params._tongue_lateral = float(s.tongue_lateral)
             params._tongue_vertical = float(s.tongue_vertical)
             params._tongue_curl = float(s.tongue_curl)
             params._tongue_taper = float(s.tongue_taper)
+            tongue_extend_active = float(s.tongue_extend)
+        elif s.talking_tongue > 0.5:
+            # Speech-driven tongue — read pose set by the avatar's
+            # tick() during an active utterance.
+            speech_tongue = getattr(params, "_talking_tongue", None)
+            if speech_tongue is not None:
+                e, v, l, tp = speech_tongue
+                params._show_tongue = True
+                params._tongue_extend = float(e)
+                params._tongue_vertical = float(v)
+                params._tongue_lateral = float(l)
+                params._tongue_curl = 0.0
+                params._tongue_taper = float(tp)
+                tongue_extend_active = float(e)
+
+        # If the tongue is poking out of the lips (extend > 0) we
+        # need to physically open the mouth — clear lip-press /
+        # tighten and force a minimum jaw_open. Otherwise the
+        # tongue would be coming out of sealed lips, which looks
+        # impossible.
+        if tongue_extend_active > 0.0:
+            required_jaw = float(0.10 + 0.25 * tongue_extend_active)
+            params.jaw_open = max(getattr(params, "jaw_open", 0.0),
+                                       required_jaw)
+            # Lips physically can't press together while tongue is
+            # protruding; suppress those AU drives.
+            params.lip_press = min(getattr(params, "lip_press", 0.0),
+                                       max(0.0, 0.3 - tongue_extend_active))
+            params.lip_tighten = min(getattr(params, "lip_tighten", 0.0),
+                                          max(0.0, 0.3 - tongue_extend_active))
+            # Reduce mouth_pucker for high extension (lips drawn forward
+            # but not closed). Pucker fully closes the lips so cap it.
+            params.mouth_pucker = min(getattr(params, "mouth_pucker", 0.0),
+                                           max(0.0, 0.5 - tongue_extend_active * 0.5))
 
         # Direct blendshape sliders — populate params.direct_blendshapes
         # so the renderer feeds them into the ICT coefficient stream.
