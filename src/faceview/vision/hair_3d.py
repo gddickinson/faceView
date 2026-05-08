@@ -464,14 +464,14 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
     head_h = float(ict_verts[:, 1].max() - ict_verts[:, 1].min())
 
     # ── anatomical anchors (in ICT model coordinates) ──
-    # Root: deep in the mouth on the mandibular floor. We anchor it
-    # just inside the visible mouth cavity (any further back and the
-    # ICT face mesh occludes the tongue's back end). Keeps the
-    # tongue clearly visible inside an open mouth while still
-    # reading as "rooted at the back".
+    # Root: pharyngeal level — deep in the throat. The ICT face
+    # mesh has a closed mouth cavity that opens with jaw_open;
+    # the tongue body needs to extend well back so when looking
+    # into an open mouth the user sees the body trailing back into
+    # the throat (rather than starting at the lip line).
     root = np.array([0.0,
-                       centre[1] - head_h * 0.025,
-                       centre[2] - head_w * 0.085], dtype=np.float32)
+                       centre[1] - head_h * 0.035,
+                       centre[2] - head_w * 0.22], dtype=np.float32)
     # Lip exit: where the tongue passes between the lips. Slightly
     # forward of the lip-ring centroid, on the midline.
     lip_exit = np.array([0.0,
