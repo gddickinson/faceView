@@ -464,20 +464,22 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
     head_h = float(ict_verts[:, 1].max() - ict_verts[:, 1].min())
 
     # ── anatomical anchors (in ICT model coordinates) ──
-    # Root: back of the oral cavity. Deep behind the lips, slightly
-    # below midline (sits on the mandibular floor).
+    # Root: back of the throat. The tongue is a long muscle that
+    # extends far back to the hyoid bone / pharyngeal wall —
+    # anchor it well behind the lip line and below it, so the
+    # extension up + over the lower teeth is anatomically real.
     root = np.array([0.0,
-                       centre[1] - head_h * 0.005,
-                       centre[2] - head_w * 0.07], dtype=np.float32)
-    # Lip exit: where the tongue passes between the lips. Always on
-    # the midline at the lip-ring centroid Z (slightly forward to
-    # clear the inside of the lips).
+                       centre[1] - head_h * 0.04,
+                       centre[2] - head_w * 0.16], dtype=np.float32)
+    # Lip exit: where the tongue passes between the lips. Slightly
+    # forward of the lip-ring centroid, on the midline.
     lip_exit = np.array([0.0,
                             centre[1] - head_h * 0.002,
                             centre[2] + lip_r * 0.20], dtype=np.float32)
 
-    # Jaw open drops the mandible — tongue root drops fully, lip
-    # exit drops a bit (lower lip moves more than upper).
+    # Jaw open drops the mandible — root (attached to mandible)
+    # drops fully, lip exit drops less (lies between upper-lip-
+    # stationary and lower-lip-fully-down).
     if jaw_open > 0.01:
         drop = head_h * 0.10 * jaw_open
         root[1] -= drop
@@ -507,10 +509,10 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
         lip_exit[2] += head_w * 0.04 * extend
 
     # ── centerline build ──
-    # Internal segment: root → lip_exit. Always a smooth curve along
-    # the inside of the mouth — no user displacement here, so the
-    # body never bows out through the cheek.
-    int_rings = 6
+    # Internal segment: root (back of throat) → lip_exit. Long arc
+    # rising from the pharyngeal level over the lower teeth. More
+    # rings = smoother curve.
+    int_rings = 12
     # External segment: lip_exit → tip. Bezier with curl displacement
     # applied to the control point (only applies if extended).
     ext_rings = 8 if external_present else 0
@@ -520,11 +522,18 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
         ext_ctrl[1] += curl * head_h * 0.12 * extend
     else:
         ext_ctrl = lip_exit
+    # Internal segment ARCHES UP — root sits on the mandibular
+    # floor (low) but the tongue body has to rise over the lower
+    # teeth to exit the mouth. Control point lifts the centerline
+    # well above the root → curves the path from low-back up
+    # through the open mouth and forward to the lip exit.
+    # Arch height grows with jaw_open so when the mouth is open
+    # you clearly see the body rising over the lower teeth.
     int_mid = (root + lip_exit) * 0.5
-    # Slight droop on the internal segment (tongue rests on mouth
-    # floor when relaxed).
     int_ctrl = int_mid.copy()
-    int_ctrl[1] -= head_h * 0.01
+    # Arch rises ABOVE the lip-exit Y so the path clearly bends up
+    # over the lower teeth before exiting. Scale rises with jaw_open.
+    int_ctrl[1] += head_h * (0.030 + 0.025 * jaw_open)
 
     rings = int_rings + ext_rings
     segs = 14
