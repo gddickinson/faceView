@@ -128,6 +128,13 @@ AU_TO_ARKIT: dict[str, list[tuple[str, float]]] = {
     "AU25": [("mouthLowerDownLeft", 0.5), ("mouthLowerDownRight", 0.5),
               ("mouthUpperUpLeft", 0.5), ("mouthUpperUpRight", 0.5)],
     "AU26": [("jawOpen", 1.0)],
+    "AU45": [("eyeBlinkLeft", 1.0), ("eyeBlinkRight", 1.0)],
+    "AU17": [("mouthShrugLower", 1.0), ("mouthShrugUpper", 0.5)],
+    "AU23": [("mouthRollLower", 0.6), ("mouthRollUpper", 0.6),
+              ("mouthPressLeft", 0.4), ("mouthPressRight", 0.4)],
+    "AU24": [("mouthPressLeft", 1.0), ("mouthPressRight", 1.0)],
+    "AU10": [("mouthUpperUpLeft", 1.0), ("mouthUpperUpRight", 1.0)],
+    "AU14": [("mouthDimpleLeft", 1.0), ("mouthDimpleRight", 1.0)],
 }
 
 

@@ -219,8 +219,8 @@ def _material_palette(params) -> dict[str, tuple[float, float, float]]:
     """
     style = getattr(params, "_persona_style", "natural")
     if style in _SCIFI_PALETTES:
+        base = dict(_SCIFI_PALETTES[style])
         if style == "xray":
-            base = dict(_SCIFI_PALETTES["xray"])
             dr, dg, db = _xray_mood_offset(params)
             for mat in ("M_Face", "M_BackHead"):
                 r, g, b = base[mat]
@@ -229,8 +229,38 @@ def _material_palette(params) -> dict[str, tuple[float, float, float]]:
                     float(np.clip(g + dg, 0.0, 1.0)),
                     float(np.clip(b + db, 0.0, 1.0)),
                 )
-            return base
-        return _SCIFI_PALETTES[style]
+        # Slider overrides — apply HSV hue/sat/value shifts to skin
+        # materials so the user can recolour the xray (or any sci-fi)
+        # palette live without dropping out of style.
+        slider_hue = getattr(params, "_slider_skin_hue", None)
+        slider_sat = getattr(params, "_slider_skin_sat", None)
+        slider_val = getattr(params, "_slider_skin_val", None)
+        if slider_hue is not None or slider_sat is not None \
+                or slider_val is not None:
+            import colorsys
+            for mat in ("M_Face", "M_BackHead", "M_HairCap", "M_GumsTongue"):
+                if mat not in base:
+                    continue
+                r, g, b = base[mat]
+                h, s, v = colorsys.rgb_to_hsv(r, g, b)
+                if slider_hue is not None:
+                    h = (float(slider_hue) % 360.0) / 360.0
+                if slider_sat is not None:
+                    s = float(np.clip(s * (float(slider_sat) / 0.32),
+                                          0.0, 1.0))
+                if slider_val is not None:
+                    v = float(np.clip(v * (float(slider_val) / 0.86),
+                                          0.0, 1.0))
+                r2, g2, b2 = colorsys.hsv_to_rgb(h, s, v)
+                base[mat] = (r2, g2, b2)
+        # Eye glow colour override — applies to iris materials in
+        # all sci-fi styles so the user can swap glow colour live.
+        eye_hex = getattr(params, "_persona_eye_color", None)
+        if eye_hex and style != "natural":
+            iris_rgb = _hex_to_rgb_f(eye_hex)
+            base["M_IrisLeft"] = iris_rgb
+            base["M_IrisRight"] = iris_rgb
+        return base
 
     sat = float(getattr(params, "_persona_skin_sat", 0.32))
     val = float(getattr(params, "_persona_skin_val", 0.86))
@@ -289,17 +319,20 @@ _STYLE_PULSE: dict[str, tuple[float, float, float]] = {
 }
 
 
-def _emit_pulse_for(style: str) -> float:
+def _emit_pulse_for(style: str, scale: float = 1.0) -> float:
     """Time-varying emissive pulse magnitude for the given style.
 
     Reads ``time.monotonic`` so the pulse advances frame-to-frame
     without needing the avatar tick to plumb a phase argument.
+    ``scale`` multiplies the final amplitude — used by the live
+    Eye-glow-strength slider.
     """
     if style not in _STYLE_PULSE:
         return 0.0
     base, amp, hz = _STYLE_PULSE[style]
     import math, time
-    return float(base + amp * math.sin(2.0 * math.pi * hz * time.monotonic()))
+    return float((base + amp * math.sin(2.0 * math.pi * hz * time.monotonic()))
+                 * scale)
 
 
 # Per-material specular intensity (A43). Eyes get high mirror-like
@@ -412,6 +445,152 @@ _ARKIT_TO_ICT: dict[str, str] = {
 }
 
 
+def _apply_neck_rotation(
+    verts: np.ndarray, yaw: float, pitch: float,
+) -> np.ndarray:
+    """Per-vertex Y-weighted skinning around the neck pivot.
+
+    Vertices in the head region get the full ry @ rx rotation;
+    vertices in the bust / shoulders below the neck stay put. The
+    transition is a smoothstep over a thin band. Result: when
+    ``yaw`` / ``pitch`` are non-zero, only the head turns — the
+    bust/collar reads as a stationary platform the head moves on.
+    """
+    if abs(yaw) < 1e-3 and abs(pitch) < 1e-3:
+        return verts
+
+    y_min = float(verts[:, 1].min())
+    y_max = float(verts[:, 1].max())
+    span = max(1e-6, y_max - y_min)
+    # Neck base ≈ 30 % up from the bottom of the bust; transition
+    # band runs to ≈ 50 % (just below the chin).
+    y_neck = y_min + span * 0.30
+    y_head = y_min + span * 0.55
+
+    y = verts[:, 1]
+    t = np.clip((y - y_neck) / max(1e-6, y_head - y_neck), 0.0, 1.0)
+    w = (t * t * (3.0 - 2.0 * t)).astype(np.float32)  # smoothstep
+
+    cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
+    cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
+    Ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]],
+                    dtype=np.float32)
+    Rx = np.array([[1, 0, 0], [0, cp_, -sp_], [0, sp_, cp_]],
+                    dtype=np.float32)
+    R = Ry @ Rx
+
+    pivot = np.array([0.0, y_neck, 0.0], dtype=np.float32)
+    diff = verts - pivot
+    rotated = (diff @ R.T) + pivot
+    return (verts * (1.0 - w[:, None])
+              + rotated * w[:, None]).astype(np.float32)
+
+
+def _project_features(
+    model, verts: np.ndarray,
+    yaw: float, pitch: float, size: tuple[int, int],
+) -> dict[str, tuple[float, float]]:
+    """Project key ICT feature centroids to pixel space.
+
+    Mirrors the renderer's exact MVP (centre + scale + flip + ry @ rx
+    + aspect-correct X), then maps each named feature's vertex
+    centroid to (x, y) pixel coordinates. Used by PostFX overlays
+    (tears, blush, heart-eyes, sweat-drops) so they land on the
+    actual face features even after pose/morph changes.
+
+    Feature points sourced from material-tagged vertices (iris L/R)
+    and from blendshape-affected vertices (cheek, brow, forehead,
+    mouth corners, chin).
+    """
+    w, h = size
+    aspect = float(h) / float(w) if w > 0 else 1.0
+
+    vmin = verts.min(axis=0)
+    vmax = verts.max(axis=0)
+    centre = (vmin + vmax) / 2.0
+    span = float(np.linalg.norm(vmax - vmin))
+    scale = 1.6 / max(span, 1e-6)
+
+    cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
+    cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
+    ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]],
+                    dtype=np.float32)
+    rx = np.array([[1, 0, 0], [0, cp_, -sp_], [0, sp_, cp_]],
+                    dtype=np.float32)
+    flip = np.diag([1.0, 1.0, -1.0]).astype(np.float32)
+    R = ry @ rx @ flip
+    S = np.diag([scale * aspect, scale, scale]).astype(np.float32)
+
+    def project(p3: np.ndarray) -> tuple[float, float]:
+        v = R @ (S @ (p3 - centre))
+        x_pix = (v[0] + 1.0) / 2.0 * w
+        y_pix = (1.0 - (v[1] + 1.0) / 2.0) * h
+        return float(x_pix), float(y_pix)
+
+    out: dict[str, tuple[float, float]] = {}
+    # Eye centres via M_IrisLeft / M_IrisRight materials.
+    iris_l_idx = next((i for i, n in enumerate(model.materials)
+                          if n == "M_IrisLeft"), -1)
+    iris_r_idx = next((i for i, n in enumerate(model.materials)
+                          if n == "M_IrisRight"), -1)
+    iris_v: dict[str, list[int]] = {"L": [], "R": []}
+    for ti, mi in enumerate(model.tri_materials):
+        tag = "L" if mi == iris_l_idx else "R" if mi == iris_r_idx else None
+        if tag is not None:
+            for v in model.triangles[ti]:
+                iris_v[tag].append(int(v))
+    if iris_v["L"]:
+        out["eye_L"] = project(verts[np.unique(iris_v["L"])].mean(axis=0))
+    if iris_v["R"]:
+        out["eye_R"] = project(verts[np.unique(iris_v["R"])].mean(axis=0))
+
+    # Helper: top-K verts by blendshape delta magnitude → centroid
+    # in deformed space.
+    def from_blendshape(name: str, top_k: int = 60) -> tuple[float, float] | None:
+        idx = model.name_to_idx.get(name)
+        if idx is None:
+            return None
+        mags = np.linalg.norm(model.deltas[idx], axis=1)
+        top = np.argsort(-mags)[:top_k]
+        return project(verts[top].mean(axis=0))
+
+    cheek_l = from_blendshape("cheekPuff_L")
+    cheek_r = from_blendshape("cheekPuff_R")
+    if cheek_l:
+        out["cheek_L"] = cheek_l
+    if cheek_r:
+        out["cheek_R"] = cheek_r
+
+    brow_l = from_blendshape("browOuterUp_L")
+    brow_r = from_blendshape("browOuterUp_R")
+    if brow_l:
+        out["brow_L"] = brow_l
+    if brow_r:
+        out["brow_R"] = brow_r
+
+    fh = from_blendshape("browInnerUp_L", top_k=80)
+    if fh:
+        # Move ~40 px above the inner-brow centroid for "above forehead".
+        out["forehead"] = (fh[0], max(0.0, fh[1] - 40.0))
+
+    # Mouth centroid + corners.
+    mouth_c = from_blendshape("mouthClose", top_k=80)
+    if mouth_c:
+        out["mouth"] = mouth_c
+    mc_l = from_blendshape("mouthSmile_L")
+    mc_r = from_blendshape("mouthSmile_R")
+    if mc_l:
+        out["mouth_corner_L"] = mc_l
+    if mc_r:
+        out["mouth_corner_R"] = mc_r
+
+    chin = from_blendshape("jawOpen", top_k=80)
+    if chin:
+        out["chin"] = chin
+
+    return out
+
+
 def apply_blendshapes(
     model: ICTModel,
     arkit_coefs: dict[str, float],
@@ -459,14 +638,32 @@ def render_face_ict(
     yaw = float(getattr(params, "yaw", 0.0)) * 0.6
     pitch = float(getattr(params, "pitch", 0.0)) * 0.4
 
+    # Anatomical head rotation: per-vertex Y-weighted skinning so
+    # the head rotates around the neck base while the bust stays
+    # mostly in place. We bake the rotation into the vertices on the
+    # CPU and then render with zero global rotation.
+    verts = _apply_neck_rotation(verts, yaw, pitch)
+
+    # Stash feature pixel positions on params so PostFX (tears, blush,
+    # heart eyes, sweat drops, !? marks) can anchor on the actual eye
+    # / cheek / forehead / mouth-corner positions. Verts already have
+    # the neck rotation baked in, so project at zero global yaw/pitch.
+    try:
+        params._feature_pixels = _project_features(
+            model, verts, 0.0, 0.0, size,
+        )
+    except Exception:
+        params._feature_pixels = {}
+
     bgr = _render_via_moderngl(verts, model.triangles, size,
-                                  yaw, pitch, params)
+                                  0.0, 0.0, params)
 
     # Sci-fi bloom — extract bright pixels and add a blurred halo back
     # over the original. Reads as glowing eyes / hot teeth / etc.
     style = getattr(params, "_persona_style", "natural")
     if style != "natural":
-        bgr = _apply_bloom(bgr, style)
+        amp_override = getattr(params, "_slider_bloom_amp", None)
+        bgr = _apply_bloom(bgr, style, amp_override=amp_override)
 
     # 2D hair overlay (off by default — the procedural overlay is
     # rough; the bald ICT head reads cleaner). Set
@@ -476,16 +673,21 @@ def render_face_ict(
     return bgr
 
 
-def _apply_bloom(bgr: np.ndarray, style: str) -> np.ndarray:
+def _apply_bloom(bgr: np.ndarray, style: str,
+                  amp_override: float | None = None) -> np.ndarray:
     """Cheap bloom — Gaussian blur of bright pixels mixed back in.
 
     Pulls a high-pass mask above ``threshold``, blurs it large, and
-    additively blends. Per-style amplitude tunes the strength.
-    Total cost ≈ 3 ms at 320×320 (cv2 GaussianBlur).
+    additively blends. Per-style amplitude tunes the strength;
+    ``amp_override`` (0..1) lets the live Bloom-strength slider
+    replace the per-style default.
     """
-    import cv2  # already imported at top in test paths
-    amp = {"neon": 0.35, "transparent": 0.20,
-           "cyberpunk": 0.30, "xray": 0.45}.get(style, 0.0)
+    import cv2
+    if amp_override is not None:
+        amp = float(max(0.0, amp_override))
+    else:
+        amp = {"neon": 0.35, "transparent": 0.20,
+               "cyberpunk": 0.30, "xray": 0.45}.get(style, 0.0)
     if amp <= 0:
         return bgr
     threshold = 180  # luminance cutoff (0..255)
@@ -687,7 +889,8 @@ def _render_via_moderngl(
 
     style = getattr(params, "_persona_style", "natural")
     rend._style_uniforms = _shader_overrides_for_style(style)
-    rend._emit_pulse = _emit_pulse_for(style)
+    pulse_scale = float(getattr(params, "_slider_emit_pulse_scale", 1.0) or 1.0)
+    rend._emit_pulse = _emit_pulse_for(style, scale=pulse_scale)
     return rend.render(
         verts=verts.astype(np.float32),
         normals=vert_norms.astype(np.float32),

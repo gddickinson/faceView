@@ -221,32 +221,80 @@ def post_electric_arcs(bgr: np.ndarray, u: float, intensity: float) -> np.ndarra
 # ── Anatomy flashes ───────────────────────────────────────────────
 
 
-def post_skull_flash(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
-    luma = bgr.max(axis=2).astype(np.float32)
-    head_mask = (luma > np.percentile(luma, 70)).astype(np.float32)
-    skull = np.stack([
-        head_mask * 240, head_mask * 230, head_mask * 200,
-    ], axis=-1).astype(np.float32)
-    a = intensity * math.sin(u * math.pi)
-    return np.clip(bgr.astype(np.float32) * (1 - a)
-                    + skull * a, 0, 255).astype(np.uint8)
-
-
-def post_brain_flash(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
+def _real_anatomy_overlay(bgr: np.ndarray, layer: str
+                              ) -> np.ndarray | None:
+    """Try to render the real BP3D anatomy mesh aligned to bgr's
+    head footprint. Returns None if BP3D meshes aren't on disk."""
+    try:
+        from faceview.vision.anatomy_overlay import (
+            fit_overlay_to_head, render_anatomy_overlay,
+        )
+    except Exception:
+        return None
     h, w, _ = bgr.shape
-    luma = bgr.max(axis=2).astype(np.float32)
-    head_mask = (luma > np.percentile(luma, 60)).astype(np.float32)
-    yy = np.arange(h)[:, None] / h
-    head_mask *= (yy < 0.5).astype(np.float32).repeat(w, axis=1)
-    brain = np.stack([
-        head_mask * 140, head_mask * 100, head_mask * 220,
-    ], axis=-1).astype(np.float32)
-    a = intensity * math.sin(u * math.pi) * 0.7
-    out = bgr.astype(np.float32) * (1 - a) + brain * a
+    raw = render_anatomy_overlay(layer, (w, h), bg_rgb=(0, 8, 16))
+    if raw is None:
+        return None
+    return fit_overlay_to_head(raw, bgr, (0, 8, 16))
+
+
+def post_skull_flash(bgr: np.ndarray, u: float, intensity: float, *,
+                      features: dict | None = None) -> np.ndarray:
+    """Brief skull flash. Uses the real BP3D skull mesh if available,
+    falls back to a luma-mask bone-tint stand-in."""
+    skull = _real_anatomy_overlay(bgr, "skull_only")
+    a = intensity * math.sin(u * math.pi)
+    if skull is None:
+        # Fallback: tint bright luma regions bone-white.
+        luma = bgr.max(axis=2).astype(np.float32)
+        head_mask = (luma > np.percentile(luma, 70)).astype(np.float32)
+        skull_f = np.stack([
+            head_mask * 240, head_mask * 230, head_mask * 200,
+        ], axis=-1).astype(np.float32)
+        return np.clip(bgr.astype(np.float32) * (1 - a)
+                        + skull_f * a, 0, 255).astype(np.uint8)
+    # Real skull: cool-tint slightly to read against any palette,
+    # then alpha-blend over the ICT face.
+    skull_f = skull.astype(np.float32) * np.array([1.20, 1.05, 0.80],
+                                                       dtype=np.float32)
+    skull_f = np.clip(skull_f, 0, 255)
+    return np.clip(bgr.astype(np.float32) * (1 - a)
+                    + skull_f * a, 0, 255).astype(np.uint8)
+
+
+def post_brain_flash(bgr: np.ndarray, u: float, intensity: float, *,
+                      features: dict | None = None) -> np.ndarray:
+    """Brief brain flash. Uses the BP3D skull as a base, restricts to
+    the upper head region, and tints pink to read as brain."""
+    a = intensity * math.sin(u * math.pi) * 0.85
+    brain = _real_anatomy_overlay(bgr, "brain")
+    h, w, _ = bgr.shape
+    if brain is None:
+        # Fallback path.
+        luma = bgr.max(axis=2).astype(np.float32)
+        head_mask = (luma > np.percentile(luma, 60)).astype(np.float32)
+        yy = np.arange(h)[:, None] / h
+        head_mask *= (yy < 0.5).astype(np.float32).repeat(w, axis=1)
+        brain_f = np.stack([
+            head_mask * 140, head_mask * 100, head_mask * 220,
+        ], axis=-1).astype(np.float32)
+        out = bgr.astype(np.float32) * (1 - a) + brain_f * a
+    else:
+        # Real anatomy: pink tint + restrict to upper-half y so it
+        # reads as the brain region, not the full skull.
+        yy = np.arange(h)[:, None] / h
+        upper_mask = (yy < 0.55).astype(np.float32).repeat(w, axis=1)
+        pink = brain.astype(np.float32) * np.array([0.85, 0.60, 1.20],
+                                                        dtype=np.float32)
+        pink = np.clip(pink, 0, 255) * upper_mask[:, :, None]
+        out = bgr.astype(np.float32) * (1 - a) + pink * a
+    # Add gyri-like low-frequency noise for texture.
     rng = np.random.default_rng(17)
     noise = rng.random((h // 8, w // 8)).astype(np.float32) * 50
     noise = cv2.resize(noise, (w, h), interpolation=cv2.INTER_LINEAR)
-    out += noise[:, :, None] * head_mask[:, :, None] * a * 0.3
+    luma = bgr.max(axis=2)
+    head_mask_simple = (luma > 80).astype(np.float32)
+    out += noise[:, :, None] * head_mask_simple[:, :, None] * a * 0.25
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
@@ -255,23 +303,6 @@ def post_xray_flash(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
     a = intensity * math.sin(u * math.pi)
     return np.clip(bgr.astype(np.float32) * (1 - a)
                     + inv.astype(np.float32) * a, 0, 255).astype(np.uint8)
-
-
-def post_vein_show(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
-    h, w, _ = bgr.shape
-    out = bgr.copy()
-    rng = np.random.default_rng(13)
-    cx = int(w * 0.5)
-    fy = int(h * 0.30)
-    for _ in range(int(4 * intensity)):
-        x, y = cx + rng.integers(-40, 40), fy + rng.integers(-10, 10)
-        for _ in range(5):
-            nx = x + rng.integers(-12, 12)
-            ny = y + rng.integers(-4, 4)
-            cv2.line(out, (x, y), (nx, ny),
-                      (60, 60, 180), 1, cv2.LINE_AA)
-            x, y = nx, ny
-    return out
 
 
 # ── Comic + emotional ─────────────────────────────────────────────
@@ -294,11 +325,50 @@ def post_shock_lines(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
     return out
 
 
-def post_sweat_drop(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
+def _eye_centres(features: dict | None, h: int, w: int
+                   ) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Resolve (eye_L, eye_R) pixel centres from features dict;
+    fall back to fractional defaults if absent."""
+    if features and "eye_L" in features and "eye_R" in features:
+        return ((int(features["eye_L"][0]), int(features["eye_L"][1])),
+                (int(features["eye_R"][0]), int(features["eye_R"][1])))
+    return (int(w * 0.42), int(h * 0.42)), (int(w * 0.58), int(h * 0.42))
+
+
+def _cheek_centres(features: dict | None, h: int, w: int
+                     ) -> tuple[tuple[int, int], tuple[int, int]]:
+    if features and "cheek_L" in features and "cheek_R" in features:
+        return ((int(features["cheek_L"][0]), int(features["cheek_L"][1])),
+                (int(features["cheek_R"][0]), int(features["cheek_R"][1])))
+    return (int(w * 0.40), int(h * 0.50)), (int(w * 0.60), int(h * 0.50))
+
+
+def _temple(features: dict | None, h: int, w: int, side: str
+              ) -> tuple[int, int]:
+    key = "brow_L" if side == "left" else "brow_R"
+    if features and key in features:
+        x, y = features[key]
+        # Move outward + slightly down to read as "temple".
+        offset = -25 if side == "left" else +25
+        return int(x + offset), int(y + 6)
+    return (int(w * 0.30 if side == "left" else w * 0.70), int(h * 0.30))
+
+
+def _forehead(features: dict | None, h: int, w: int) -> tuple[int, int]:
+    if features and "forehead" in features:
+        x, y = features["forehead"]
+        return int(x), int(y)
+    return int(w * 0.5), int(h * 0.10)
+
+
+def post_sweat_drop(bgr: np.ndarray, u: float, intensity: float, *,
+                     features: dict | None = None) -> np.ndarray:
     h, w, _ = bgr.shape
     out = bgr.copy()
-    drop_x = int(w * 0.65)
-    drop_y = int(h * (0.25 + u * 0.4))
+    # Anchor at temple — slides downward over u.
+    tx, ty = _temple(features, h, w, "left")
+    drop_x = tx
+    drop_y = ty + int(h * 0.4 * u)
     r = int(14 * intensity)
     if r < 2:
         return out
@@ -309,16 +379,16 @@ def post_sweat_drop(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
     return out
 
 
-def post_heart_eyes(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
+def post_heart_eyes(bgr: np.ndarray, u: float, intensity: float, *,
+                     features: dict | None = None) -> np.ndarray:
     h, w, _ = bgr.shape
     out = bgr.copy()
-    eye_y = int(h * 0.42)
-    centres = [(int(w * 0.42), eye_y - int(40 * u)),
-                (int(w * 0.58), eye_y - int(40 * u))]
+    eye_l, eye_r = _eye_centres(features, h, w)
     size = int(18 * intensity)
     if size < 4:
         return out
-    for cx, cy in centres:
+    for cx, cy in (eye_l, eye_r):
+        cy = cy - int(40 * u)  # float upward
         cv2.circle(out, (cx - size // 3, cy), size // 2,
                     (90, 90, 230), -1, cv2.LINE_AA)
         cv2.circle(out, (cx + size // 3, cy), size // 2,
@@ -329,83 +399,154 @@ def post_heart_eyes(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
     return out
 
 
-def post_tears(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
+def post_tears(bgr: np.ndarray, u: float, intensity: float, *,
+                features: dict | None = None) -> np.ndarray:
     h, w, _ = bgr.shape
     out = bgr.copy()
-    eye_y = int(h * 0.42)
-    for ex in (int(w * 0.42), int(w * 0.58)):
-        end_y = eye_y + int((h * 0.45) * u)
-        cv2.line(out, (ex, eye_y), (ex, end_y),
+    eye_l, eye_r = _eye_centres(features, h, w)
+    for ex, ey in (eye_l, eye_r):
+        end_y = ey + int(h * 0.45 * u)
+        cv2.line(out, (ex, ey), (ex, end_y),
                   (255, 220, 180), 3, cv2.LINE_AA)
         cv2.circle(out, (ex, end_y), int(6 * intensity),
                     (255, 230, 200), -1, cv2.LINE_AA)
     return out
 
 
-def post_anger_steam(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
+def post_anger_steam(bgr: np.ndarray, u: float, intensity: float, *,
+                      features: dict | None = None) -> np.ndarray:
     h, w, _ = bgr.shape
     out = bgr.copy()
     rng = np.random.default_rng(11)
-    for side in (-1, 1):
-        cx = int(w * 0.5 + side * w * 0.18)
+    tl = _temple(features, h, w, "left")
+    tr = _temple(features, h, w, "right")
+    for cx, cy0 in (tl, tr):
         for k in range(5):
-            cy = int(h * 0.30 - (k * 18) - 30 * u)
+            cy = cy0 - (k * 18) - int(30 * u)
             r = int((10 + k * 4) * intensity)
             cv2.circle(out, (cx + int(rng.integers(-4, 4)), cy), r,
                         (220, 220, 240), 2, cv2.LINE_AA)
     return out
 
 
-def post_blush_extreme(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
-    h, w, _ = bgr.shape
+def post_blush_extreme(bgr: np.ndarray, u: float, intensity: float, *,
+                        features: dict | None = None) -> np.ndarray:
     a = intensity * math.sin(u * math.pi)
     if a <= 0:
         return bgr
-    cy = int(h * 0.50)
+    h, w, _ = bgr.shape
+    cl, cr = _cheek_centres(features, h, w)
     overlay = bgr.copy()
-    for cx in (int(w * 0.40), int(w * 0.60)):
+    for cx, cy in (cl, cr):
         cv2.ellipse(overlay, (cx, cy), (38, 22), 0, 0, 360,
                      (80, 80, 240), -1, cv2.LINE_AA)
     return cv2.addWeighted(bgr, 1.0, overlay, a * 0.4, 0)
 
 
-def post_exclamation(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
+def post_exclamation(bgr: np.ndarray, u: float, intensity: float, *,
+                       features: dict | None = None) -> np.ndarray:
     h, w, _ = bgr.shape
     out = bgr.copy()
-    y = int(h * 0.10 + 8 * math.sin(u * math.pi * 4))
-    cx = int(w * 0.5)
+    fx, fy = _forehead(features, h, w)
+    y = fy + int(8 * math.sin(u * math.pi * 4)) - 30
     sz = int(36 * intensity)
     if sz < 6:
         return out
-    cv2.putText(out, "!", (cx - sz // 4, y + sz),
+    cv2.putText(out, "!", (fx - sz // 4, y + sz),
                   cv2.FONT_HERSHEY_TRIPLEX, sz / 18,
                   (60, 220, 240), max(2, sz // 8), cv2.LINE_AA)
     return out
 
 
-def post_question_mark(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
+def post_question_mark(bgr: np.ndarray, u: float, intensity: float, *,
+                         features: dict | None = None) -> np.ndarray:
     h, w, _ = bgr.shape
     out = bgr.copy()
-    y = int(h * 0.12 + 6 * math.sin(u * math.pi * 3))
-    cx = int(w * 0.5)
+    fx, fy = _forehead(features, h, w)
+    y = fy + int(6 * math.sin(u * math.pi * 3)) - 26
     sz = int(36 * intensity)
     if sz < 6:
         return out
-    cv2.putText(out, "?", (cx - sz // 4, y + sz),
+    cv2.putText(out, "?", (fx - sz // 4, y + sz),
                   cv2.FONT_HERSHEY_TRIPLEX, sz / 18,
                   (255, 200, 80), max(2, sz // 8), cv2.LINE_AA)
     return out
 
 
-def post_dark_pupils(bgr: np.ndarray, u: float, intensity: float) -> np.ndarray:
+def post_tongue_out(bgr: np.ndarray, u: float, intensity: float, *,
+                      features: dict | None = None) -> np.ndarray:
+    """Draw a pink tongue sticking out of the mouth.
+
+    Pairs with the PreFX of the same name that opens the jaw.
+    The tongue wags side-to-side over the duration; length grows
+    then retracts via the half-sine envelope.
+    """
     h, w, _ = bgr.shape
     out = bgr.copy()
-    eye_y = int(h * 0.42)
+    if features and "mouth" in features:
+        mx, my = int(features["mouth"][0]), int(features["mouth"][1])
+    elif features and "chin" in features:
+        cx, cy = int(features["chin"][0]), int(features["chin"][1])
+        mx, my = cx, cy - int(h * 0.04)
+    else:
+        mx, my = int(w * 0.5), int(h * 0.55)
+
+    env = math.sin(u * math.pi)
+    if env < 0.04:
+        return out
+    length = int((28 + 28 * env) * intensity)
+    width = int((20 + 4 * env) * intensity)
+    if length < 6 or width < 4:
+        return out
+    # Wag side-to-side.
+    wag = int(8 * math.sin(u * math.pi * 6))
+    cx = mx + wag
+    cy = my + length // 2
+
+    # Tongue body — pink ellipse below the lip line.
+    cv2.ellipse(out, (cx, cy), (width, length), 0, 0, 360,
+                 (100, 90, 220), -1, cv2.LINE_AA)
+    # Slight darker outline.
+    cv2.ellipse(out, (cx, cy), (width, length), 0, 0, 360,
+                 (60, 40, 160), 1, cv2.LINE_AA)
+    # Centre groove (the median sulcus).
+    cv2.line(out, (cx, cy - length + 4), (cx, cy + length - 4),
+              (70, 55, 180), 1, cv2.LINE_AA)
+    # Highlight near the tip.
+    tip_y = cy + length - 3
+    cv2.circle(out, (cx - width // 3, cy - length // 4),
+                max(2, width // 5), (180, 160, 240), -1, cv2.LINE_AA)
+    return out
+
+
+def post_dark_pupils(bgr: np.ndarray, u: float, intensity: float, *,
+                      features: dict | None = None) -> np.ndarray:
+    h, w, _ = bgr.shape
+    out = bgr.copy()
+    eye_l, eye_r = _eye_centres(features, h, w)
     r = int(14 + 10 * intensity * math.sin(u * math.pi))
     if r < 4:
         return out
-    for ex in (int(w * 0.42), int(w * 0.58)):
-        cv2.circle(out, (ex, eye_y), r, (0, 0, 0), -1, cv2.LINE_AA)
+    for ex, ey in (eye_l, eye_r):
+        cv2.circle(out, (ex, ey), r, (0, 0, 0), -1, cv2.LINE_AA)
+    return out
+
+
+def post_vein_show(bgr: np.ndarray, u: float, intensity: float, *,
+                    features: dict | None = None) -> np.ndarray:
+    h, w, _ = bgr.shape
+    out = bgr.copy()
+    rng = np.random.default_rng(13)
+    fx, fy = _forehead(features, h, w)
+    fy = fy + 20  # closer to actual forehead skin
+    for _ in range(int(4 * intensity)):
+        x, y = fx + rng.integers(-40, 40), fy + rng.integers(-10, 10)
+        for _ in range(5):
+            nx = x + rng.integers(-12, 12)
+            ny = y + rng.integers(-4, 4)
+            cv2.line(out, (x, y), (nx, ny),
+                      (60, 60, 180), 1, cv2.LINE_AA)
+            x, y = nx, ny
     return out
 
 
@@ -447,6 +588,7 @@ HANDLERS = {
     "vein_show":            post_vein_show,
     "vaporwave":            post_vaporwave,
     "dark_pupils":          post_dark_pupils,
+    "tongue_out":           post_tongue_out,
     "invert_colors":        post_invert_colors,
     "grayscale":            post_grayscale,
     "chromatic_aberration": post_chromatic_aberration,

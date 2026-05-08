@@ -114,8 +114,12 @@ class SimCameraWorker:
             # PreFX + persistent sliders mutate FaceParams before render.
             rt.apply_pre(params)
             frame = render_face(params, self.size)
-            # PostFX overlay on the rendered BGR.
-            frame = rt.apply_post(frame)
+            # PostFX overlay on the rendered BGR — pass through the
+            # face-feature pixel positions stashed by the renderer
+            # so overlays (tears, blush, hearts, sweat) anchor on
+            # the actual eyes/cheeks/mouth.
+            feat = getattr(params, "_feature_pixels", {}) or {}
+            frame = rt.apply_post(frame, feature_pixels=feat)
             bus.publish(EventType.FRAME, frame)
 
             # Post derived events so the status panel updates as if the

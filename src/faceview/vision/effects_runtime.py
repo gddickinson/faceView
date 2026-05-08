@@ -152,15 +152,27 @@ class EffectsRuntime:
     def apply_pre(self, params) -> None:
         """Mutate FaceParams: sliders first, then active PreFX."""
         s = self.sliders
-        # Persistent slider biases.
+        # Persistent slider biases — set _slider_* attributes that the
+        # renderer reads directly (these override the persona's natural
+        # palette / pulse / bloom even in xray and other sci-fi modes).
         if s.skin_hue is not None:
+            params._slider_skin_hue = float(s.skin_hue)
             params.skin_hue = float(s.skin_hue)
         if s.skin_saturation is not None:
+            params._slider_skin_sat = float(s.skin_saturation)
             params._persona_skin_sat = float(s.skin_saturation)
         if s.skin_value is not None:
+            params._slider_skin_val = float(s.skin_value)
             params._persona_skin_val = float(s.skin_value)
         if s.eye_color_hex:
             params._persona_eye_color = s.eye_color_hex
+        if s.bloom_amp is not None:
+            params._slider_bloom_amp = float(s.bloom_amp)
+        if s.emit_pulse_scale is not None:
+            params._slider_emit_pulse_scale = float(s.emit_pulse_scale)
+        # Eye-open bias — extend clip range so the slider can fully
+        # close eyes (down to 0) or wide-open them past the natural
+        # 1.05 cap from face_state_to_params.
         params.eye_open = max(0.0, min(1.4, getattr(params, "eye_open", 1.0)
                                             + s.eye_open_bias))
         params.smile = max(-1.0, min(1.0, getattr(params, "smile", 0.0)
@@ -206,11 +218,19 @@ class EffectsRuntime:
             except Exception:
                 pass
 
-    def apply_post(self, bgr: np.ndarray) -> np.ndarray:
-        """Apply all active PostFX to the rendered BGR."""
+    def apply_post(self, bgr: np.ndarray, *,
+                    feature_pixels: Optional[dict] = None) -> np.ndarray:
+        """Apply all active PostFX to the rendered BGR.
+
+        ``feature_pixels`` is a dict of named (x, y) anchors on the
+        face (eye_L, eye_R, mouth, cheek_L/R, forehead, chin, …)
+        produced by the renderer. Effects that need to overlay on a
+        specific feature read it from there; effects that don't care
+        ignore the kwarg.
+        """
+        feat = feature_pixels or {}
         with self._lock:
             actives = list(self._active)
-            # Prune expired.
             now = time.monotonic()
             self._active = [e for e in self._active
                               if now - e.start_t <= e.duration]
@@ -223,7 +243,12 @@ class EffectsRuntime:
                 continue
             u = elapsed / max(e.duration, 1e-6)
             try:
-                bgr = handler(bgr, u, e.intensity)
+                # Try kwargs-aware handler first, fall back to legacy
+                # 3-arg signature.
+                try:
+                    bgr = handler(bgr, u, e.intensity, features=feat)
+                except TypeError:
+                    bgr = handler(bgr, u, e.intensity)
             except Exception:
                 pass
         return bgr

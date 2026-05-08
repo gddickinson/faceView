@@ -78,6 +78,11 @@ class FaceParams:
     outer_brow_raise: float = 0.0   # AU2 — outer brow tips lift (surprise)
     brow_lower: float = 0.0         # AU4 — both brows down + together (anger/concentration)
     lip_corner_drop: float = 0.0    # AU15 — lip corners drop (sadness)
+    chin_raise: float = 0.0         # AU17 — chin raises, lower lip up (pout)
+    upper_lip_raise: float = 0.0    # AU10 — upper lip pulled up (snarl / disgust)
+    dimpler: float = 0.0            # AU14 — corner pulled inward (smirk)
+    lip_tighten: float = 0.0        # AU23 — lips drawn tight, narrowed
+    lip_press: float = 0.0          # AU24 — lips pressed together
 
     # Convenience constructors
     @classmethod
