@@ -737,6 +737,7 @@ def render_face_ict(
                 vertical=float(getattr(params, "_tongue_vertical", 0.0)),
                 curl=float(getattr(params, "_tongue_curl", 0.0)),
                 taper=float(getattr(params, "_tongue_taper", 0.4)),
+                jaw_open=float(getattr(params, "jaw_open", 0.0)),
             )
             if tm is not None:
                 extras.append(tm)

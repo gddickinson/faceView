@@ -430,30 +430,30 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
                       vertical: float = 0.0,
                       curl: float = 0.0,
                       taper: float = 0.4,
+                      jaw_open: float = 0.0,
                       ) -> HairMesh | None:
-    """Dynamic 3D tongue — bezier-curve-driven tube anchored at the
-    back of the mouth.
+    """Anatomically-rooted dynamic 3D tongue.
+
+    Travels along the inside of the mouth: rooted at the back of
+    the oral cavity (attached to the mandible — drops with
+    ``jaw_open``), passes through the lip exit on the midline,
+    then the visible tip is steered by extend / lateral / vertical
+    / curl / taper. The internal segment never bows outward, so
+    the body stays inside the face.
 
     Parameters (all in [-1, 1] unless noted):
-      extend  : -1 fully retracted (returns None) → +1 fully out;
-                0 = tip just at the lip line.
-      lateral : tip side-shift (-1 screen-left, +1 screen-right).
-      vertical: tip up/down (-1 hangs over lower lip, +1 arches
-                over upper lip).
-      curl    : longitudinal body flex (-1 concave-down / drooped,
-                0 flat, +1 concave-up / arched).
-      taper   : 0 = flat blunt (constant width), 1 = strongly
-                pointed (linear narrowing toward the tip).
-
-    Anatomy:
-      Root anchored a fixed offset behind the lip-ring centroid
-      (back of the mouth). Centerline is a quadratic Bezier with
-      a control point that combines extend / lateral / vertical /
-      curl. Cross-sections are oriented perpendicular to the
-      tangent so the tongue body bends naturally.
+      extend   : -1 fully retracted (returns None) → +1 stuck way out;
+                 0 = tip at the lip exit.
+      lateral  : tip side-shift after exiting the mouth.
+      vertical : tip up/down after exiting; +1 over upper lip,
+                 -1 over lower lip.
+      curl     : longitudinal flex of the EXTERNAL segment only.
+      taper    : 0 blunt, 1 sharply pointed.
+      jaw_open : 0..1, drops the tongue root + lip exit with the
+                 mandible.
     """
     if extend <= -0.95:
-        return None  # fully retracted — hide the mesh
+        return None
 
     anchor = _mouth_anchor(ict_verts, model)
     if anchor is None:
@@ -463,68 +463,111 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
     head_w = float(ict_verts[:, 0].max() - ict_verts[:, 0].min())
     head_h = float(ict_verts[:, 1].max() - ict_verts[:, 1].min())
 
-    # Root: behind the lip-ring centre, slightly down (back of the
-    # mouth, anchored at the hyoid level).
-    root_back = head_w * 0.04   # behind lips
-    root = centre.copy()
-    root[1] -= head_h * 0.005
-    root[2] -= root_back
+    # ── anatomical anchors (in ICT model coordinates) ──
+    # Root: back of the oral cavity. Deep behind the lips, slightly
+    # below midline (sits on the mandibular floor).
+    root = np.array([0.0,
+                       centre[1] - head_h * 0.005,
+                       centre[2] - head_w * 0.07], dtype=np.float32)
+    # Lip exit: where the tongue passes between the lips. Always on
+    # the midline at the lip-ring centroid Z (slightly forward to
+    # clear the inside of the lips).
+    lip_exit = np.array([0.0,
+                            centre[1] - head_h * 0.002,
+                            centre[2] + lip_r * 0.20], dtype=np.float32)
 
-    # Tip target — extend remaps to forward distance:
-    #   extend = -1 → tip ≈ at root (fully retracted)
-    #   extend =  0 → tip ≈ at lip line (just inside)
-    #   extend = +1 → tip ≈ 22 % of head_w forward of lips
-    forward_at_full = head_w * 0.22
-    extend_t = (extend + 1.0) * 0.5   # [0, 1]
-    tip = centre.copy()
-    tip[2] = centre[2] + extend_t * (root_back + forward_at_full) - root_back
-    # Lateral + vertical offsets scale with how far the tongue is
-    # extended (tongue inside the mouth doesn't slosh sideways much).
-    lateral_amount = lateral * head_w * 0.10 * max(0.4, extend_t)
-    tip[0] += lateral_amount
-    # Vertical: -1 droops below lower lip, +1 arches over upper lip.
-    vertical_amount = vertical * head_h * 0.08 * max(0.4, extend_t)
-    tip[1] += vertical_amount
+    # Jaw open drops the mandible — tongue root drops fully, lip
+    # exit drops a bit (lower lip moves more than upper).
+    if jaw_open > 0.01:
+        drop = head_h * 0.10 * jaw_open
+        root[1] -= drop
+        lip_exit[1] -= drop * 0.4
 
-    # Bezier control point: midway between root + tip, displaced by
-    # `curl` to bend the body. Positive curl arches the body upward.
-    mid = (root + tip) * 0.5
-    curl_amount = curl * head_h * 0.10 * max(0.3, extend_t)
-    ctrl = mid.copy()
-    ctrl[1] += curl_amount
+    # ── tip (depends on extension sign) ──
+    if extend < 0.0:
+        # Retracted: tip stays INSIDE the mouth, between root and
+        # lip exit. No lateral / vertical / curl applied (the
+        # tongue is curled up inside the closed mouth).
+        retract_t = -extend  # 0..1
+        tip = lip_exit + (root - lip_exit) * (retract_t * 0.55)
+        external_present = False
+    else:
+        # Tip exits the lips and moves under user control. Distance
+        # forward scales linearly with extension.
+        forward = head_w * 0.22 * extend
+        tip = lip_exit.copy()
+        tip[2] += forward
+        # Lateral + vertical scaled with extension so retracted-ish
+        # tip doesn't slosh wildly.
+        tip[0] += lateral * head_w * 0.10 * extend
+        tip[1] += vertical * head_h * 0.08 * extend
+        external_present = True
 
-    # Build centerline along the Bezier B(t) = (1-t)²·P0 + 2t(1-t)·P1
-    # + t²·P2. Tangent T(t) = 2(1-t)·(P1-P0) + 2t·(P2-P1).
-    rings = 12
+    # ── centerline build ──
+    # Internal segment: root → lip_exit. Always a smooth curve along
+    # the inside of the mouth — no user displacement here, so the
+    # body never bows out through the cheek.
+    int_rings = 6
+    # External segment: lip_exit → tip. Bezier with curl displacement
+    # applied to the control point (only applies if extended).
+    ext_rings = 8 if external_present else 0
+    if external_present:
+        ext_mid = (lip_exit + tip) * 0.5
+        ext_ctrl = ext_mid.copy()
+        ext_ctrl[1] += curl * head_h * 0.12 * extend
+    else:
+        ext_ctrl = lip_exit
+    int_mid = (root + lip_exit) * 0.5
+    # Slight droop on the internal segment (tongue rests on mouth
+    # floor when relaxed).
+    int_ctrl = int_mid.copy()
+    int_ctrl[1] -= head_h * 0.01
+
+    rings = int_rings + ext_rings
     segs = 14
-    base_width = head_w * 0.06     # ~6 % of head width at base
-    base_height = head_w * 0.03    # ~half base width
+    base_width = head_w * 0.06
+    base_height = head_w * 0.03
+
+    def bezier(p0, p1, p2, t):
+        return ((1 - t) ** 2 * p0
+                + 2 * (1 - t) * t * p1
+                + t ** 2 * p2)
+
+    def bezier_tan(p0, p1, p2, t):
+        return 2 * (1 - t) * (p1 - p0) + 2 * t * (p2 - p1)
+
     verts = []
     for i in range(rings + 1):
-        t = i / rings
-        bt = (1 - t) ** 2 * root + 2 * (1 - t) * t * ctrl + t ** 2 * tip
-        tang = 2 * (1 - t) * (ctrl - root) + 2 * t * (tip - ctrl)
+        if i <= int_rings:
+            # Internal segment: t_int ∈ [0, 1]
+            t_local = i / max(1, int_rings)
+            bt = bezier(root, int_ctrl, lip_exit, t_local)
+            tang = bezier_tan(root, int_ctrl, lip_exit, t_local)
+            t_global = i / rings
+        else:
+            # External segment.
+            t_local = (i - int_rings) / max(1, ext_rings)
+            bt = bezier(lip_exit, ext_ctrl, tip, t_local)
+            tang = bezier_tan(lip_exit, ext_ctrl, tip, t_local)
+            t_global = i / rings
+
         tang_len = float(np.linalg.norm(tang))
         if tang_len < 1e-6:
             tang = np.array([0.0, 0.0, 1.0], dtype=np.float32)
         else:
             tang = tang / tang_len
-        # Local frame: side ⟂ tang in world-XZ; up ⟂ both.
         world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
         side = np.cross(tang, world_up)
         slen = float(np.linalg.norm(side))
-        if slen < 1e-6:
-            side = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        else:
-            side = side / slen
+        side = (side / slen) if slen > 1e-6 \
+            else np.array([1.0, 0.0, 0.0], dtype=np.float32)
         up = np.cross(side, tang)
         up /= max(1e-6, np.linalg.norm(up))
-        # Width tapers along t. ``taper`` controls how strongly the
-        # tip narrows.
-        scale = (1.0 - taper * t)
-        # Round end caps via sin-shaped envelope at the very ends.
-        end_envelope = math.sin(math.pi * t) ** 0.5 if t < 0.95 else \
-            math.sin(math.pi * 0.95) ** 0.5 * (1 - (t - 0.95) / 0.05)
+        scale = (1.0 - taper * t_global)
+        end_envelope = math.sin(math.pi * t_global) ** 0.5 \
+            if t_global < 0.95 \
+            else math.sin(math.pi * 0.95) ** 0.5 * \
+                (1 - (t_global - 0.95) / 0.05)
         end_envelope = max(0.05, end_envelope)
         w = base_width * scale * end_envelope
         h = base_height * scale * end_envelope
