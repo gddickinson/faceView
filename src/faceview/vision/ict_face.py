@@ -722,10 +722,19 @@ def render_face_ict(
     if getattr(params, "_show_tongue", False):
         try:
             from faceview.vision.hair_3d import gen_tongue_mesh
+            # Slider-driven shape; PreFX warp falls back to a default
+            # extension via _tongue_protrusion when no slider set.
+            extend = float(getattr(params, "_tongue_extend",
+                                       getattr(params, "_tongue_protrusion",
+                                                 0.4) * 2 - 1.0))
             tm = gen_tongue_mesh(
                 verts, model,
                 color_hex="#5a1820",
-                protrusion=float(getattr(params, "_tongue_protrusion", 0.7)),
+                extend=extend,
+                lateral=float(getattr(params, "_tongue_lateral", 0.0)),
+                vertical=float(getattr(params, "_tongue_vertical", 0.0)),
+                curl=float(getattr(params, "_tongue_curl", 0.0)),
+                taper=float(getattr(params, "_tongue_taper", 0.4)),
             )
             if tm is not None:
                 extras.append(tm)

@@ -81,6 +81,7 @@ class EffectsPanel(QDialog):
         self.tabs.addTab(self._build_sliders_tab(), "🎚 Sliders")
         self.tabs.addTab(self._build_camera_tab(), "🎥 Camera")
         self.tabs.addTab(self._build_colours_tab(), "🎨 Colours")
+        self.tabs.addTab(self._build_tongue_tab(), "👅 Tongue")
         root.addWidget(self.tabs, 1)
 
     # ── helpers ────────────────────────────────────────────────
@@ -290,6 +291,58 @@ class EffectsPanel(QDialog):
 
         layout.addStretch(1)
         return w
+
+    # ── Tongue tab ─────────────────────────────────────────────
+
+    def _build_tongue_tab(self) -> QWidget:
+        w = QWidget(self)
+        layout = QVBoxLayout(w)
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+
+        info = QLabel(
+            "Dynamic 3D tongue. The mesh is rooted at the back of the\n"
+            "mouth and bends along a Bézier curve driven by these\n"
+            "sliders. Set Extend = -1 to retract entirely.")
+        info.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(info)
+
+        self._tongue_sliders: list[tuple[QSlider, int]] = []
+        for key, label, lo, hi, default in [
+            ("tongue_extend",   "Extend (in ↔ out, -1 hidden)", -1.0, 1.0, -1.0),
+            ("tongue_lateral",  "Lateral (left ↔ right)",       -1.0, 1.0,  0.0),
+            ("tongue_vertical", "Vertical (over lower ↔ upper lip)",
+                                                                  -1.0, 1.0,  0.0),
+            ("tongue_curl",     "Curl (droop ↔ arch)",          -1.0, 1.0,  0.0),
+            ("tongue_taper",    "Taper (flat ↔ pointed)",        0.0, 1.0,  0.4),
+        ]:
+            slider, value_label, default_step = self._labelled_slider(
+                key, lo, hi, 0.05, default, "{:.2f}",
+            )
+            wrap = QWidget(self)
+            row = QHBoxLayout(wrap)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(slider, 1)
+            row.addWidget(value_label)
+            form.addRow(label, wrap)
+            self._tongue_sliders.append((slider, default_step))
+
+        layout.addLayout(form)
+
+        reset = QPushButton("Hide tongue / reset")
+        reset.clicked.connect(self._reset_tongue)
+        layout.addWidget(reset)
+        layout.addStretch(1)
+        return w
+
+    def _reset_tongue(self) -> None:
+        for slider, default_step in self._tongue_sliders:
+            slider.setValue(default_step)
+        self.runtime.set_slider("tongue_extend", -1.0)
+        self.runtime.set_slider("tongue_lateral", 0.0)
+        self.runtime.set_slider("tongue_vertical", 0.0)
+        self.runtime.set_slider("tongue_curl", 0.0)
+        self.runtime.set_slider("tongue_taper", 0.4)
 
     def _labelled_slider(self, key: str, lo: float, hi: float,
                             step: float, default: float, fmt: str

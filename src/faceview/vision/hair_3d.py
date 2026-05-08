@@ -424,71 +424,115 @@ def _mouth_anchor(ict_verts: np.ndarray, model
 
 def gen_tongue_mesh(ict_verts: np.ndarray, model,
                       color_hex: str = "#5a1820",
-                      protrusion: float = 0.85
+                      *,
+                      extend: float = 0.5,
+                      lateral: float = 0.0,
+                      vertical: float = 0.0,
+                      curl: float = 0.0,
+                      taper: float = 0.4,
                       ) -> HairMesh | None:
-    """3D tongue protruding from the mouth.
+    """Dynamic 3D tongue — bezier-curve-driven tube anchored at the
+    back of the mouth.
 
-    Generated as an ellipsoid in ICT model space anchored on the
-    deformed lip-ring centroid. ``protrusion`` (0..1) controls how
-    far the tongue sticks forward from the lips. Returns None if
-    the mouth landmarks aren't available.
+    Parameters (all in [-1, 1] unless noted):
+      extend  : -1 fully retracted (returns None) → +1 fully out;
+                0 = tip just at the lip line.
+      lateral : tip side-shift (-1 screen-left, +1 screen-right).
+      vertical: tip up/down (-1 hangs over lower lip, +1 arches
+                over upper lip).
+      curl    : longitudinal body flex (-1 concave-down / drooped,
+                0 flat, +1 concave-up / arched).
+      taper   : 0 = flat blunt (constant width), 1 = strongly
+                pointed (linear narrowing toward the tip).
 
-    The returned mesh is in the same coord frame as the ICT verts
-    so it inherits all transforms (neck rotation + camera orbit)
-    when appended to the ICT vertex stream.
+    Anatomy:
+      Root anchored a fixed offset behind the lip-ring centroid
+      (back of the mouth). Centerline is a quadratic Bezier with
+      a control point that combines extend / lateral / vertical /
+      curl. Cross-sections are oriented perpendicular to the
+      tangent so the tongue body bends naturally.
     """
+    if extend <= -0.95:
+        return None  # fully retracted — hide the mesh
+
     anchor = _mouth_anchor(ict_verts, model)
     if anchor is None:
         return None
     centre, lip_r = anchor
-    # Tongue origin: just inside the mouth (slightly behind lips).
-    base = centre.copy()
-    base[2] -= lip_r * 0.20
-    # Length / width scaled to the head, not the lip-cluster radius
-    # (which is tiny on the static-mouth ICT mesh). 12 % of head
-    # width gives a clearly visible tongue at all camera distances.
+
     head_w = float(ict_verts[:, 0].max() - ict_verts[:, 0].min())
-    forward = head_w * 0.12 * protrusion
-    drop = forward * 0.30
-    tip = base.copy()
-    tip[2] += forward
-    tip[1] -= drop
+    head_h = float(ict_verts[:, 1].max() - ict_verts[:, 1].min())
 
-    # Build a flattened ellipsoid with major axis along base→tip.
-    direction = tip - base
-    length = float(np.linalg.norm(direction))
-    if length < 1e-3:
-        return None
-    fwd = direction / length
-    # Up vector for orienting the ellipsoid (mostly +Y, tilted with fwd).
-    up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-    side = np.cross(fwd, up)
-    side /= max(1e-6, np.linalg.norm(side))
-    up = np.cross(side, fwd)
-    up /= max(1e-6, np.linalg.norm(up))
+    # Root: behind the lip-ring centre, slightly down (back of the
+    # mouth, anchored at the hyoid level).
+    root_back = head_w * 0.04   # behind lips
+    root = centre.copy()
+    root[1] -= head_h * 0.005
+    root[2] -= root_back
 
-    # Ellipsoid: half-length along fwd = length/2; widths along
-    # side + up.
-    half_len = length / 2
-    centre_ell = base + fwd * half_len
-    # Width = ~50 % of length, height ~30 % — tongue is wider than tall.
-    width = length * 0.50
-    height = length * 0.32
+    # Tip target — extend remaps to forward distance:
+    #   extend = -1 → tip ≈ at root (fully retracted)
+    #   extend =  0 → tip ≈ at lip line (just inside)
+    #   extend = +1 → tip ≈ 22 % of head_w forward of lips
+    forward_at_full = head_w * 0.22
+    extend_t = (extend + 1.0) * 0.5   # [0, 1]
+    tip = centre.copy()
+    tip[2] = centre[2] + extend_t * (root_back + forward_at_full) - root_back
+    # Lateral + vertical offsets scale with how far the tongue is
+    # extended (tongue inside the mouth doesn't slosh sideways much).
+    lateral_amount = lateral * head_w * 0.10 * max(0.4, extend_t)
+    tip[0] += lateral_amount
+    # Vertical: -1 droops below lower lip, +1 arches over upper lip.
+    vertical_amount = vertical * head_h * 0.08 * max(0.4, extend_t)
+    tip[1] += vertical_amount
 
-    rings = 8
+    # Bezier control point: midway between root + tip, displaced by
+    # `curl` to bend the body. Positive curl arches the body upward.
+    mid = (root + tip) * 0.5
+    curl_amount = curl * head_h * 0.10 * max(0.3, extend_t)
+    ctrl = mid.copy()
+    ctrl[1] += curl_amount
+
+    # Build centerline along the Bezier B(t) = (1-t)²·P0 + 2t(1-t)·P1
+    # + t²·P2. Tangent T(t) = 2(1-t)·(P1-P0) + 2t·(P2-P1).
+    rings = 12
     segs = 14
+    base_width = head_w * 0.06     # ~6 % of head width at base
+    base_height = head_w * 0.03    # ~half base width
     verts = []
     for i in range(rings + 1):
-        t = i / rings           # 0 (back) → 1 (tip)
-        # Parametrise along fwd axis as cos-shaped (rounded ends).
-        phi = math.pi * (1 - t)
-        z_off = half_len * math.cos(phi)
-        radius_scale = math.sin(phi)        # 0 at ends, 1 at middle
+        t = i / rings
+        bt = (1 - t) ** 2 * root + 2 * (1 - t) * t * ctrl + t ** 2 * tip
+        tang = 2 * (1 - t) * (ctrl - root) + 2 * t * (tip - ctrl)
+        tang_len = float(np.linalg.norm(tang))
+        if tang_len < 1e-6:
+            tang = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        else:
+            tang = tang / tang_len
+        # Local frame: side ⟂ tang in world-XZ; up ⟂ both.
+        world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+        side = np.cross(tang, world_up)
+        slen = float(np.linalg.norm(side))
+        if slen < 1e-6:
+            side = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        else:
+            side = side / slen
+        up = np.cross(side, tang)
+        up /= max(1e-6, np.linalg.norm(up))
+        # Width tapers along t. ``taper`` controls how strongly the
+        # tip narrows.
+        scale = (1.0 - taper * t)
+        # Round end caps via sin-shaped envelope at the very ends.
+        end_envelope = math.sin(math.pi * t) ** 0.5 if t < 0.95 else \
+            math.sin(math.pi * 0.95) ** 0.5 * (1 - (t - 0.95) / 0.05)
+        end_envelope = max(0.05, end_envelope)
+        w = base_width * scale * end_envelope
+        h = base_height * scale * end_envelope
         for j in range(segs):
             theta = (j / segs) * 2 * math.pi
-            sw = math.cos(theta) * width * radius_scale
-            sh = math.sin(theta) * height * radius_scale
-            v = centre_ell + fwd * z_off + side * sw + up * sh
+            sw = math.cos(theta) * w
+            sh = math.sin(theta) * h
+            v = bt + side * sw + up * sh
             verts.append(v)
     verts = np.array(verts, dtype=np.float32)
     tris = []
@@ -502,15 +546,13 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
             tris.append([a, c, b])
             tris.append([b, c, d])
     tris = np.array(tris, dtype=np.int32)
+
     n = len(verts)
     color = _hex_rgb_f(color_hex)
     colors = np.tile(np.array(color, dtype=np.float32), (n, 1))
-    # Slight per-vertex brightness variation.
     rng = np.random.default_rng(43)
     noise = (rng.random((n, 1)) - 0.5).astype(np.float32) * 0.10
     colors = np.clip(colors * (1.0 + noise), 0.0, 1.0)
-    # Low specular + zero emissive so the tongue reads as matte
-    # flesh instead of getting washed out by xray bloom.
     specular = np.full(n, 0.10, dtype=np.float32)
     emissive = np.zeros(n, dtype=np.float32)
     return HairMesh(verts=verts, tris=tris, colors=colors,

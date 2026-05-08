@@ -64,6 +64,13 @@ class SliderState:
     mouth_funnel: float = 0.0     # forward funnel (lips horn-shape)
     mouth_close: float = 0.0      # active lip-close (separate from pucker)
     cheek_puff: float = 0.0       # both cheeks puffed (holding breath)
+    # Tongue — 3D mesh shape parameters. extend < -0.95 hides the
+    # tongue entirely; otherwise the mesh is rendered in the face.
+    tongue_extend: float = -1.0   # -1 hidden ↔ +1 fully out
+    tongue_lateral: float = 0.0   # -1 left ↔ +1 right
+    tongue_vertical: float = 0.0  # -1 over lower lip ↔ +1 over upper lip
+    tongue_curl: float = 0.0      # -1 droop ↔ +1 arch
+    tongue_taper: float = 0.4     # 0 blunt ↔ 1 pointed
     # Hair overlay — procedural style + colour.
     hair_style: str = "none"      # see hair_overlay.STYLES
     hair_color: str = "#3a2418"   # hex string
@@ -231,6 +238,16 @@ class EffectsRuntime:
         if s.hair_style and s.hair_style != "none":
             params._slider_hair_style = s.hair_style
             params._slider_hair_color = s.hair_color
+
+        # 3D tongue — slider-driven shape parameters override the
+        # PreFX-warp's static protrusion when the tongue is visible.
+        if s.tongue_extend > -0.95:
+            params._show_tongue = True
+            params._tongue_extend = float(s.tongue_extend)
+            params._tongue_lateral = float(s.tongue_lateral)
+            params._tongue_vertical = float(s.tongue_vertical)
+            params._tongue_curl = float(s.tongue_curl)
+            params._tongue_taper = float(s.tongue_taper)
 
         # Direct blendshape sliders — populate params.direct_blendshapes
         # so the renderer feeds them into the ICT coefficient stream.
