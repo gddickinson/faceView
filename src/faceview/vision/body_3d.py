@@ -107,7 +107,8 @@ def _strip_head(verts: np.ndarray, tris: np.ndarray
 
 
 def _to_ict_frame(verts: np.ndarray,
-                    ict_verts_ref: np.ndarray) -> np.ndarray:
+                    ict_verts_ref: np.ndarray,
+                    morph: float = 0.0) -> np.ndarray:
     """Transform body verts into ICT coordinate space.
 
     Body axes: x=lateral, y=depth (-Y forward), z=height.
@@ -147,9 +148,14 @@ def _to_ict_frame(verts: np.ndarray,
 
     # 3. Scale: realistic human is ~7.5 head-heights tall; headless
     # body fills ~6.5 of those. ICT head-only span ≈ ict_y_span × 0.55.
+    # Morph-dependent multiplier: female adults are ≈ 93 % of male
+    # height (and have correspondingly smaller frames). Map morph
+    # ∈ [-1, +1] to that ratio so the avatar's overall size scales
+    # naturally as the user blends ♀ ↔ ♂.
     body_h = swapped[:, 1].max() - swapped[:, 1].min()
     ict_head_h = (ict_verts_ref[:, 1].max() - ict_verts_ref[:, 1].min()) * 0.55
-    scale = (ict_head_h * 6.5) / max(body_h, 1e-6)
+    sex_factor = 0.93 + 0.07 * (morph + 1.0) * 0.5   # 0.93 ↔ 1.00
+    scale = (ict_head_h * 6.5 * sex_factor) / max(body_h, 1e-6)
     swapped *= scale
 
     # 4. Translate: line up the body's neck top (now max-Y after
@@ -190,7 +196,7 @@ def gen_body_mesh(ict_verts_ref: np.ndarray,
         v_raw = female_v * (1.0 - a) + male_v * a
         tris = tris_m
 
-    verts = _to_ict_frame(v_raw, ict_verts_ref)
+    verts = _to_ict_frame(v_raw, ict_verts_ref, morph=morph)
     if len(verts) == 0:
         return None
 
