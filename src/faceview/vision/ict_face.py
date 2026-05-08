@@ -705,28 +705,46 @@ def render_face_ict(
     except Exception:
         params._feature_pixels = {}
 
-    # Procedural 3D hair — built once per frame on the deformed
-    # ICT verts so the crown anchor follows identity / blendshape
-    # changes. Appended to the GL pass so it gets the same shader
-    # (including specular + bloom) as the head.
+    # Procedural 3D extras — hair + tongue. Both are appended to
+    # the ICT vertex stream so they get the same MVP (neck rotation
+    # + camera orbit) and Phong shader as the head.
+    extras = []
     hair_style = getattr(params, "_slider_hair_style", "none")
     hair_color = getattr(params, "_slider_hair_color", "#3a2418")
-    hair_extra = None
     if hair_style and hair_style != "none":
         try:
             from faceview.vision.hair_3d import gen_hair_mesh
-            hair_extra = gen_hair_mesh(hair_style, verts, hair_color)
+            hm = gen_hair_mesh(hair_style, verts, hair_color)
+            if hm is not None:
+                extras.append(hm)
         except Exception:
-            hair_extra = None
+            pass
+    if getattr(params, "_show_tongue", False):
+        try:
+            from faceview.vision.hair_3d import gen_tongue_mesh
+            tm = gen_tongue_mesh(
+                verts, model,
+                color_hex="#5a1820",
+                protrusion=float(getattr(params, "_tongue_protrusion", 0.7)),
+            )
+            if tm is not None:
+                extras.append(tm)
+        except Exception:
+            pass
 
-    if hair_extra is not None:
+    if extras:
+        # Combine all extras into one stream of verts/tris.
+        all_v = np.vstack([e.verts for e in extras])
+        offsets = np.cumsum([0] + [len(e.verts) for e in extras[:-1]])
+        all_t = np.vstack([e.tris + off for e, off in zip(extras, offsets)])
+        all_c = np.vstack([e.colors for e in extras])
+        all_s = np.concatenate([e.specular for e in extras])
+        all_e_emit = np.concatenate([e.emissive for e in extras])
         bgr = _render_via_moderngl(
             verts, model.triangles, size, 0.0, 0.0, params,
-            extra_verts=hair_extra.verts,
-            extra_tris=hair_extra.tris,
-            extra_colors=hair_extra.colors,
-            extra_spec=hair_extra.specular,
-            extra_emit=hair_extra.emissive,
+            extra_verts=all_v, extra_tris=all_t,
+            extra_colors=all_c, extra_spec=all_s,
+            extra_emit=all_e_emit,
         )
     else:
         bgr = _render_via_moderngl(verts, model.triangles, size,

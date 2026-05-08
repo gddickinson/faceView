@@ -165,11 +165,21 @@ def pre_disgust_combo(params, u: float, intensity: float) -> None:
 
 
 def pre_tongue_out(params, u: float, intensity: float) -> None:
-    """Mouth opens to let the tongue stick out (paired with the
-    PostFX overlay that actually draws the tongue)."""
+    """Stick the tongue out — opens the jaw + signals the renderer
+    to inject a 3D tongue mesh into the ICT vertex stream.
+
+    The mesh is drawn alongside the hair via the same MVP path so
+    it rotates correctly with head pose + camera orbit. No 2D
+    overlay (which couldn't follow head movement).
+    """
     e = _env(u) * intensity
     params.jaw_open = max(getattr(params, "jaw_open", 0.0), e * 0.55)
     params.smile = max(getattr(params, "smile", 0.0), e * 0.25)
+    # Static protrusion at peak intensity — no wiggle.
+    params._show_tongue = True
+    params._tongue_protrusion = max(
+        float(getattr(params, "_tongue_protrusion", 0.0)), e,
+    )
 
 
 def _set_direct(params, name: str, value: float) -> None:

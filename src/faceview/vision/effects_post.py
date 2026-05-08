@@ -262,6 +262,19 @@ def post_skull_flash(bgr: np.ndarray, u: float, intensity: float, *,
     skull = _real_anatomy_overlay(bgr, "skull_only",
                                      scale_factor=0.62,
                                      yaw=yaw, pitch=pitch)
+    # Translate upward — bbox-fit centres on head+neck+bust, so the
+    # skull comes out too low. Push up by ~20 % of head height so
+    # it sits over the face/cranium region.
+    if skull is not None:
+        bbox = _ict_head_bbox(bgr)
+        if bbox is not None:
+            shift = -int((bbox[3] - bbox[1]) * 0.20)
+            M = np.array([[1, 0, 0], [0, 1, shift]], dtype=np.float32)
+            skull = cv2.warpAffine(
+                skull, M, (bgr.shape[1], bgr.shape[0]),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 8, 16),
+            )
     a = intensity * math.sin(u * math.pi)
     if skull is None:
         # Fallback: tint bright luma regions bone-white.
@@ -790,7 +803,8 @@ HANDLERS = {
     "xray_flash":           post_xray_flash,
     "vaporwave":            post_vaporwave,
     "dark_pupils":          post_dark_pupils,
-    "tongue_out":           post_tongue_out,
+    # tongue_out is rendered as a 3D mesh in render_face_ict, not
+    # a PostFX overlay — kept here intentionally absent.
     "invert_colors":        post_invert_colors,
     "grayscale":            post_grayscale,
     "chromatic_aberration": post_chromatic_aberration,

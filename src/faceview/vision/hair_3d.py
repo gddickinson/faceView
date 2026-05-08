@@ -406,6 +406,117 @@ def list_styles() -> list[str]:
     return ["none"] + list(_STYLE_FUNCS.keys())
 
 
+def _mouth_anchor(ict_verts: np.ndarray, model
+                    ) -> tuple[np.ndarray, float] | None:
+    """Centroid of the lip ring on the deformed ICT mesh + a size
+    hint (lip-ring radius). Used to anchor the tongue mesh.
+    """
+    idx = model.name_to_idx.get("mouthClose")
+    if idx is None:
+        return None
+    mags = np.linalg.norm(model.deltas[idx], axis=1)
+    top = np.argsort(-mags)[:80]
+    pts = ict_verts[top]
+    centre = pts.mean(axis=0)
+    radius = float(np.linalg.norm(pts - centre, axis=1).mean())
+    return centre, max(0.5, radius)
+
+
+def gen_tongue_mesh(ict_verts: np.ndarray, model,
+                      color_hex: str = "#5a1820",
+                      protrusion: float = 0.85
+                      ) -> HairMesh | None:
+    """3D tongue protruding from the mouth.
+
+    Generated as an ellipsoid in ICT model space anchored on the
+    deformed lip-ring centroid. ``protrusion`` (0..1) controls how
+    far the tongue sticks forward from the lips. Returns None if
+    the mouth landmarks aren't available.
+
+    The returned mesh is in the same coord frame as the ICT verts
+    so it inherits all transforms (neck rotation + camera orbit)
+    when appended to the ICT vertex stream.
+    """
+    anchor = _mouth_anchor(ict_verts, model)
+    if anchor is None:
+        return None
+    centre, lip_r = anchor
+    # Tongue origin: just inside the mouth (slightly behind lips).
+    base = centre.copy()
+    base[2] -= lip_r * 0.20
+    # Length / width scaled to the head, not the lip-cluster radius
+    # (which is tiny on the static-mouth ICT mesh). 12 % of head
+    # width gives a clearly visible tongue at all camera distances.
+    head_w = float(ict_verts[:, 0].max() - ict_verts[:, 0].min())
+    forward = head_w * 0.12 * protrusion
+    drop = forward * 0.30
+    tip = base.copy()
+    tip[2] += forward
+    tip[1] -= drop
+
+    # Build a flattened ellipsoid with major axis along base→tip.
+    direction = tip - base
+    length = float(np.linalg.norm(direction))
+    if length < 1e-3:
+        return None
+    fwd = direction / length
+    # Up vector for orienting the ellipsoid (mostly +Y, tilted with fwd).
+    up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    side = np.cross(fwd, up)
+    side /= max(1e-6, np.linalg.norm(side))
+    up = np.cross(side, fwd)
+    up /= max(1e-6, np.linalg.norm(up))
+
+    # Ellipsoid: half-length along fwd = length/2; widths along
+    # side + up.
+    half_len = length / 2
+    centre_ell = base + fwd * half_len
+    # Width = ~50 % of length, height ~30 % — tongue is wider than tall.
+    width = length * 0.50
+    height = length * 0.32
+
+    rings = 8
+    segs = 14
+    verts = []
+    for i in range(rings + 1):
+        t = i / rings           # 0 (back) → 1 (tip)
+        # Parametrise along fwd axis as cos-shaped (rounded ends).
+        phi = math.pi * (1 - t)
+        z_off = half_len * math.cos(phi)
+        radius_scale = math.sin(phi)        # 0 at ends, 1 at middle
+        for j in range(segs):
+            theta = (j / segs) * 2 * math.pi
+            sw = math.cos(theta) * width * radius_scale
+            sh = math.sin(theta) * height * radius_scale
+            v = centre_ell + fwd * z_off + side * sw + up * sh
+            verts.append(v)
+    verts = np.array(verts, dtype=np.float32)
+    tris = []
+    for i in range(rings):
+        for j in range(segs):
+            j2 = (j + 1) % segs
+            a = i * segs + j
+            b = i * segs + j2
+            c = (i + 1) * segs + j
+            d = (i + 1) * segs + j2
+            tris.append([a, c, b])
+            tris.append([b, c, d])
+    tris = np.array(tris, dtype=np.int32)
+    n = len(verts)
+    color = _hex_rgb_f(color_hex)
+    colors = np.tile(np.array(color, dtype=np.float32), (n, 1))
+    # Slight per-vertex brightness variation.
+    rng = np.random.default_rng(43)
+    noise = (rng.random((n, 1)) - 0.5).astype(np.float32) * 0.10
+    colors = np.clip(colors * (1.0 + noise), 0.0, 1.0)
+    # Low specular + zero emissive so the tongue reads as matte
+    # flesh instead of getting washed out by xray bloom.
+    specular = np.full(n, 0.10, dtype=np.float32)
+    emissive = np.zeros(n, dtype=np.float32)
+    return HairMesh(verts=verts, tris=tris, colors=colors,
+                       specular=specular, emissive=emissive)
+
+
 def gen_hair_mesh(style: str, ict_verts: np.ndarray,
                     color_hex: str = "#3a2418") -> HairMesh | None:
     """Generate a 3D hair mesh in ICT model coordinates.
