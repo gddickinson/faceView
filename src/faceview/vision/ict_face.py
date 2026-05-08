@@ -447,15 +447,16 @@ _ARKIT_TO_ICT: dict[str, str] = {
 
 def _apply_camera_orbit(
     verts: np.ndarray, yaw: float, pitch: float,
+    pivot: np.ndarray | None = None,
 ) -> np.ndarray:
     """Rotate the whole scene around the mesh centroid.
 
-    Used for the camera-orbit slider so the user can view the head
-    from any angle without changing the head's own pose. The mesh
-    centroid is the orbit pivot; distance from camera is preserved
-    automatically since rotation about a point doesn't translate.
+    ``pivot`` overrides the centroid when transforming auxiliary
+    meshes (tongue, hair) — pass the ICT mesh's centroid so the
+    auxiliaries orbit around the head rather than around themselves.
     """
-    centre = (verts.min(axis=0) + verts.max(axis=0)) / 2.0
+    if pivot is None:
+        pivot = (verts.min(axis=0) + verts.max(axis=0)) / 2.0
     cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
     cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
     Ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]],
@@ -463,25 +464,27 @@ def _apply_camera_orbit(
     Rx = np.array([[1, 0, 0], [0, cp_, -sp_], [0, sp_, cp_]],
                     dtype=np.float32)
     R = Ry @ Rx
-    return ((verts - centre) @ R.T + centre).astype(np.float32)
+    return ((verts - pivot) @ R.T + pivot).astype(np.float32)
 
 
 def _apply_neck_rotation(
     verts: np.ndarray, yaw: float, pitch: float,
+    *, ref_verts: np.ndarray | None = None,
 ) -> np.ndarray:
     """Per-vertex Y-weighted skinning around the neck pivot.
 
     Vertices in the head region get the full ry @ rx rotation;
-    vertices in the bust / shoulders below the neck stay put. The
-    transition is a smoothstep over a thin band. Result: when
-    ``yaw`` / ``pitch`` are non-zero, only the head turns — the
-    bust/collar reads as a stationary platform the head moves on.
+    vertices in the bust / shoulders below the neck stay put.
+    ``ref_verts`` overrides the y-range source so auxiliary meshes
+    (tongue, hair) get weights computed against the ICT mesh
+    extents rather than their own (smaller) bbox.
     """
     if abs(yaw) < 1e-3 and abs(pitch) < 1e-3:
         return verts
 
-    y_min = float(verts[:, 1].min())
-    y_max = float(verts[:, 1].max())
+    src = ref_verts if ref_verts is not None else verts
+    y_min = float(src[:, 1].min())
+    y_max = float(src[:, 1].max())
     span = max(1e-6, y_max - y_min)
     # Neck base ≈ 22 % up from the bottom of the bust; "head fully
     # rotates" boundary at ≈ 38 % so the chin (around 30 % of span)
@@ -675,6 +678,13 @@ def render_face_ict(
 
     yaw = float(getattr(params, "yaw", 0.0)) * 0.6
     pitch = float(getattr(params, "pitch", 0.0)) * 0.4
+    cam_yaw = float(getattr(params, "_camera_yaw", 0.0))
+    cam_pitch = float(getattr(params, "_camera_pitch", 0.0))
+
+    # Save the un-rotated deformed mesh for any extras that need to
+    # be built in the head's LOCAL frame (e.g. the tongue, whose
+    # back-of-mouth offset is along the head's local -Z, not world).
+    pre_rotation_verts = verts.copy()
 
     # Anatomical head rotation: per-vertex Y-weighted skinning so
     # the head rotates around the neck base while the bust stays
@@ -686,8 +696,6 @@ def render_face_ict(
     # around the mesh centroid at fixed distance. Slider-driven
     # via params._camera_yaw/_pitch. Applied AFTER neck skinning so
     # the head's natural pose stacks with the orbit view.
-    cam_yaw = float(getattr(params, "_camera_yaw", 0.0))
-    cam_pitch = float(getattr(params, "_camera_pitch", 0.0))
     if abs(cam_yaw) > 1e-3 or abs(cam_pitch) > 1e-3:
         verts = _apply_camera_orbit(verts, cam_yaw, cam_pitch)
 
@@ -729,8 +737,11 @@ def render_face_ict(
             extend = float(getattr(params, "_tongue_extend",
                                        getattr(params, "_tongue_protrusion",
                                                  0.4) * 2 - 1.0))
+            # Build tongue in the un-rotated frame (back-of-mouth is
+            # along local -Z), then apply the same neck + camera
+            # transforms so the tongue follows the head.
             tm = gen_tongue_mesh(
-                verts, model,
+                pre_rotation_verts, model,
                 color_hex="#5a1820",
                 extend=extend,
                 lateral=float(getattr(params, "_tongue_lateral", 0.0)),
@@ -740,6 +751,17 @@ def render_face_ict(
                 jaw_open=float(getattr(params, "jaw_open", 0.0)),
             )
             if tm is not None:
+                # Apply same rotations as ICT, using ICT's bbox /
+                # centroid so the tongue tracks the head.
+                ict_centre = (pre_rotation_verts.min(axis=0)
+                                  + pre_rotation_verts.max(axis=0)) / 2.0
+                tm.verts[:] = _apply_neck_rotation(
+                    tm.verts, yaw, pitch, ref_verts=pre_rotation_verts,
+                )
+                if abs(cam_yaw) > 1e-3 or abs(cam_pitch) > 1e-3:
+                    tm.verts[:] = _apply_camera_orbit(
+                        tm.verts, cam_yaw, cam_pitch, pivot=ict_centre,
+                    )
                 extras.append(tm)
         except Exception:
             pass

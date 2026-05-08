@@ -486,22 +486,25 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
     # ── tip (depends on extension sign) ──
     if extend < 0.0:
         # Retracted: tip stays INSIDE the mouth, between root and
-        # lip exit. No lateral / vertical / curl applied (the
-        # tongue is curled up inside the closed mouth).
-        retract_t = -extend  # 0..1
+        # lip exit. No lateral / vertical / curl applied.
+        retract_t = -extend
         tip = lip_exit + (root - lip_exit) * (retract_t * 0.55)
         external_present = False
     else:
-        # Tip exits the lips and moves under user control. Distance
-        # forward scales linearly with extension.
-        forward = head_w * 0.22 * extend
+        # Tip exits the lips and moves under user control. Maximum
+        # protrusion is head_w * 0.40 (≈ chin-to-tip distance for a
+        # tongue stuck way out).
+        forward = head_w * 0.40 * extend
         tip = lip_exit.copy()
         tip[2] += forward
-        # Lateral + vertical scaled with extension so retracted-ish
-        # tip doesn't slosh wildly.
         tip[0] += lateral * head_w * 0.10 * extend
-        tip[1] += vertical * head_h * 0.08 * extend
+        tip[1] += vertical * head_h * 0.10 * extend
         external_present = True
+        # Push lip_exit slightly forward at high extension so the
+        # tongue appears to slide forward through the mouth (the
+        # whole muscle elongates from the back, not just the tip).
+        lip_exit = lip_exit.copy()
+        lip_exit[2] += head_w * 0.04 * extend
 
     # ── centerline build ──
     # Internal segment: root → lip_exit. Always a smooth curve along
@@ -563,14 +566,20 @@ def gen_tongue_mesh(ict_verts: np.ndarray, model,
             else np.array([1.0, 0.0, 0.0], dtype=np.float32)
         up = np.cross(side, tang)
         up /= max(1e-6, np.linalg.norm(up))
-        scale = (1.0 - taper * t_global)
-        end_envelope = math.sin(math.pi * t_global) ** 0.5 \
-            if t_global < 0.95 \
-            else math.sin(math.pi * 0.95) ** 0.5 * \
-                (1 - (t_global - 0.95) / 0.05)
-        end_envelope = max(0.05, end_envelope)
-        w = base_width * scale * end_envelope
-        h = base_height * scale * end_envelope
+        # Width profile: full thickness at the back (root) so the
+        # tongue body reads as a solid muscle "elongating from the
+        # back of the mouth". Taper applies only to the front half,
+        # rounding the tip via taper + end-cap envelope.
+        if t_global < 0.5:
+            scale = 1.0
+        else:
+            t2 = (t_global - 0.5) * 2.0  # 0..1 over front half
+            scale = 1.0 - taper * t2
+        # Round just the tip end (last 5 %).
+        if t_global > 0.95:
+            scale *= max(0.05, 1.0 - (t_global - 0.95) / 0.05)
+        w = base_width * scale
+        h = base_height * scale
         for j in range(segs):
             theta = (j / segs) * 2 * math.pi
             sw = math.cos(theta) * w
