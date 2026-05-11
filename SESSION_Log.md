@@ -1621,3 +1621,55 @@ correction needed was only for the slider default.
 + 2 neutral skipped without scipy). GUI screenshot after fix
 shows a clean avatar across `arms_up`, `arms_out`, `kick_left` —
 no flyaways, no holes.
+
+## 2026-05-10 — Head-nod neck-base drift fix
+
+**Issue**: When the head pitches (slider `params.pitch`), the BASE of
+the neck visibly drifts even though the user expects it to stay
+stationary — only the top of the neck and skull should pivot.
+
+**Diagnosis** (`tools/_nod_drift_measure.py` + `_nod_drift_inspect.py`):
+The cervical cascade in `_apply_cervical_cascade` interpolates pitch
+across 12 spine levels with cumulative fractions
+`(1.00, 0.98, 0.85, 0.55, 0.25, 0.10, 0.04, ...)`. At C5 the cumulative
+pitch is still **10 %** and at C6 it's **4 %**, so mid-neck verts
+displace by ~0.25 ICT units at full pitch — the visible drift.
+
+**Fix**: Introduced `FACEVIEW_NOD_MODE` env var that selects from
+five cascade profiles, plus an optional post-anchor that snaps
+verts back to rest below a Y threshold:
+
+- `current` — legacy fractions (kept for A/B)
+- `sharper` — bend concentrated at C1-C3, C4-T4 → 0
+- `spine_ripple` — sharp top + tiny T1-T4 ripple **(NEW DEFAULT)**
+- `anchored` — legacy fractions + snap-to-rest below y_norm=-0.30
+- `sharp_anchored` — sharper + anchor below y_norm=-0.25
+
+Default chosen as `spine_ripple` because the user explicitly asked
+for "some flex passed down the spine" while keeping the neck-base
+junction visibly stationary.
+
+**Measured improvement** (body-mesh mean displacement at pitch=+1.0):
+
+| Y band | current | spine_ripple | change |
+|---|---|---|---|
+| upper-neck (C1-C3) | 1.0036 | 0.5838 | -42 % |
+| mid-neck (C4-C6) | 0.2472 | 0.0606 | -76 % |
+| neck-base (C7-T1) | 0.0344 | 0.0211 | -39 % |
+| upper-torso/clavicle | 0.0043 | 0.0079 | (tiny ripple) |
+| mid-torso | 0.0000 | 0.0000 | unchanged |
+
+`tests/test_body_rig_regression.py` still passes under the new
+default (32 effect tests + 2 neutral skipped without scipy).
+
+Tools added:
+- `tools/_capture_nod_sideview.py` — baseline side-view grid
+- `tools/_nod_drift_measure.py` — per-Y-band displacement table
+- `tools/_nod_drift_inspect.py` — cascade parameter dump
+- `tools/_compare_nod_modes.py` — all-mode visual grid
+- `tools/_nod_overlay_compare.py` — rest-vs-pitched colour overlay
+- `tools/_nod_final_compare.py` — before/after 2×2 grid
+- `tools/_nod_table.py` — labelled comparison table image
+
+Compare images at `/tmp/nod_modes_compare.png`,
+`/tmp/nod_final_compare.png`, `/tmp/nod_table.png`.

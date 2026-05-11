@@ -744,6 +744,70 @@ VERTEBRA_FRACTIONS_YAW: tuple[float, ...] = (
     1.00, 0.98, 0.55, 0.30, 0.15, 0.08, 0.03, 0.01, 0.003,
     0.001, 0.0, 0.0,
 )
+
+# Optional alternate cascade profiles selected via FACEVIEW_NOD_MODE.
+# Each mode tweaks where the bend lives and whether the cascade
+# result is post-anchored back to rest below a Y threshold.
+_NOD_MODES: dict[str, dict] = {
+    "current": dict(  # legacy — bend leaks into mid-neck (0.10 at C5)
+        pitch=VERTEBRA_FRACTIONS_PITCH,
+        yaw=VERTEBRA_FRACTIONS_YAW,
+        fade=1.5,
+        anchor_y_norm=None,
+    ),
+    "sharper": dict(
+        # Concentrate bend at C1-C3 only. Verts below C4 stay put.
+        pitch=(1.00, 0.95, 0.65, 0.20, 0.05, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        yaw=(1.00, 0.95, 0.40, 0.10, 0.02, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        fade=1.0,
+        anchor_y_norm=None,
+    ),
+    "spine_ripple": dict(
+        # Sharp at top + tiny ripple through thoracic spine for
+        # "flex passed down the spine" without visible base motion.
+        pitch=(1.00, 0.95, 0.65, 0.25, 0.08, 0.02, 0.01, 0.008,
+                 0.006, 0.004, 0.002, 0.0),
+        yaw=(1.00, 0.95, 0.40, 0.12, 0.03, 0.01, 0.005, 0.003,
+                 0.002, 0.001, 0.0, 0.0),
+        fade=1.0,
+        anchor_y_norm=None,
+    ),
+    "anchored": dict(
+        # Legacy fractions + hard snap-to-rest below mid-neck.
+        # Anything below y_norm = -0.30 (mid-neck level) reverts to
+        # rest position regardless of what the cascade computed.
+        pitch=VERTEBRA_FRACTIONS_PITCH,
+        yaw=VERTEBRA_FRACTIONS_YAW,
+        fade=1.5,
+        anchor_y_norm=-0.30,
+    ),
+    "sharp_anchored": dict(
+        # Sharper profile + anchor — belt-and-braces.
+        pitch=(1.00, 0.95, 0.65, 0.20, 0.05, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        yaw=(1.00, 0.95, 0.40, 0.10, 0.02, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        fade=1.0,
+        anchor_y_norm=-0.25,
+    ),
+}
+
+
+def _resolve_nod_mode():
+    """Return (pitch, yaw, fade, anchor_y_norm) for the active mode.
+
+    Default `spine_ripple` concentrates bend at C1-C3 and leaves a
+    tiny ripple through T1-T4 so the cervical chain flexes without
+    visibly moving the neck-base / clavicle junction. Override with
+    FACEVIEW_NOD_MODE=current to restore the legacy behavior.
+    """
+    import os as _os
+    name = (_os.environ.get("FACEVIEW_NOD_MODE", "spine_ripple").strip()
+            or "spine_ripple")
+    cfg = _NOD_MODES.get(name, _NOD_MODES["spine_ripple"])
+    return cfg["pitch"], cfg["yaw"], cfg["fade"], cfg["anchor_y_norm"]
 VERTEBRA_Y_FRACS: tuple[float, ...] = (
     +0.05,  # above C1 (skull)
      0.00,  # C1 atlas
@@ -803,10 +867,12 @@ def _apply_cervical_cascade(
     if (abs(yaw) < 1e-3 and abs(pitch) < 1e-3 and abs(roll) < 1e-3):
         return verts
 
+    pitch_fracs, yaw_fracs, fade, anchor_y_norm = _resolve_nod_mode()
+    rest_verts = verts  # keep original for optional post-anchor blend
     out = verts.copy()
     vert_ys = [chin_y + f * head_h for f in VERTEBRA_Y_FRACS]
-    pitch_cumul = list(VERTEBRA_FRACTIONS_PITCH)
-    yaw_cumul = list(VERTEBRA_FRACTIONS_YAW)
+    pitch_cumul = list(pitch_fracs)
+    yaw_cumul = list(yaw_fracs)
 
     n = len(vert_ys)
     # Apply BOTTOM disc first (T1-C7), TOP disc last (C1-aboveC1).
@@ -834,11 +900,9 @@ def _apply_cervical_cascade(
                         dtype=np.float32)
         R = Ry @ Rx @ Rz
 
-        # Smoothstep weight: full ABOVE the disc, 0 BELOW. Wider
-        # fade (1.5 ICT units) so adjacent discs' transitions
-        # overlap and the cumulative bend is smooth — eliminates
-        # the visible kink at the neck-to-back boundary.
-        fade = 1.5
+        # Smoothstep weight: full ABOVE the disc, 0 BELOW. Per-mode
+        # fade band width controls how sharply each disc's rotation
+        # decays through neighbouring verts.
         y = out[:, 1]
         t = np.clip((y - (disc_y - fade)) / max(1e-6, fade),
                        0.0, 1.0)
@@ -849,6 +913,23 @@ def _apply_cervical_cascade(
         rotated = (diff @ R.T) + pivot
         out = (out * (1.0 - w[:, None])
                   + rotated * w[:, None]).astype(np.float32)
+
+    # Optional post-anchor: below `anchor_y_norm * head_h + chin_y`,
+    # blend results back toward rest position so the neck base and
+    # upper torso stay anchored regardless of cumulative leak from
+    # the cascade. Smoothstep band sits ABOVE the threshold so the
+    # transition is smooth and not a sharp seam.
+    if anchor_y_norm is not None:
+        fade_band_norm = 0.15  # in head_h units (~3 ICT units)
+        anchor_y_abs = chin_y + anchor_y_norm * head_h
+        fade_abs = fade_band_norm * head_h
+        y = rest_verts[:, 1]
+        t_anchor = np.clip(
+            (y - anchor_y_abs) / max(1e-6, fade_abs), 0.0, 1.0)
+        w_keep = (t_anchor * t_anchor *
+                    (3.0 - 2.0 * t_anchor)).astype(np.float32)
+        out = (rest_verts * (1.0 - w_keep[:, None])
+                  + out * w_keep[:, None]).astype(np.float32)
 
     return out
 
