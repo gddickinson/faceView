@@ -792,22 +792,175 @@ _NOD_MODES: dict[str, dict] = {
         fade=1.0,
         anchor_y_norm=-0.25,
     ),
+    "flex_anchored": dict(
+        # Big bend distributed across C1-C4 for visibly curving
+        # neck, plus a hard anchor at y_norm=-0.30 to keep the base
+        # stationary. User feedback driver: "neck not flexing enough
+        # and base still moving too much".
+        # Deltas: skull-C1 0.05, C1-C2 0.30, C2-C3 0.35, C3-C4 0.22,
+        # C4-C5 0.08, below = 0. Sum = 1.00.
+        pitch=(1.00, 0.95, 0.65, 0.30, 0.08, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        yaw=(1.00, 0.95, 0.45, 0.20, 0.04, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        fade=1.5,
+        anchor_y_norm=-0.30,
+    ),
+    # ------------------------------------------------------------------
+    # Anatomical-pivot family: move pivot_z BACKWARD (negative Z, into
+    # the back of the neck) so the chin's front-to-back sweep arc is
+    # large. Combined with smoothly-distributed cumulative rotation so
+    # the neck visibly CURVES rather than blocking with the skull.
+    #
+    # pivot_z_offset is added to the per-disc pivot's Z and is in
+    # head_h units (i.e. -0.15 ≈ 3.1 ICT units back of centerline).
+    # ------------------------------------------------------------------
+    "curve_back_pivot": dict(
+        # Smooth gradient C7 (=0) up to chin (=1), pivot pushed
+        # 0.20 head_h back into the neck. Tight anchor at -0.25.
+        pitch=(1.00, 0.92, 0.80, 0.62, 0.40, 0.22, 0.08, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        yaw=(1.00, 0.92, 0.70, 0.45, 0.25, 0.12, 0.04, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        fade=1.0,
+        anchor_y_norm=-0.25,
+        anchor_fade_band=0.10,
+        pivot_z_offset=-0.20,
+    ),
+    "low_pivot_block": dict(
+        # Rotation CONCENTRATED at C4-C6 disc band, pivot back AND
+        # low. Chin sweeps the WIDEST front-to-back arc. Tight
+        # anchor at -0.22 with narrow fade band so the base locks.
+        pitch=(1.00, 0.99, 0.97, 0.93, 0.80, 0.50, 0.15, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        yaw=(1.00, 0.99, 0.95, 0.85, 0.65, 0.35, 0.10, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        fade=0.8,
+        anchor_y_norm=-0.22,
+        anchor_fade_band=0.08,
+        pivot_z_offset=-0.25,
+    ),
+    "neck_curve_strict": dict(
+        # Maximum-curvature distributed cascade with strict anchor
+        # at -0.22 and pivot 0.18 back.
+        pitch=(1.00, 0.88, 0.72, 0.52, 0.30, 0.12, 0.03, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        yaw=(1.00, 0.88, 0.62, 0.38, 0.18, 0.06, 0.02, 0.0, 0.0,
+                 0.0, 0.0, 0.0),
+        fade=1.0,
+        anchor_y_norm=-0.22,
+        anchor_fade_band=0.10,
+        pivot_z_offset=-0.18,
+    ),
+    # ------------------------------------------------------------------
+    # Cranium-only modes: SINGLE rotation around an ear-level pivot
+    # with everything below the ear (chin / jaw / neck / body) snapped
+    # to rest. Driven by the user's spec: "no cyan at the back of the
+    # head or red at the front of the head, below the bottom of the
+    # ear, only above the ear".
+    #
+    # When `single_pivot_y_norm` is set, the cascade is REPLACED by
+    # one rotation around (pivot_z_offset, single_pivot_y_norm *
+    # head_h + chin_y). The cumul/yaw/fade arrays are ignored. The
+    # anchor still runs to clamp anything below `anchor_y_norm`.
+    # ------------------------------------------------------------------
+    "cranium_only": dict(
+        # Pivot at ear bottom (y_norm = +0.30) and back of skull.
+        # Snap below-ear verts to rest. Result: only the cranium
+        # above the ear rotates; the face below the ear (jaw, chin,
+        # neck, body) is held in place.
+        pitch=(1.0,) * 12, yaw=(1.0,) * 12,
+        fade=0.5,
+        anchor_y_norm=+0.28,
+        anchor_fade_band=0.04,
+        pivot_z_offset=-0.20,
+        single_pivot_y_norm=+0.30,
+    ),
+    "cranium_high_pivot": dict(
+        # Pivot higher up (atlanto-occipital level, y_norm = +0.40).
+        # Smaller cranium rotates; lower face stays still.
+        pitch=(1.0,) * 12, yaw=(1.0,) * 12,
+        fade=0.5,
+        anchor_y_norm=+0.38,
+        anchor_fade_band=0.04,
+        pivot_z_offset=-0.20,
+        single_pivot_y_norm=+0.40,
+    ),
+    "cranium_soft_seam": dict(
+        # Same ear-level pivot but wider blend band so the seam at
+        # the ear doesn't show a sharp crease.
+        pitch=(1.0,) * 12, yaw=(1.0,) * 12,
+        fade=0.5,
+        anchor_y_norm=+0.20,
+        anchor_fade_band=0.10,
+        pivot_z_offset=-0.20,
+        single_pivot_y_norm=+0.30,
+    ),
+    # ------------------------------------------------------------------
+    # Whole-head block + neck stretch: the entire head (skull, jaw,
+    # face, chin) rotates as ONE rigid block around an ear-level
+    # pivot, and the NECK smoothly stretches/compresses to absorb
+    # the motion. Body below the neck base stays still.
+    #
+    # User spec: "the entire skull, the jaw and the entire head has
+    # to move as one. The neck is the region that has to stretch and
+    # compress - not the face and head".
+    # ------------------------------------------------------------------
+    "head_block_neck_stretch": dict(
+        # Entire HEAD rotates RIGIDLY around the ear pivot. The
+        # rigid zone extends from y_norm ≥ -0.10 (covers the whole
+        # head + lower jaw + submental area) up to the crown. Verts
+        # in the throat/neck (y_norm -0.30 to -0.10) smoothstep
+        # blend = neck stretches. Body below -0.30 stays at rest.
+        pitch=(1.0,) * 12, yaw=(1.0,) * 12,
+        fade=0.5,
+        anchor_y_norm=-0.30,         # bottom of fade = neck base
+        anchor_fade_band=0.20,       # top of fade at -0.10 (jaw)
+        pivot_z_offset=-0.20,
+        single_pivot_y_norm=+0.30,
+    ),
+    "head_block_short_neck": dict(
+        # Same rigid head boundary but narrower stretch zone — neck
+        # deforms over a smaller band.
+        pitch=(1.0,) * 12, yaw=(1.0,) * 12,
+        fade=0.5,
+        anchor_y_norm=-0.22,
+        anchor_fade_band=0.12,
+        pivot_z_offset=-0.20,
+        single_pivot_y_norm=+0.30,
+    ),
+    "head_block_long_neck": dict(
+        # Long stretch zone reaches into the upper torso — gentlest
+        # neck deformation. Useful for the cleanest "neck flexes"
+        # appearance at the cost of some upper-clavicle motion.
+        pitch=(1.0,) * 12, yaw=(1.0,) * 12,
+        fade=0.5,
+        anchor_y_norm=-0.50,
+        anchor_fade_band=0.40,
+        pivot_z_offset=-0.20,
+        single_pivot_y_norm=+0.30,
+    ),
 }
 
 
 def _resolve_nod_mode():
-    """Return (pitch, yaw, fade, anchor_y_norm) for the active mode.
+    """Return (pitch, yaw, fade, anchor_y_norm, anchor_fade_band,
+    pivot_z_offset, single_pivot_y_norm) for the active mode.
 
-    Default `spine_ripple` concentrates bend at C1-C3 and leaves a
-    tiny ripple through T1-T4 so the cervical chain flexes without
-    visibly moving the neck-base / clavicle junction. Override with
-    FACEVIEW_NOD_MODE=current to restore the legacy behavior.
+    If `single_pivot_y_norm` is set, the cascade is REPLACED by a
+    single rotation around that Y (head_h units relative to chin)
+    plus the pivot_z_offset.
     """
     import os as _os
-    name = (_os.environ.get("FACEVIEW_NOD_MODE", "spine_ripple").strip()
-            or "spine_ripple")
-    cfg = _NOD_MODES.get(name, _NOD_MODES["spine_ripple"])
-    return cfg["pitch"], cfg["yaw"], cfg["fade"], cfg["anchor_y_norm"]
+    name = (_os.environ.get("FACEVIEW_NOD_MODE",
+                              "head_block_neck_stretch").strip()
+            or "head_block_neck_stretch")
+    cfg = _NOD_MODES.get(name, _NOD_MODES["head_block_neck_stretch"])
+    return (cfg["pitch"], cfg["yaw"], cfg["fade"],
+            cfg["anchor_y_norm"],
+            cfg.get("anchor_fade_band", 0.15),
+            cfg.get("pivot_z_offset", 0.0),
+            cfg.get("single_pivot_y_norm", None))
 VERTEBRA_Y_FRACS: tuple[float, ...] = (
     +0.05,  # above C1 (skull)
      0.00,  # C1 atlas
@@ -867,9 +1020,48 @@ def _apply_cervical_cascade(
     if (abs(yaw) < 1e-3 and abs(pitch) < 1e-3 and abs(roll) < 1e-3):
         return verts
 
-    pitch_fracs, yaw_fracs, fade, anchor_y_norm = _resolve_nod_mode()
+    (pitch_fracs, yaw_fracs, fade, anchor_y_norm,
+     anchor_fade_band, pivot_z_offset,
+     single_pivot_y_norm) = _resolve_nod_mode()
     rest_verts = verts  # keep original for optional post-anchor blend
     out = verts.copy()
+    # Anatomical-pivot offset: shift the per-disc pivot back into the
+    # neck (negative Z). pivot_z_offset is in head_h units.
+    pivot_z_eff = float(pivot_z) + float(pivot_z_offset) * float(head_h)
+
+    # SINGLE-PIVOT path: cranium-only modes do one rotation around
+    # the specified Y and skip the per-disc cascade entirely. The
+    # anchor below still runs to clamp lower regions to rest.
+    if single_pivot_y_norm is not None:
+        pivot_y_abs = chin_y + float(single_pivot_y_norm) * head_h
+        cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
+        cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
+        cr_, sr_ = float(np.cos(roll)), float(np.sin(roll))
+        Ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]],
+                        dtype=np.float32)
+        Rx = np.array([[1, 0, 0], [0, cp_, -sp_], [0, sp_, cp_]],
+                        dtype=np.float32)
+        Rz = np.array([[cr_, -sr_, 0], [sr_, cr_, 0], [0, 0, 1]],
+                        dtype=np.float32)
+        R = Ry @ Rx @ Rz
+        pivot = np.array([0.0, pivot_y_abs, pivot_z_eff],
+                          dtype=np.float32)
+        diff = out - pivot
+        out = ((diff @ R.T) + pivot).astype(np.float32)
+        # Fall through to the anchor block below.
+        if anchor_y_norm is not None:
+            fade_band_norm = float(anchor_fade_band)
+            anchor_y_abs = chin_y + anchor_y_norm * head_h
+            fade_abs = fade_band_norm * head_h
+            y = rest_verts[:, 1]
+            t_anchor = np.clip(
+                (y - anchor_y_abs) / max(1e-6, fade_abs), 0.0, 1.0)
+            w_keep = (t_anchor * t_anchor *
+                        (3.0 - 2.0 * t_anchor)).astype(np.float32)
+            out = (rest_verts * (1.0 - w_keep[:, None])
+                      + out * w_keep[:, None]).astype(np.float32)
+        return out
+
     vert_ys = [chin_y + f * head_h for f in VERTEBRA_Y_FRACS]
     pitch_cumul = list(pitch_fracs)
     yaw_cumul = list(yaw_fracs)
@@ -908,7 +1100,7 @@ def _apply_cervical_cascade(
                        0.0, 1.0)
         w = (t * t * (3.0 - 2.0 * t)).astype(np.float32)
 
-        pivot = np.array([0.0, disc_y, float(pivot_z)], dtype=np.float32)
+        pivot = np.array([0.0, disc_y, pivot_z_eff], dtype=np.float32)
         diff = out - pivot
         rotated = (diff @ R.T) + pivot
         out = (out * (1.0 - w[:, None])
@@ -920,7 +1112,7 @@ def _apply_cervical_cascade(
     # the cascade. Smoothstep band sits ABOVE the threshold so the
     # transition is smooth and not a sharp seam.
     if anchor_y_norm is not None:
-        fade_band_norm = 0.15  # in head_h units (~3 ICT units)
+        fade_band_norm = float(anchor_fade_band)
         anchor_y_abs = chin_y + anchor_y_norm * head_h
         fade_abs = fade_band_norm * head_h
         y = rest_verts[:, 1]

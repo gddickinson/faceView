@@ -1,0 +1,164 @@
+[
+  {
+    "name": "cranium_only",
+    "friendly": "cranium_only (face distorts)",
+    "below_total": 69,
+    "above_total": 240,
+    "confined_pct": 77.66990291262135,
+    "down": {
+      "above_back_cyan": 0,
+      "above_back_red": 62,
+      "above_front_cyan": 0,
+      "above_front_red": 0,
+      "below_back_cyan": 25,
+      "below_back_red": 37,
+      "below_front_cyan": 0,
+      "below_front_red": 0
+    },
+    "up": {
+      "above_back_cyan": 138,
+      "above_back_red": 33,
+      "above_front_cyan": 7,
+      "above_front_red": 0,
+      "below_back_cyan": 7,
+      "below_back_red": 0,
+      "below_front_cyan": 0,
+      "below_front_red": 0
+    }
+  },
+  {
+    "name": "flex_anchor_-0.30",
+    "friendly": "flex_anchored",
+    "below_total": 264,
+    "above_total": 1150,
+    "confined_pct": 81.32956152758133,
+    "down": {
+      "above_back_cyan": 17,
+      "above_back_red": 56,
+      "above_front_cyan": 0,
+      "above_front_red": 0,
+      "below_back_cyan": 150,
+      "below_back_red": 60,
+      "below_front_cyan": 0,
+      "below_front_red": 0
+    },
+    "up": {
+      "above_back_cyan": 636,
+      "above_back_red": 434,
+      "above_front_cyan": 7,
+      "above_front_red": 0,
+      "below_back_cyan": 0,
+      "below_back_red": 52,
+      "below_front_cyan": 0,
+      "below_front_red": 2
+    }
+  },
+  {
+    "name": "legacy_no_anchor",
+    "friendly": "BUG (legacy)",
+    "below_total": 271,
+    "above_total": 1278,
+    "confined_pct": 82.50484183344093,
+    "down": {
+      "above_back_cyan": 16,
+      "above_back_red": 56,
+      "above_front_cyan": 0,
+      "above_front_red": 0,
+      "below_back_cyan": 158,
+      "below_back_red": 46,
+      "below_front_cyan": 0,
+      "below_front_red": 0
+    },
+    "up": {
+      "above_back_cyan": 701,
+      "above_back_red": 498,
+      "above_front_cyan": 7,
+      "above_front_red": 0,
+      "below_back_cyan": 0,
+      "below_back_red": 60,
+      "below_front_cyan": 0,
+      "below_front_red": 7
+    }
+  },
+  {
+    "name": "head_block_short_neck",
+    "friendly": "head_block_short_neck",
+    "below_total": 413,
+    "above_total": 353,
+    "confined_pct": 46.08355091383812,
+    "down": {
+      "above_back_cyan": 28,
+      "above_back_red": 39,
+      "above_front_cyan": 0,
+      "above_front_red": 0,
+      "below_back_cyan": 282,
+      "below_back_red": 33,
+      "below_front_cyan": 0,
+      "below_front_red": 0
+    },
+    "up": {
+      "above_back_cyan": 190,
+      "above_back_red": 89,
+      "above_front_cyan": 7,
+      "above_front_red": 0,
+      "below_back_cyan": 0,
+      "below_back_red": 92,
+      "below_front_cyan": 0,
+      "below_front_red": 6
+    }
+  },
+  {
+    "name": "head_block_neck_stretch",
+    "friendly": "head_block_neck_stretch \u2605",
+    "below_total": 533,
+    "above_total": 380,
+    "confined_pct": 41.621029572836804,
+    "down": {
+      "above_back_cyan": 28,
+      "above_back_red": 39,
+      "above_front_cyan": 0,
+      "above_front_red": 0,
+      "below_back_cyan": 341,
+      "below_back_red": 42,
+      "below_front_cyan": 0,
+      "below_front_red": 0
+    },
+    "up": {
+      "above_back_cyan": 207,
+      "above_back_red": 99,
+      "above_front_cyan": 7,
+      "above_front_red": 0,
+      "below_back_cyan": 0,
+      "below_back_red": 129,
+      "below_front_cyan": 0,
+      "below_front_red": 21
+    }
+  },
+  {
+    "name": "head_block_long_neck",
+    "friendly": "head_block_long_neck",
+    "below_total": 957,
+    "above_total": 572,
+    "confined_pct": 37.410071942446045,
+    "down": {
+      "above_back_cyan": 28,
+      "above_back_red": 39,
+      "above_front_cyan": 0,
+      "above_front_red": 0,
+      "below_back_cyan": 494,
+      "below_back_red": 48,
+      "below_front_cyan": 33,
+      "below_front_red": 0
+    },
+    "up": {
+      "above_back_cyan": 334,
+      "above_back_red": 164,
+      "above_front_cyan": 7,
+      "above_front_red": 0,
+      "below_back_cyan": 42,
+      "below_back_red": 148,
+      "below_front_cyan": 0,
+      "below_front_red": 192
+    }
+  }
+]

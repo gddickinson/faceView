@@ -1673,3 +1673,60 @@ Tools added:
 
 Compare images at `/tmp/nod_modes_compare.png`,
 `/tmp/nod_final_compare.png`, `/tmp/nod_table.png`.
+
+## 2026-05-11 — Head nod: rigid-head + neck-stretch (single ear pivot)
+
+User feedback on earlier head-nod work: the cervical cascade made
+the head + upper neck look like a "rigid block" rotating in space,
+when in fact the user wanted (a) the entire head to rotate as one
+rigid block around a pivot at the ear/atlanto-occipital level, and
+(b) the NECK below the chin to absorb the motion via stretch.
+
+**What was wrong**: the cumulative pitch fractions of every cascade
+mode were applied around per-disc pivots at `pivot_z=0` (mesh
+centerline). The chin's distance to those pivots was tiny, so the
+chin barely swept in Z. Plus the cumul fractions stayed near 1.0
+through C1-C3, so the entire upper neck moved nearly as much as the
+chin = perceived rigid block.
+
+**Real fix**: added two new dimensions to the cascade:
+
+1. **`pivot_z_offset`** (head_h units) — shift every per-disc pivot
+   BACK into the neck. -0.20 = back of cervical spine.
+2. **`single_pivot_y_norm`** — when set, REPLACES the cascade with a
+   single rotation around (pivot_z_offset, single_pivot_y_norm).
+   This is the anatomically-correct head pivot at the
+   atlanto-occipital joint, at ear-bottom level.
+3. **`anchor_fade_band`** override — the post-anchor's smoothstep
+   width is now per-mode. Wide fade = head rotates rigidly and the
+   neck below stretches to absorb motion.
+
+**Default mode is now `head_block_neck_stretch`**:
+- `single_pivot_y_norm = +0.30` (ear-bottom level)
+- `pivot_z_offset = -0.20` (back of cervical spine)
+- `anchor_y_norm = -0.30, anchor_fade_band = 0.20` (top of fade at
+  y_norm = -0.10 — verts above stay full-rigid, throat region at
+  -0.30 to -0.10 stretches, body below -0.30 stays at rest)
+
+**Other modes available** via `FACEVIEW_NOD_MODE`:
+- `cranium_only` — locks face/jaw still, only upper skull rotates
+  (clean but distorts the face at the ear seam)
+- `head_block_short_neck` — fade 0.12, tight stretch zone
+- `head_block_long_neck` — fade 0.40, stretch reaches upper torso
+- `flex_anchored` / `spine_ripple` / `curve_back_pivot` / etc. —
+  older cascade-based experiments, kept for A/B
+
+**Diagnostic tools added**:
+- `tools/_neck_base_sweep.py` — parameter sweep tracking per-Y-band
+  displacement of specific tracked verts on both ICT head mesh and
+  body mesh under ±22.9° pitch. Reports chin_dz/dy and base motion
+  per config.
+- `tools/_nod_motion_overlay.py` — renders cyan (rest pose) + red
+  (pitched pose) silhouette diffs per mode. Used to visually verify
+  that motion is confined to the head/neck and the body stays still.
+- `tools/_quadrant_motion_assess.py` — counts cyan/red pixels in the
+  above-ear vs below-ear (and front-of-head vs back-of-head)
+  quadrants of each overlay. 3-pixel binary erosion strips
+  anti-aliasing edge noise.
+
+User's final note: "This is better — not perfect but much improved."
