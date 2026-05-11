@@ -21,6 +21,7 @@ Render mode: ``ict_face_3d``.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -467,45 +468,462 @@ def _apply_camera_orbit(
     return ((verts - pivot) @ R.T + pivot).astype(np.float32)
 
 
-def _apply_neck_rotation(
-    verts: np.ndarray, yaw: float, pitch: float,
-    *, ref_verts: np.ndarray | None = None,
+def _apply_limb_rotation(
+    verts: np.ndarray,
+    pivot: np.ndarray,
+    yaw: float, pitch: float, roll: float,
+    weight: np.ndarray,
 ) -> np.ndarray:
-    """Per-vertex Y-weighted skinning around the neck pivot.
-
-    Vertices in the head region get the full ry @ rx rotation;
-    vertices in the bust / shoulders below the neck stay put.
-    ``ref_verts`` overrides the y-range source so auxiliary meshes
-    (tongue, hair) get weights computed against the ICT mesh
-    extents rather than their own (smaller) bbox.
+    """Rotate verts around ``pivot`` weighted by per-vertex
+    ``weight`` in [0, 1]. weight=1 fully rotates, weight=0 stays
+    put, intermediate values blend — so the limb-to-torso boundary
+    can have a smooth fall-off and triangles don't rip.
     """
-    if abs(yaw) < 1e-3 and abs(pitch) < 1e-3:
+    if (abs(yaw) < 1e-3 and abs(pitch) < 1e-3 and abs(roll) < 1e-3):
         return verts
-
-    src = ref_verts if ref_verts is not None else verts
-    y_min = float(src[:, 1].min())
-    y_max = float(src[:, 1].max())
-    span = max(1e-6, y_max - y_min)
-    # Neck base ≈ 22 % up from the bottom of the bust; "head fully
-    # rotates" boundary at ≈ 38 % so the chin (around 30 % of span)
-    # gets nearly full rotation. Earlier 0.30/0.55 left the chin
-    # in the transition band, distorting the lower face on shake/nod.
-    y_neck = y_min + span * 0.22
-    y_head = y_min + span * 0.38
-
-    y = verts[:, 1]
-    t = np.clip((y - y_neck) / max(1e-6, y_head - y_neck), 0.0, 1.0)
-    w = (t * t * (3.0 - 2.0 * t)).astype(np.float32)  # smoothstep
-
-    cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
-    cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
+    if not (weight > 1e-3).any():
+        return verts
+    cy_ = float(np.cos(yaw)); sy_ = float(np.sin(yaw))
+    cp_ = float(np.cos(pitch)); sp_ = float(np.sin(pitch))
+    cr_ = float(np.cos(roll)); sr_ = float(np.sin(roll))
     Ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]],
                     dtype=np.float32)
     Rx = np.array([[1, 0, 0], [0, cp_, -sp_], [0, sp_, cp_]],
                     dtype=np.float32)
-    R = Ry @ Rx
+    Rz = np.array([[cr_, -sr_, 0], [sr_, cr_, 0], [0, 0, 1]],
+                    dtype=np.float32)
+    R = Ry @ Rx @ Rz
+    diff = verts - pivot
+    rotated = (diff @ R.T) + pivot
+    w = weight[:, None].astype(np.float32)
+    return (verts * (1.0 - w) + rotated * w).astype(np.float32)
 
-    pivot = np.array([0.0, y_neck, 0.0], dtype=np.float32)
+
+def _arm_weight(verts: np.ndarray, side: int, shoulder_y: float,
+                 wrist_floor_y: float, x_inner: float,
+                 x_fade: float = 2.0,
+                 y_fade_top: float = 1.5,
+                 y_fade_bot: float = 1.5,
+                 shoulder_offset: float = 2.0) -> np.ndarray:
+    """Soft skinning weight for an arm segment.
+
+    Tight defaults so arm rotations don't pick up torso pixels:
+    sharp X transition at the arm/torso boundary (``x_fade=2``),
+    and the top fade starts BELOW the shoulder line by
+    ``shoulder_offset`` so the shoulder cap itself stays attached
+    to the torso, not the arm.
+    """
+    sx = side * verts[:, 0]
+    y = verts[:, 1]
+    # X side mask — sharp transition at x_inner (arm/torso boundary).
+    wx = np.clip((sx - x_inner) / max(1e-6, x_fade), 0.0, 1.0)
+    wx = wx * wx * (3.0 - 2.0 * wx)
+    # Y top: fade 0 above (shoulder_y - shoulder_offset) so arm
+    # rotation doesn't lift the shoulder cap.
+    top_edge = shoulder_y - shoulder_offset
+    wy_top = 1.0 - np.clip((y - top_edge) / max(1e-6, y_fade_top), 0.0, 1.0)
+    wy_top = wy_top * wy_top * (3.0 - 2.0 * wy_top)
+    wy_bot = np.clip((y - wrist_floor_y) / max(1e-6, y_fade_bot), 0.0, 1.0)
+    wy_bot = wy_bot * wy_bot * (3.0 - 2.0 * wy_bot)
+    return (wx * wy_top * wy_bot).astype(np.float32)
+
+
+def _leg_weight(verts: np.ndarray, side: int, hip_y: float,
+                 ankle_floor_y: float, x_inner: float = 1.5,
+                 x_fade: float = 1.5,
+                 y_fade_top: float = 1.5,
+                 y_fade_bot: float = 1.5,
+                 hip_offset: float = 2.0) -> np.ndarray:
+    """Soft skinning weight for a leg segment. Tight masks so
+    the rotation doesn't pick up torso/hip pixels."""
+    sx = side * verts[:, 0]
+    y = verts[:, 1]
+    # X mask: must be on this side of midline by at least x_inner.
+    wx = np.clip((sx - x_inner) / max(1e-6, x_fade), 0.0, 1.0)
+    wx = wx * wx * (3.0 - 2.0 * wx)
+    # Y top: below hip by hip_offset so pelvis stays put.
+    top_edge = hip_y - hip_offset
+    wy_top = 1.0 - np.clip((y - top_edge) / max(1e-6, y_fade_top), 0.0, 1.0)
+    wy_top = wy_top * wy_top * (3.0 - 2.0 * wy_top)
+    wy_bot = np.clip((y - ankle_floor_y) / max(1e-6, y_fade_bot), 0.0, 1.0)
+    wy_bot = wy_bot * wy_bot * (3.0 - 2.0 * wy_bot)
+    return (wx * wy_top * wy_bot).astype(np.float32)
+
+
+def _apply_body_rig(
+    body_verts: np.ndarray, params,
+    chin_y: float, head_h: float,
+    parts: np.ndarray | None = None,
+) -> np.ndarray:
+    """Apply all per-joint limb rotations to body verts using
+    soft skinning weights (smooth fall-off at limb boundaries).
+
+    Joints applied in parent→child order so child motion compounds
+    with parent. Each joint reads its rotation triple from ``params``
+    via ``getattr`` with a 0 default — unset joints are no-ops.
+    """
+    if len(body_verts) == 0:
+        return body_verts
+    HH = head_h
+    shoulder_y = chin_y - HH * 0.50
+    elbow_y    = chin_y - HH * 1.85
+    wrist_y    = chin_y - HH * 3.20
+    hip_y      = chin_y - HH * 3.00
+    knee_y     = chin_y - HH * 4.50
+    ankle_y    = chin_y - HH * 6.20
+    arm_x      = HH * 0.70
+    leg_x      = HH * 0.30
+    # Tight thresholds: arm verts have |X| > ~0.62*head_h; legs
+    # have |X| > ~0.10*head_h (just past midline). Verts between
+    # are TORSO and stay put during arm/leg rotations.
+    arm_inner  = HH * 0.62
+    leg_inner  = HH * 0.10
+    body_floor = chin_y - HH * 7.0  # below feet
+
+    out = body_verts
+    # Body-part hard masks (1.0 only where vert is in the right
+    # region, 0.0 elsewhere). Multiplied into soft skinning weights
+    # so e.g. an arm rotation can NEVER move a torso vert even if
+    # the soft weight's smoothstep would otherwise include it.
+    if parts is not None:
+        from faceview.vision.body_3d import (
+            BP_LEFT_ARM, BP_RIGHT_ARM, BP_LEFT_LEG, BP_RIGHT_LEG,
+        )
+        mask_l_arm = (parts == BP_LEFT_ARM).astype(np.float32)
+        mask_r_arm = (parts == BP_RIGHT_ARM).astype(np.float32)
+        mask_l_leg = (parts == BP_LEFT_LEG).astype(np.float32)
+        mask_r_leg = (parts == BP_RIGHT_LEG).astype(np.float32)
+    else:
+        # Fallback: no classification, rely entirely on soft weights.
+        ones = np.ones(len(out), dtype=np.float32)
+        mask_l_arm = mask_r_arm = mask_l_leg = mask_r_leg = ones
+    # ── LEFT ARM ─────────────────────────────────────────────────
+    w = _arm_weight(out, side=+1, shoulder_y=shoulder_y,
+                       wrist_floor_y=wrist_y - 6, x_inner=arm_inner)
+    w = w * mask_l_arm
+    out = _apply_limb_rotation(
+        out, np.array([arm_x, shoulder_y, 0], dtype=np.float32),
+        float(getattr(params, "l_shoulder_yaw", 0.0)),
+        float(getattr(params, "l_shoulder_pitch", 0.0)),
+        float(getattr(params, "l_shoulder_roll", 0.0)),
+        w,
+    )
+    w = _arm_weight(out, side=+1, shoulder_y=elbow_y,
+                       wrist_floor_y=wrist_y - 6, x_inner=arm_inner)
+    w = w * mask_l_arm
+    out = _apply_limb_rotation(
+        out, np.array([arm_x, elbow_y, 0], dtype=np.float32),
+        float(getattr(params, "l_elbow_yaw", 0.0)),
+        float(getattr(params, "l_elbow_pitch", 0.0)),
+        float(getattr(params, "l_elbow_roll", 0.0)),
+        w,
+    )
+    w = _arm_weight(out, side=+1, shoulder_y=wrist_y,
+                       wrist_floor_y=wrist_y - 6, x_inner=arm_inner)
+    w = w * mask_l_arm
+    out = _apply_limb_rotation(
+        out, np.array([arm_x, wrist_y, 0], dtype=np.float32),
+        float(getattr(params, "l_wrist_yaw", 0.0)),
+        float(getattr(params, "l_wrist_pitch", 0.0)),
+        float(getattr(params, "l_wrist_roll", 0.0)),
+        w,
+    )
+    # ── RIGHT ARM ────────────────────────────────────────────────
+    w = _arm_weight(out, side=-1, shoulder_y=shoulder_y,
+                       wrist_floor_y=wrist_y - 6, x_inner=arm_inner)
+    w = w * mask_r_arm
+    out = _apply_limb_rotation(
+        out, np.array([-arm_x, shoulder_y, 0], dtype=np.float32),
+        float(getattr(params, "r_shoulder_yaw", 0.0)),
+        float(getattr(params, "r_shoulder_pitch", 0.0)),
+        float(getattr(params, "r_shoulder_roll", 0.0)),
+        w,
+    )
+    w = _arm_weight(out, side=-1, shoulder_y=elbow_y,
+                       wrist_floor_y=wrist_y - 6, x_inner=arm_inner)
+    w = w * mask_r_arm
+    out = _apply_limb_rotation(
+        out, np.array([-arm_x, elbow_y, 0], dtype=np.float32),
+        float(getattr(params, "r_elbow_yaw", 0.0)),
+        float(getattr(params, "r_elbow_pitch", 0.0)),
+        float(getattr(params, "r_elbow_roll", 0.0)),
+        w,
+    )
+    w = _arm_weight(out, side=-1, shoulder_y=wrist_y,
+                       wrist_floor_y=wrist_y - 6, x_inner=arm_inner)
+    w = w * mask_r_arm
+    out = _apply_limb_rotation(
+        out, np.array([-arm_x, wrist_y, 0], dtype=np.float32),
+        float(getattr(params, "r_wrist_yaw", 0.0)),
+        float(getattr(params, "r_wrist_pitch", 0.0)),
+        float(getattr(params, "r_wrist_roll", 0.0)),
+        w,
+    )
+    # ── LEFT LEG ─────────────────────────────────────────────────
+    w = _leg_weight(out, side=+1, hip_y=hip_y, ankle_floor_y=body_floor,
+                       x_inner=leg_inner)
+    w = w * mask_l_leg
+    out = _apply_limb_rotation(
+        out, np.array([leg_x, hip_y, 0], dtype=np.float32),
+        float(getattr(params, "l_hip_yaw", 0.0)),
+        float(getattr(params, "l_hip_pitch", 0.0)),
+        float(getattr(params, "l_hip_roll", 0.0)),
+        w,
+    )
+    w = _leg_weight(out, side=+1, hip_y=knee_y, ankle_floor_y=body_floor,
+                       x_inner=leg_inner)
+    w = w * mask_l_leg
+    out = _apply_limb_rotation(
+        out, np.array([leg_x, knee_y, 0], dtype=np.float32),
+        float(getattr(params, "l_knee_yaw", 0.0)),
+        float(getattr(params, "l_knee_pitch", 0.0)),
+        float(getattr(params, "l_knee_roll", 0.0)),
+        w,
+    )
+    w = _leg_weight(out, side=+1, hip_y=ankle_y, ankle_floor_y=body_floor,
+                       x_inner=leg_inner)
+    w = w * mask_l_leg
+    out = _apply_limb_rotation(
+        out, np.array([leg_x, ankle_y, 0], dtype=np.float32),
+        float(getattr(params, "l_ankle_yaw", 0.0)),
+        float(getattr(params, "l_ankle_pitch", 0.0)),
+        float(getattr(params, "l_ankle_roll", 0.0)),
+        w,
+    )
+    # ── RIGHT LEG ────────────────────────────────────────────────
+    w = _leg_weight(out, side=-1, hip_y=hip_y, ankle_floor_y=body_floor,
+                       x_inner=leg_inner)
+    w = w * mask_r_leg
+    out = _apply_limb_rotation(
+        out, np.array([-leg_x, hip_y, 0], dtype=np.float32),
+        float(getattr(params, "r_hip_yaw", 0.0)),
+        float(getattr(params, "r_hip_pitch", 0.0)),
+        float(getattr(params, "r_hip_roll", 0.0)),
+        w,
+    )
+    w = _leg_weight(out, side=-1, hip_y=knee_y, ankle_floor_y=body_floor,
+                       x_inner=leg_inner)
+    w = w * mask_r_leg
+    out = _apply_limb_rotation(
+        out, np.array([-leg_x, knee_y, 0], dtype=np.float32),
+        float(getattr(params, "r_knee_yaw", 0.0)),
+        float(getattr(params, "r_knee_pitch", 0.0)),
+        float(getattr(params, "r_knee_roll", 0.0)),
+        w,
+    )
+    w = _leg_weight(out, side=-1, hip_y=ankle_y, ankle_floor_y=body_floor,
+                       x_inner=leg_inner)
+    w = w * mask_r_leg
+    out = _apply_limb_rotation(
+        out, np.array([-leg_x, ankle_y, 0], dtype=np.float32),
+        float(getattr(params, "r_ankle_yaw", 0.0)),
+        float(getattr(params, "r_ankle_pitch", 0.0)),
+        float(getattr(params, "r_ankle_roll", 0.0)),
+        w,
+    )
+    return out
+
+
+# Cervical vertebra rotation distribution from faceforge.
+# Each entry is the CUMULATIVE rotation fraction at that vertebra
+# level — Atlas (C1) carries 100 % of head rotation, T1 (top of
+# thoracic spine) carries 0 %. Rotation accumulates from T1 up so
+# the visible skin bends smoothly across all 7 cervical joints
+# instead of stretching at a single pivot.
+# Pitch + roll fractions are larger than yaw fractions because the
+# cervical spine is more flexible in flexion/extension than rotation.
+VERTEBRA_FRACTIONS_PITCH: tuple[float, ...] = (
+    1.00, 0.98, 0.85, 0.55, 0.25, 0.10, 0.04, 0.015, 0.005,
+    0.002, 0.0, 0.0,
+)  # above-C1, C1, C2, C3, C4, C5, C6, C7, T1, T2, T3, T4
+# Bend CONCENTRATED at the top of the neck (C1-C3) — close to the
+# skull, where the head pivots in real anatomy. Mid-neck (C4-C5)
+# carries less; lower neck (C6-T1) almost stationary so the base
+# stays anchored to the body. Skin stretches across the C2-C4 band.
+VERTEBRA_FRACTIONS_YAW: tuple[float, ...] = (
+    1.00, 0.98, 0.55, 0.30, 0.15, 0.08, 0.03, 0.01, 0.003,
+    0.001, 0.0, 0.0,
+)
+VERTEBRA_Y_FRACS: tuple[float, ...] = (
+    +0.05,  # above C1 (skull)
+     0.00,  # C1 atlas
+    -0.07,  # C2
+    -0.13,  # C3
+    -0.20,  # C4 (≈ body's morph top)
+    -0.27,  # C5
+    -0.33,  # C6
+    -0.40,  # C7
+    -0.50,  # T1
+    -0.62,  # T2 (helper, in upper torso)
+    -0.75,  # T3 (helper, in mid-chest)
+    -0.90,  # T4 (helper, near sternum)
+)
+
+
+def _vertebra_weight_curve(verts_y: np.ndarray, chin_y: float,
+                              head_h: float, axis: str) -> np.ndarray:
+    """Per-vertex rotation fraction along the cervical spine.
+
+    Linearly interpolates faceforge's vertebra rotation fractions
+    across our vertex Y positions. Verts above C1 get fraction 1.0
+    (full head rotation). Verts at or below T1 get 0. In between,
+    smooth piecewise-linear blend that matches anatomical
+    distribution.
+    """
+    fractions = (VERTEBRA_FRACTIONS_PITCH if axis != "yaw"
+                    else VERTEBRA_FRACTIONS_YAW)
+    # Vertebra Y positions in absolute ICT frame
+    vert_ys = np.array([chin_y + f * head_h for f in VERTEBRA_Y_FRACS],
+                          dtype=np.float32)
+    fracs = np.array(fractions, dtype=np.float32)
+    # np.interp expects xp in increasing order — reverse since we go top→bottom
+    xp = vert_ys[::-1]
+    fp = fracs[::-1]
+    return np.interp(verts_y, xp, fp).astype(np.float32)
+
+
+def _apply_cervical_cascade(
+    verts: np.ndarray, yaw: float, pitch: float, roll: float,
+    chin_y: float, head_h: float, pivot_z: float = 0.0,
+) -> np.ndarray:
+    """Apply head rotation as 7 sequential cervical-disc rotations.
+
+    Each cervical intervertebral disc is its OWN pivot — when the
+    head rotates, every disc contributes a small fraction of the
+    total angle. The chin (above C1) accumulates all 7, mid-neck
+    accumulates the bottom 4, T1-level verts accumulate 0. Because
+    each rotation is around a different pivot, the path traced by
+    the chin is a chain of small arcs — the neck VISIBLY CURVES,
+    not just rotates as a single rigid block.
+
+    Mirrors faceforge's cervical-vertebra distribution but as a
+    sequence of rigid rotations on flat vertex arrays instead of
+    scene-graph quaternions.
+    """
+    if (abs(yaw) < 1e-3 and abs(pitch) < 1e-3 and abs(roll) < 1e-3):
+        return verts
+
+    out = verts.copy()
+    vert_ys = [chin_y + f * head_h for f in VERTEBRA_Y_FRACS]
+    pitch_cumul = list(VERTEBRA_FRACTIONS_PITCH)
+    yaw_cumul = list(VERTEBRA_FRACTIONS_YAW)
+
+    n = len(vert_ys)
+    # Apply BOTTOM disc first (T1-C7), TOP disc last (C1-aboveC1).
+    # Each disc's rotation is the DELTA between its two cumulative
+    # fractions.
+    for i in range(n - 2, -1, -1):
+        disc_y = (vert_ys[i] + vert_ys[i + 1]) / 2.0
+        d_pitch = pitch_cumul[i] - pitch_cumul[i + 1]
+        d_yaw = yaw_cumul[i] - yaw_cumul[i + 1]
+        d_roll = pitch_cumul[i] - pitch_cumul[i + 1]  # roll = pitch curve
+        if abs(d_pitch) < 1e-4 and abs(d_yaw) < 1e-4 and abs(d_roll) < 1e-4:
+            continue
+
+        ry = float(yaw * d_yaw)
+        rp = float(pitch * d_pitch)
+        rr = float(roll * d_roll)
+        cy_, sy_ = float(np.cos(ry)), float(np.sin(ry))
+        cp_, sp_ = float(np.cos(rp)), float(np.sin(rp))
+        cr_, sr_ = float(np.cos(rr)), float(np.sin(rr))
+        Ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]],
+                        dtype=np.float32)
+        Rx = np.array([[1, 0, 0], [0, cp_, -sp_], [0, sp_, cp_]],
+                        dtype=np.float32)
+        Rz = np.array([[cr_, -sr_, 0], [sr_, cr_, 0], [0, 0, 1]],
+                        dtype=np.float32)
+        R = Ry @ Rx @ Rz
+
+        # Smoothstep weight: full ABOVE the disc, 0 BELOW. Wider
+        # fade (1.5 ICT units) so adjacent discs' transitions
+        # overlap and the cumulative bend is smooth — eliminates
+        # the visible kink at the neck-to-back boundary.
+        fade = 1.5
+        y = out[:, 1]
+        t = np.clip((y - (disc_y - fade)) / max(1e-6, fade),
+                       0.0, 1.0)
+        w = (t * t * (3.0 - 2.0 * t)).astype(np.float32)
+
+        pivot = np.array([0.0, disc_y, float(pivot_z)], dtype=np.float32)
+        diff = out - pivot
+        rotated = (diff @ R.T) + pivot
+        out = (out * (1.0 - w[:, None])
+                  + rotated * w[:, None]).astype(np.float32)
+
+    return out
+
+
+def _apply_neck_rotation(
+    verts: np.ndarray, yaw: float, pitch: float, roll: float = 0.0,
+    *, ref_verts: np.ndarray | None = None,
+    y_neck_abs: float | None = None,
+    y_head_abs: float | None = None,
+    tracking_amp: float = 0.0,
+    tracking_decay: float = 4.0,
+    pivot_z: float = 0.0,
+    cervical_chin_y: float | None = None,
+    cervical_head_h: float | None = None,
+) -> np.ndarray:
+    """Per-vertex Y-weighted skinning around the neck pivot.
+
+    Above ``y_head`` get full Ry @ Rx @ Rz rotation (yaw / pitch /
+    roll). Between ``y_neck`` (pivot) and ``y_head`` get smoothstep
+    transition. Below the pivot, weight is 0.
+
+    Default thresholds are derived from the ref-mesh y-range
+    (28 % / 38 % of span). Callers can pass ``y_neck_abs`` /
+    ``y_head_abs`` to use absolute Y values instead — used to
+    extend the rotation band down through the body's torso so the
+    head + neck + upper body move together as one unit.
+    """
+    if abs(yaw) < 1e-3 and abs(pitch) < 1e-3 and abs(roll) < 1e-3:
+        return verts
+
+    if y_neck_abs is not None and y_head_abs is not None:
+        y_neck = float(y_neck_abs)
+        y_head = float(y_head_abs)
+    else:
+        src = ref_verts if ref_verts is not None else verts
+        y_min = float(src[:, 1].min())
+        y_max = float(src[:, 1].max())
+        span = max(1e-6, y_max - y_min)
+        y_neck = y_min + span * 0.30
+        y_head = y_min + span * 0.42
+    band_h = max(1e-6, y_head - y_neck)
+
+    y = verts[:, 1]
+    # Cervical vertebra fraction curve takes priority — distributes
+    # rotation across 7 cervical joints (faceforge-style) so the
+    # neck bends smoothly without single-pivot skin stretch.
+    if cervical_chin_y is not None and cervical_head_h is not None:
+        axis_for_curve = "pitch" if abs(pitch) >= abs(yaw) else "yaw"
+        w = _vertebra_weight_curve(
+            y, cervical_chin_y, cervical_head_h, axis=axis_for_curve)
+    else:
+        t_raw = (y - y_neck) / band_h
+        t_above = np.clip(t_raw, 0.0, 1.0)
+        ss = t_above * t_above * (3.0 - 2.0 * t_above)
+        if tracking_amp > 0.0:
+            w_above = float(tracking_amp) + (1.0 - float(tracking_amp)) * ss
+            dist_below = np.maximum(0.0, -t_raw * band_h)
+            decay_scale = max(1e-6, float(tracking_decay))
+            w_below = float(tracking_amp) * np.exp(-dist_below / decay_scale)
+            w = np.where(t_raw >= 0.0, w_above, w_below).astype(np.float32)
+        else:
+            w = ss.astype(np.float32)
+
+    cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
+    cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
+    cr_, sr_ = float(np.cos(roll)), float(np.sin(roll))
+    Ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]],
+                    dtype=np.float32)
+    Rx = np.array([[1, 0, 0], [0, cp_, -sp_], [0, sp_, cp_]],
+                    dtype=np.float32)
+    Rz = np.array([[cr_, -sr_, 0], [sr_, cr_, 0], [0, 0, 1]],
+                    dtype=np.float32)
+    R = Ry @ Rx @ Rz
+
+    pivot = np.array([0.0, y_neck, float(pivot_z)], dtype=np.float32)
     diff = verts - pivot
     rotated = (diff @ R.T) + pivot
     return (verts * (1.0 - w[:, None])
@@ -515,6 +933,9 @@ def _apply_neck_rotation(
 def _project_features(
     model, verts: np.ndarray,
     yaw: float, pitch: float, size: tuple[int, int],
+    bbox_verts: np.ndarray | None = None,
+    scale_multiplier: float = 1.0,
+    focus_y: float = 0.0,
 ) -> dict[str, tuple[float, float]]:
     """Project key ICT feature centroids to pixel space.
 
@@ -527,15 +948,26 @@ def _project_features(
     Feature points sourced from material-tagged vertices (iris L/R)
     and from blendshape-affected vertices (cheek, brow, forehead,
     mouth corners, chin).
+
+    ``bbox_verts`` lets callers override the bbox used to compute
+    centre + fit-scale (e.g. when a body mesh is being rendered the
+    bbox spans head + body, so feature anchors must use the same
+    bbox or they fall outside the rendered head). ``scale_multiplier``
+    further scales (used for camera zoom).
     """
     w, h = size
     aspect = float(h) / float(w) if w > 0 else 1.0
 
-    vmin = verts.min(axis=0)
-    vmax = verts.max(axis=0)
+    bbox_src = bbox_verts if bbox_verts is not None else verts
+    vmin = bbox_src.min(axis=0)
+    vmax = bbox_src.max(axis=0)
     centre = (vmin + vmax) / 2.0
+    if abs(focus_y) > 1e-3:
+        y_span = float(vmax[1] - vmin[1])
+        centre = centre + np.array([0.0, float(focus_y) * y_span * 0.5, 0.0],
+                                       dtype=centre.dtype)
     span = float(np.linalg.norm(vmax - vmin))
-    scale = 1.6 / max(span, 1e-6)
+    scale = (1.6 / max(span, 1e-6)) * float(scale_multiplier)
 
     cy_, sy_ = float(np.cos(yaw)), float(np.sin(yaw))
     cp_, sp_ = float(np.cos(pitch)), float(np.sin(pitch))
@@ -620,15 +1052,36 @@ def _project_features(
     if chin:
         out["chin"] = chin
 
+    # Head pixel-size summary so PostFX overlays (blush, !? marks,
+    # sweat drops, anger steam, sparkles) can scale their effect
+    # sizes to the rendered head — fixed pixel sizes look too big
+    # when body-mode shrinks the head in the frame.
+    if "chin" in out and "forehead" in out:
+        out["_head_height_px"] = float(
+            abs(out["chin"][1] - out["forehead"][1]))
+    if "eye_L" in out and "eye_R" in out:
+        dx = out["eye_R"][0] - out["eye_L"][0]
+        dy = out["eye_R"][1] - out["eye_L"][1]
+        out["_eye_distance_px"] = float((dx * dx + dy * dy) ** 0.5)
+
     return out
 
 
 def apply_blendshapes(
     model: ICTModel,
     arkit_coefs: dict[str, float],
+    base: np.ndarray | None = None,
+    vert_mask: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Return deformed vertex positions given ARKit-named coefficients."""
-    out = model.vertices.copy()
+    """Return deformed vertex positions given ARKit-named coefficients.
+
+    ``base`` overrides the starting positions (default: model neutral).
+    ``vert_mask`` (shape (N,)) scales each vertex's accumulated delta
+    so deformations can be confined to a region — used to keep ICT's
+    bust / lower neck still during speech blendshapes so the body
+    avatar's clavicle line doesn't break through.
+    """
+    out = (base.copy() if base is not None else model.vertices.copy())
     for arkit_name, value in arkit_coefs.items():
         if value == 0:
             continue
@@ -636,8 +1089,95 @@ def apply_blendshapes(
         idx = model.name_to_idx.get(ict_name)
         if idx is None:
             continue
-        out += float(value) * model.deltas[idx]
+        delta = model.deltas[idx] * float(value)
+        if vert_mask is not None:
+            delta = delta * vert_mask[:, None]
+        out += delta
     return out
+
+
+_LAST_SEPARATION_LOG_T: float = 0.0
+
+
+def _check_head_body_separation(
+    head_verts: np.ndarray, body_verts: np.ndarray | None,
+    threshold: float = 12.0, throttle_s: float = 0.5,
+) -> dict | None:
+    """Diagnostic — measures the gap between ICT's lower jaw / neck
+    region and the body mesh, then logs a warning if it exceeds
+    ``threshold`` ICT units (≈ 1/5 of a head height — the natural
+    chin/neck overlap distance).
+
+    Specifically: takes the ICT verts in a band just below the chin
+    (the lower-jaw / throat ring), finds the closest body vert for
+    each, and reports the *median* nearest-neighbour distance — a
+    robust gap metric that's stable across pose changes.
+
+    Throttled so logs don't flood at frame rate.
+    """
+    if body_verts is None or len(body_verts) == 0:
+        return None
+    chin_y = float(head_verts[ICT_CHIN_VERT_IDX_NUM, 1])
+    # Lower-jaw / throat band: chin level down to chin - 4 units.
+    band_mask = ((head_verts[:, 1] >= chin_y - 4.0)
+                   & (head_verts[:, 1] <= chin_y + 0.5))
+    if not band_mask.any():
+        return None
+    jaw_pts = head_verts[band_mask]
+    # For efficiency, sub-sample to ~200 points.
+    if len(jaw_pts) > 200:
+        idx = np.linspace(0, len(jaw_pts) - 1, 200).astype(np.int32)
+        jaw_pts = jaw_pts[idx]
+    # Nearest-body distance for each jaw point (broadcast).
+    # body_verts: (M, 3); jaw_pts: (K, 3). dists: (K, M)
+    dists = np.linalg.norm(
+        jaw_pts[:, None, :] - body_verts[None, :, :], axis=2)
+    nearest = dists.min(axis=1)  # closest body vert for each jaw pt
+    median_gap = float(np.median(nearest))
+    max_gap = float(nearest.max())
+    info = {
+        "median_gap": median_gap,
+        "max_gap": max_gap,
+        "threshold": float(threshold),
+    }
+    if median_gap > threshold:
+        import time as _time
+        global _LAST_SEPARATION_LOG_T
+        now = _time.monotonic()
+        if now - _LAST_SEPARATION_LOG_T > throttle_s:
+            _LAST_SEPARATION_LOG_T = now
+            print(
+                f"[separation] median jaw-to-body gap = {median_gap:.2f} "
+                f"ICT units (threshold {threshold:.1f}, max {max_gap:.2f})"
+            )
+        return info
+    return None
+
+
+@lru_cache(maxsize=1)
+def _bust_isolation_mask() -> np.ndarray:
+    """Per-vertex deformation weight: 1.0 above chin, fades to 0
+    around the lower neck, 0 in the bust. Multiplied into ARKit
+    blendshape deltas so jaw / mouth / brow expressions don't ripple
+    down into the body's clavicle region.
+
+    Cached on the neutral mesh (lru_cache) — values are stable
+    across frames since the mask is built from neutral vertex Ys.
+    """
+    model = load_ict_model()
+    y = model.vertices[:, 1]
+    # Chin tip ≈ -6.47, lower neck ≈ -8.5. Mask 1 above chin,
+    # smoothstep down to 0 by lower neck.
+    chin_y = float(y[ICT_CHIN_VERT_IDX_NUM])
+    fade_top = chin_y       # 100 % above this
+    fade_bot = chin_y - 2.5  # 0 % below this
+    band = max(1e-6, fade_top - fade_bot)
+    t = np.clip((y - fade_bot) / band, 0.0, 1.0)
+    return (t * t * (3.0 - 2.0 * t)).astype(np.float32)
+
+
+# ICT-FaceKit chin tip vertex (peak-displacement vert of jawOpen).
+ICT_CHIN_VERT_IDX_NUM: int = 964
 
 
 # ── Renderer ──────────────────────────────────────────────────────
@@ -673,13 +1213,86 @@ def render_face_ict(
     direct = getattr(params, "direct_blendshapes", None) or {}
     direct_clean = {k: float(v) for k, v in direct.items()
                        if isinstance(v, (int, float))}
-    full_coefs = {**arkit_coefs, **identity_w, **direct_clean}
-    verts = apply_blendshapes(model, full_coefs)
+    show_body = bool(getattr(params, "_show_body", False))
+    if show_body:
+        # ICT strip — kink-fix approaches selected via env var
+        # FACEVIEW_KINK_FIX. See `tools/eval_kink_fixes.py` for
+        # what each approach does. ``default`` keeps ICT down to
+        # body_top - 1 (1 unit overlap) — the prior behaviour.
+        from faceview.vision.body_3d import ICT_CHIN_VERT_IDX as _CCI
+        chin_y_for_strip = float(model.vertices[_CCI, 1])
+        head_h_for_strip = float(model.vertices[:, 1].max() - chin_y_for_strip)
+        body_top_y = chin_y_for_strip - head_h_for_strip * 0.20
+        approach = os.environ.get("FACEVIEW_KINK_FIX", "default")
+        if approach == "no_overlap":
+            strip_y = body_top_y  # ICT stops exactly at body's top
+        elif approach == "deep_overlap":
+            strip_y = body_top_y - 4.0  # ICT extends 4 units below
+        elif approach == "below_chin":
+            strip_y = chin_y_for_strip - 1.0  # body provides neck
+        elif approach == "no_strip":
+            strip_y = float("-inf")  # ICT keeps full mesh
+        elif approach == "deep_jaw":
+            strip_y = chin_y_for_strip - 3.0  # ICT keeps chin + jaw + ½ neck
+        else:  # "default"
+            strip_y = body_top_y - 1.0
+        tri_cy = model.vertices[model.triangles].mean(axis=1)[:, 1]
+        head_only_tris = model.triangles[tri_cy > strip_y]
+    else:
+        head_only_tris = model.triangles
 
-    yaw = float(getattr(params, "yaw", 0.0)) * 0.6
-    pitch = float(getattr(params, "pitch", 0.0)) * 0.4
+    # Apply identity blends first (no mask — full mesh shapes by
+    # identity, including bust width). Then apply expression /
+    # direct-override blends. When the body avatar is shown those
+    # last two are confined to the head + lower-jaw region so the
+    # bust / lower neck stays at its identity-shaped position and
+    # doesn't ripple-deform through the body's clavicle skin during
+    # speech / effects.
+    verts = apply_blendshapes(model, identity_w)
+    expr_coefs = {**arkit_coefs, **direct_clean}
+    if show_body:
+        verts = apply_blendshapes(model, expr_coefs, base=verts,
+                                     vert_mask=_bust_isolation_mask())
+    else:
+        verts = apply_blendshapes(model, expr_coefs, base=verts)
+
+    # Two-tier rig: BODY rotation (whole upper body around hip) +
+    # HEAD rotation (head around neck base). Effects pick the tier
+    # they want — head_shake / head_tilt route to head; body_lean /
+    # body_bow / body_twist route to body; head_nod and head_recoil
+    # use both for natural full-figure motion.
+    head_yaw = float(getattr(params, "yaw", 0.0)) * 0.6
+    head_pitch = float(getattr(params, "pitch", 0.0)) * 0.4
+    head_roll = float(getattr(params, "roll", 0.0)) * 0.6
+    body_yaw = float(getattr(params, "body_yaw", 0.0))
+    body_pitch = float(getattr(params, "body_pitch", 0.0))
+    body_roll = float(getattr(params, "body_roll", 0.0))
     cam_yaw = float(getattr(params, "_camera_yaw", 0.0))
     cam_pitch = float(getattr(params, "_camera_pitch", 0.0))
+
+    # Joint Y positions in ICT frame (derived from the live deformed
+    # mesh so identity blends are honoured).
+    chin_y = float(verts[ICT_CHIN_VERT_IDX_NUM, 1])
+    crown_y = float(verts[:, 1].max())
+    head_h_ict = max(1.0, crown_y - chin_y)
+    if show_body:
+        # Body tier — pivot at hip (3 head-heights below chin per
+        # Vitruvian canon), full rotation above the WAIST line so
+        # head, shoulders, chest, navel all rotate as a single
+        # block (they all need the same weight to stay attached).
+        # Smoothstep band sits across the waist; legs stay planted.
+        body_hip_y = chin_y - head_h_ict * 3.0
+        body_chest_y = chin_y - head_h_ict * 2.5
+    else:
+        body_hip_y = None
+        body_chest_y = None
+    # Head tier uses CERVICAL VERTEBRA cascade (faceforge-style):
+    # rotation distributed across 7 cervical levels so the neck
+    # bends naturally, not pivots at a single joint. y_neck/y_head
+    # are kept for fallback only (when cervical params not passed).
+    head_neck_y = chin_y - head_h_ict * 0.40   # T1 line
+    head_jaw_y  = chin_y + head_h_ict * 0.05   # above C1
+    head_pivot_z = 0.0  # spine z (so shake amplitude is full)
 
     # Save the un-rotated deformed mesh for any extras that need to
     # be built in the head's LOCAL frame (e.g. the tongue, whose
@@ -690,7 +1303,23 @@ def render_face_ict(
     # the head rotates around the neck base while the bust stays
     # mostly in place. We bake the rotation into the vertices on the
     # CPU and then render with zero global rotation.
-    verts = _apply_neck_rotation(verts, yaw, pitch)
+    # Apply BODY rotation first — bends the whole upper body around
+    # the hip joint. Head verts (above neck) inherit this rotation
+    # because they're above the body band's full-rotation threshold.
+    if show_body and (abs(body_yaw) > 1e-3 or abs(body_pitch) > 1e-3
+                       or abs(body_roll) > 1e-3):
+        verts = _apply_neck_rotation(
+            verts, body_yaw, body_pitch, body_roll,
+            y_neck_abs=body_hip_y, y_head_abs=body_chest_y,
+        )
+    # Apply HEAD rotation as a SEQUENCE of 7 cervical-disc
+    # rotations (faceforge-style true cascade). Each disc has its
+    # OWN pivot, so the chin's path is a chain of small arcs and
+    # the neck VISIBLY CURVES.
+    verts = _apply_cervical_cascade(
+        verts, head_yaw, head_pitch, head_roll,
+        chin_y=chin_y, head_h=head_h_ict, pivot_z=head_pivot_z,
+    )
 
     # Camera orbit — rotates the WHOLE scene (head + bust together)
     # around the mesh centroid at fixed distance. Slider-driven
@@ -698,22 +1327,6 @@ def render_face_ict(
     # the head's natural pose stacks with the orbit view.
     if abs(cam_yaw) > 1e-3 or abs(cam_pitch) > 1e-3:
         verts = _apply_camera_orbit(verts, cam_yaw, cam_pitch)
-
-    # Stash feature pixel positions on params so PostFX (tears, blush,
-    # heart eyes, sweat drops, !? marks) can anchor on the actual eye
-    # / cheek / forehead / mouth-corner positions. Verts already have
-    # the neck rotation baked in, so project at zero global yaw/pitch.
-    try:
-        feat = _project_features(model, verts, 0.0, 0.0, size)
-        # Stash effective pose for anatomy overlays. BP3D's gpu
-        # renderer applies a pre-rotation that mirrors X, so its
-        # yaw direction is opposite ICT's — negate yaw to match.
-        # Pitch stays the same (no Y/Z mirror in pre-rotation).
-        feat["_yaw"] = float(-(yaw + cam_yaw))
-        feat["_pitch"] = float(pitch + cam_pitch)
-        params._feature_pixels = feat
-    except Exception:
-        params._feature_pixels = {}
 
     # Procedural 3D extras — hair + tongue. Both are appended to
     # the ICT vertex stream so they get the same MVP (neck rotation
@@ -733,20 +1346,192 @@ def render_face_ict(
         try:
             from faceview.vision.body_3d import gen_body_mesh
             from faceview.vision.hair_3d import HairMesh
+            # Match body skin colour to the head's back/side material
+            # so the chin/clavicle join blends instead of showing a
+            # hard colour seam. M_BackHead is what ICT uses for the
+            # bust/neck region, so the body picks up the same tint.
+            palette = _material_palette(params)
+            bh_rgb = palette.get("M_BackHead", (0.35, 0.55, 0.65))
+            body_color_hex = "#{:02x}{:02x}{:02x}".format(
+                int(np.clip(bh_rgb[0], 0, 1) * 255),
+                int(np.clip(bh_rgb[1], 0, 1) * 255),
+                int(np.clip(bh_rgb[2], 0, 1) * 255),
+            )
             bm = gen_body_mesh(
                 pre_rotation_verts,
                 morph=float(getattr(params, "_body_morph", 0.0)),
+                color_hex=body_color_hex,
             )
             if bm is not None:
-                # The body sits below the neck — neck rotation's
-                # smoothstep weight is 0 in that region, so skip
-                # neck rotation entirely. Only apply camera orbit.
+                # Apply the SAME Y-weighted neck rotation that the
+                # head uses, with ref_verts=ICT mesh so both meshes
+                # share identical pivot + smoothstep band. The body's
+                # upper region (clavicle / shoulder caps morphed
+                # toward ICT's neck) sits in the rotation band, so
+                # those verts track the head's nod / shake / recoil
+                # — the lower torso stays put. This stops the head
+                # from detaching from the body during head movements.
                 ict_centre = (pre_rotation_verts.min(axis=0)
                                   + pre_rotation_verts.max(axis=0)) / 2.0
+                # Per-joint LIMB rig — shoulders, elbows, wrists,
+                # hips, knees, ankles. Applied to body's neutral
+                # pose first so subsequent body/head tier rotations
+                # carry the limbs along correctly. Hard-masked by
+                # per-vertex body-part labels so e.g. an arm
+                # rotation can never pick up torso/leg verts.
+                if os.environ.get("FACEVIEW_DEBUG_PARTS", "").strip() in (
+                        "1", "true", "yes"):
+                    _verts_before_rig = bm.verts.copy()
+                # Prefer the painted-label-driven v2 rig when fine
+                # labels are available (uses bone-hierarchy hard
+                # masks + 3D joint pivots from limb_landmarks).
+                # Fall back to the legacy heuristic rig if not.
+                _use_v2 = False
+                if os.environ.get("FACEVIEW_RIG_V1", "").strip().lower() not in (
+                        "1", "true", "yes", "on"):
+                    from faceview.vision.body_3d import (
+                        classify_body_parts_fine as _cbpf,
+                    )
+                    _fine = _cbpf(bm.verts, chin_y=chin_y,
+                                     head_h=head_h_ict)
+                    if _fine is not None and len(_fine) == len(bm.verts):
+                        from faceview.vision.body_rig import (
+                            build_rig_state, apply_body_rig_v2,
+                            filter_phantom_triangles,
+                            filter_empirical_bad_triangles,
+                        )
+                        _morph = float(getattr(params, "_body_morph", 0.0))
+                        # Pass 1: anatomical-pair filter — strips
+                        # cross-region phantoms (hand↔thigh bridges
+                        # etc.).
+                        from faceview.vision.body_rig import (
+                            _build_adjacency as _ba,
+                            _smooth_labels_mode as _sl,
+                            _apply_manual_overrides as _amo,
+                        )
+                        _adj = _ba(bm.tris, len(bm.verts))
+                        _smoothed = _sl(_fine.copy(), _adj, n_iters=2)
+                        # Apply manual overrides BEFORE the phantom-
+                        # triangle filter. Otherwise a vert that's
+                        # overridden to a different anatomical region
+                        # leaves its old bridge triangles in the mesh,
+                        # which stretch into dark slivers when the
+                        # neighbouring limb rotates.
+                        _smoothed = _amo(_smoothed, body_morph=_morph)
+                        _fine = _smoothed.copy()
+                        _kept_tris, _removed_mask = \
+                            filter_phantom_triangles(
+                                bm.tris, _smoothed)
+
+                        def _apply_tri_mask(removed):
+                            nonlocal bm
+                            if not removed.any():
+                                return
+                            bm.tris = bm.tris[~removed]
+                            for _attr in ("tri_colors",
+                                            "tri_specular",
+                                            "tri_emissive"):
+                                _arr = getattr(bm, _attr, None)
+                                if _arr is not None and len(_arr) == \
+                                        len(removed):
+                                    setattr(bm, _attr,
+                                              _arr[~removed])
+
+                        _apply_tri_mask(_removed_mask)
+                        _rig = build_rig_state(
+                            bm.verts, bm.tris, _fine,
+                            body_morph=_morph)
+                        if _rig is not None:
+                            # Pass 2: empirical bad-triangle filter —
+                            # runs trial rotations on each joint and
+                            # strips any triangle whose longest edge
+                            # grows >3× under any test rotation.
+                            # Catches stretches the anatomical filter
+                            # missed (e.g. mis-classified verts on
+                            # either side of a real seam).
+                            _kept2, _bad2 = filter_empirical_bad_triangles(
+                                bm.verts, bm.tris, _fine,
+                                pivots=_rig.pivots,
+                                masks=_rig.weights,
+                                edge_grow_max=3.0)
+                            if _bad2.any():
+                                _apply_tri_mask(_bad2)
+                                # Rebuild rig with the cleaned mesh
+                                # so seam_indices etc. are accurate.
+                                _rig = build_rig_state(
+                                    bm.verts, bm.tris, _fine,
+                                    body_morph=_morph)
+                            bm.verts[:] = apply_body_rig_v2(
+                                bm.verts, params, _rig)
+                            _use_v2 = True
+                if not _use_v2:
+                    bm.verts[:] = _apply_body_rig(
+                        bm.verts, params, chin_y, head_h_ict,
+                        parts=getattr(bm, "parts", None),
+                    )
+                if os.environ.get("FACEVIEW_DEBUG_PARTS", "").strip() in (
+                        "1", "true", "yes"):
+                    from faceview.vision.body_3d import (
+                        part_movement_summary as _pms,
+                    )
+                    if getattr(bm, "parts", None) is not None:
+                        report = _pms(
+                            _verts_before_rig, bm.verts, bm.parts,
+                        )
+                        # Log only parts that moved > 0.01 ICT units —
+                        # a static body shouldn't have any movement.
+                        movers = [
+                            f"{name}:mean={d['mean']:.3f}"
+                            for name, d in report.items()
+                            if d["mean"] > 0.01
+                        ]
+                        if movers:
+                            print("[parts] limb rig:", " ".join(movers))
+                # Body rotation tier: bends body around the hip.
+                if abs(body_yaw) > 1e-3 or abs(body_pitch) > 1e-3 \
+                        or abs(body_roll) > 1e-3:
+                    bm.verts[:] = _apply_neck_rotation(
+                        bm.verts, body_yaw, body_pitch, body_roll,
+                        ref_verts=pre_rotation_verts,
+                        y_neck_abs=body_hip_y,
+                        y_head_abs=body_chest_y,
+                    )
+                # Head rotation tier — multi-pivot cervical cascade
+                # (faceforge-style). Body's morphed neck verts get
+                # the upper-cascade fractions, torso gets ~0.
+                _debug_parts = os.environ.get(
+                    "FACEVIEW_DEBUG_PARTS", "").strip() in (
+                    "1", "true", "yes")
+                if _debug_parts:
+                    _vbefore = bm.verts.copy()
+                bm.verts[:] = _apply_cervical_cascade(
+                    bm.verts, head_yaw, head_pitch, head_roll,
+                    chin_y=chin_y, head_h=head_h_ict,
+                    pivot_z=head_pivot_z,
+                )
+                if _debug_parts and getattr(bm, "parts", None) is not None:
+                    from faceview.vision.body_3d import (
+                        part_movement_summary as _pms,
+                    )
+                    report = _pms(_vbefore, bm.verts, bm.parts)
+                    movers = [
+                        f"{name}:mean={d['mean']:.3f}"
+                        for name, d in report.items()
+                        if d["mean"] > 0.01
+                    ]
+                    if movers:
+                        print("[parts] cervical:", " ".join(movers))
                 if abs(cam_yaw) > 1e-3 or abs(cam_pitch) > 1e-3:
                     bm.verts[:] = _apply_camera_orbit(
                         bm.verts, cam_yaw, cam_pitch, pivot=ict_centre,
                     )
+                # Debug separation check — gated by FACEVIEW_DEBUG_SEP=1.
+                # Logs a warning when chin drifts > 5 ICT units from
+                # the nearest body vertex (a sensible "head detached"
+                # threshold). Throttled so logs don't flood.
+                if os.environ.get("FACEVIEW_DEBUG_SEP", "").strip() in (
+                        "1", "true", "yes"):
+                    _check_head_body_separation(verts, bm.verts)
                 extras.append(HairMesh(
                     verts=bm.verts, tris=bm.tris, colors=bm.colors,
                     specular=bm.specular, emissive=bm.emissive,
@@ -780,8 +1565,19 @@ def render_face_ict(
                 # centroid so the tongue tracks the head.
                 ict_centre = (pre_rotation_verts.min(axis=0)
                                   + pre_rotation_verts.max(axis=0)) / 2.0
+                if abs(body_yaw) > 1e-3 or abs(body_pitch) > 1e-3 \
+                        or abs(body_roll) > 1e-3:
+                    tm.verts[:] = _apply_neck_rotation(
+                        tm.verts, body_yaw, body_pitch, body_roll,
+                        ref_verts=pre_rotation_verts,
+                        y_neck_abs=body_hip_y,
+                        y_head_abs=body_chest_y,
+                    )
                 tm.verts[:] = _apply_neck_rotation(
-                    tm.verts, yaw, pitch, ref_verts=pre_rotation_verts,
+                    tm.verts, head_yaw, head_pitch, head_roll,
+                    ref_verts=pre_rotation_verts,
+                    y_neck_abs=head_neck_y,
+                    y_head_abs=head_jaw_y,
                 )
                 if abs(cam_yaw) > 1e-3 or abs(cam_pitch) > 1e-3:
                     tm.verts[:] = _apply_camera_orbit(
@@ -790,6 +1586,31 @@ def render_face_ict(
                 extras.append(tm)
         except Exception:
             pass
+
+    # Project feature pixel positions for PostFX (tears, blush, heart
+    # eyes, sweat drops, !? marks) AFTER extras are built. The body
+    # mesh, when present, expands the rendered bbox so a head-only
+    # bbox would put feature anchors in the wrong place. Use the same
+    # combined bbox + zoom multiplier the renderer is about to use.
+    cam_zoom = float(getattr(params, "_camera_zoom", 1.0) or 1.0)
+    cam_focus_y = float(getattr(params, "_camera_focus_y", 0.0) or 0.0)
+    big_extra = next((e.verts for e in extras if len(e.verts) > 1000), None)
+    bbox_verts = (np.vstack([verts, big_extra])
+                    if big_extra is not None else verts)
+    try:
+        feat = _project_features(
+            model, verts, 0.0, 0.0, size,
+            bbox_verts=bbox_verts, scale_multiplier=cam_zoom,
+            focus_y=cam_focus_y,
+        )
+        # BP3D's gpu renderer pre-rotates with X-mirror, so its yaw
+        # direction is opposite ICT's — negate yaw for anatomy
+        # overlays. Pitch stays the same (no Y/Z mirror).
+        feat["_yaw"] = float(-(yaw + cam_yaw))
+        feat["_pitch"] = float(pitch + cam_pitch)
+        params._feature_pixels = feat
+    except Exception:
+        params._feature_pixels = {}
 
     if extras:
         # Combine all extras into one stream of verts/tris.
@@ -800,13 +1621,13 @@ def render_face_ict(
         all_s = np.concatenate([e.specular for e in extras])
         all_e_emit = np.concatenate([e.emissive for e in extras])
         bgr = _render_via_moderngl(
-            verts, model.triangles, size, 0.0, 0.0, params,
+            verts, head_only_tris, size, 0.0, 0.0, params,
             extra_verts=all_v, extra_tris=all_t,
             extra_colors=all_c, extra_spec=all_s,
             extra_emit=all_e_emit,
         )
     else:
-        bgr = _render_via_moderngl(verts, model.triangles, size,
+        bgr = _render_via_moderngl(verts, head_only_tris, size,
                                       0.0, 0.0, params)
 
     # Sci-fi bloom — extract bright pixels and add a blurred halo back
@@ -1071,8 +1892,19 @@ def _render_via_moderngl(
     vmin = bbox_src.min(axis=0)
     vmax = bbox_src.max(axis=0)
     centre = (vmin + vmax) / 2
+    # Vertical-focus offset — shifts the framing centre up (+) or
+    # down (-) by this fraction of the bbox Y span. Lets the user
+    # snap to head-only framing while body is shown.
+    focus_y = float(getattr(params, "_camera_focus_y", 0.0) or 0.0)
+    if abs(focus_y) > 1e-3:
+        y_span = float(vmax[1] - vmin[1])
+        centre = centre + np.array([0.0, focus_y * y_span * 0.5, 0.0],
+                                       dtype=centre.dtype)
     span = float(np.linalg.norm(vmax - vmin))
     scale = 1.6 / max(span, 1e-6)
+    # Slider-driven zoom multiplies the fit-to-frame scale.
+    cam_zoom = float(getattr(params, "_camera_zoom", 1.0) or 1.0)
+    scale *= max(0.1, cam_zoom)
 
     style = getattr(params, "_persona_style", "natural")
     rend._style_uniforms = _shader_overrides_for_style(style)

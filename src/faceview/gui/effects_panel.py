@@ -167,7 +167,7 @@ class EffectsPanel(QDialog):
 
         add_slider("head_age", "Head age (young → elder)",
                      -1.0, 1.0, 0.05, 0.0)
-        add_slider("head_gender", "Head gender (♀ → ♂)",
+        add_slider("head_gender", "Head sex (♀ ↔ ♂)",
                      -1.0, 1.0, 0.05, 0.0)
 
         form.addRow(_separator())
@@ -213,6 +213,8 @@ class EffectsPanel(QDialog):
         for key, label, lo, hi, step, default in [
             ("camera_yaw", "Camera yaw (orbit ↺ ↻)", -3.14, 3.14, 0.05, 0.0),
             ("camera_pitch", "Camera pitch (above ↕ below)", -1.2, 1.2, 0.05, 0.0),
+            ("camera_zoom", "Camera zoom (out ↔ in)", 0.3, 5.0, 0.05, 1.0),
+            ("camera_focus_y", "Focus offset (down ↕ up)", -1.0, 1.0, 0.02, 0.0),
         ]:
             slider, value_label, default_val = self._labelled_slider(
                 key, lo, hi, step, default, "{:.2f}",
@@ -226,6 +228,60 @@ class EffectsPanel(QDialog):
             self._cam_sliders.append((slider, default_val))
 
         layout.addLayout(form)
+
+        # Snap-zoom buttons — preset (zoom, focus_y) combinations
+        # for common framings. Each pushes values into the runtime
+        # AND moves the corresponding sliders so they stay in sync.
+        snaps_label = QLabel("Frame:")
+        snaps_label.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(snaps_label)
+        snap_row = QHBoxLayout()
+        for label, zoom, focus_y in [
+            ("Head", 4.5, 0.78),
+            ("Portrait", 2.5, 0.40),
+            ("Full body", 1.0, 0.0),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(
+                lambda _checked=False, z=zoom, fy=focus_y:
+                    self._snap_zoom(z, fy)
+            )
+            snap_row.addWidget(btn)
+        layout.addLayout(snap_row)
+
+        # View-angle buttons — preset (yaw, pitch) for common camera
+        # angles. Front / back / left / right circle the avatar; top
+        # and bottom look down / up at it.
+        import math as _math
+        angles_label = QLabel("View:")
+        angles_label.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(angles_label)
+        angle_row1 = QHBoxLayout()
+        for label, yaw, pitch in [
+            ("Front",   0.0,           0.0),
+            ("Back",    _math.pi,      0.0),
+            ("Left",   -_math.pi / 2,  0.0),
+            ("Right",   _math.pi / 2,  0.0),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(
+                lambda _c=False, y=yaw, p=pitch:
+                    self._snap_view(y, p)
+            )
+            angle_row1.addWidget(btn)
+        layout.addLayout(angle_row1)
+        angle_row2 = QHBoxLayout()
+        for label, yaw, pitch in [
+            ("Top",    0.0,  -1.0),
+            ("Bottom", 0.0,   1.0),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(
+                lambda _c=False, y=yaw, p=pitch:
+                    self._snap_view(y, p)
+            )
+            angle_row2.addWidget(btn)
+        layout.addLayout(angle_row2)
 
         # Reset view button.
         reset_view = QPushButton("Reset view (front)")
@@ -303,16 +359,18 @@ class EffectsPanel(QDialog):
 
         info = QLabel(
             "Full-body avatar (CC0 from MakeHuman base mesh bundle).\n"
-            "Toggle on to attach a body below the head; the\n"
-            "male↔female slider blends between the two reference\n"
-            "topologies. The head still tracks expression / pose;\n"
-            "the body is static and rotates with the camera only.")
+            "Toggle on to attach a body below the head. The Body sex\n"
+            "slider blends body topology only; the head has its own\n"
+            "Head sex slider on the Sliders tab so you can mix-and-\n"
+            "match (or set both for a coherent look). The head still\n"
+            "tracks expression / pose; the body rotates with the\n"
+            "camera only.")
         info.setStyleSheet("color: #888; font-style: italic;")
         layout.addWidget(info)
 
         for key, label, lo, hi, step, default in [
             ("show_body",  "Show body (off ↔ on)",     0.0, 1.0, 1.0, 0.0),
-            ("body_morph", "Morph (♀ ↔ ♂)",           -1.0, 1.0, 0.05, 0.0),
+            ("body_morph", "Body sex (♀ ↔ ♂)",         -1.0, 1.0, 2.0, 1.0),
         ]:
             slider, value_label, _ = self._labelled_slider(
                 key, lo, hi, step, default, "{:.2f}",
@@ -325,6 +383,62 @@ class EffectsPanel(QDialog):
             form.addRow(label, wrap)
 
         layout.addLayout(form)
+
+        # Body pose effects — full-figure rigging.
+        pose_label = QLabel("Pose effects (transient):")
+        pose_label.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(pose_label)
+        pose_row1 = QHBoxLayout()
+        for label, name in [
+            ("Bow",        "body_bow"),
+            ("Lean back",  "body_lean_back"),
+            ("Sway",       "body_sway"),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(
+                lambda _c=False, n=name: self.runtime.trigger(n))
+            pose_row1.addWidget(btn)
+        layout.addLayout(pose_row1)
+        pose_row2 = QHBoxLayout()
+        for label, name in [
+            ("Lean L",   "body_lean_left"),
+            ("Lean R",   "body_lean_right"),
+            ("Twist L",  "body_twist_left"),
+            ("Twist R",  "body_twist_right"),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(
+                lambda _c=False, n=name: self.runtime.trigger(n))
+            pose_row2.addWidget(btn)
+        layout.addLayout(pose_row2)
+
+        limbs_label = QLabel("Limb effects:")
+        limbs_label.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(limbs_label)
+        limb_row1 = QHBoxLayout()
+        for label, name in [
+            ("Wave L",  "wave_left"),
+            ("Wave R",  "wave_right"),
+            ("Arms up", "arms_up"),
+            ("Arms out","arms_out"),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(
+                lambda _c=False, n=name: self.runtime.trigger(n))
+            limb_row1.addWidget(btn)
+        layout.addLayout(limb_row1)
+        limb_row2 = QHBoxLayout()
+        for label, name in [
+            ("Kick L",  "kick_left"),
+            ("Kick R",  "kick_right"),
+            ("Squat",   "squat"),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(
+                lambda _c=False, n=name: self.runtime.trigger(n))
+            limb_row2.addWidget(btn)
+        layout.addLayout(limb_row2)
+
         layout.addStretch(1)
         return w
 
@@ -387,12 +501,19 @@ class EffectsPanel(QDialog):
                             step: float, default: float, fmt: str
                             ) -> tuple[QSlider, QLabel, int]:
         """Helper used by camera tab — returns (slider, value_label,
-        default_step_position) so callers can also wire reset."""
+        default_step_position) so callers can also wire reset.
+
+        Stores ``lo`` and ``step`` as Qt properties so callers can
+        round-trip a float value back into a slider position.
+        """
         slider = QSlider(Qt.Orientation.Horizontal)
         n_steps = int((hi - lo) / step)
         slider.setRange(0, n_steps)
         cur = int((default - lo) / step)
         slider.setValue(cur)
+        slider.setProperty("float_lo", float(lo))
+        slider.setProperty("float_step", float(step))
+        slider.setProperty("float_fmt", fmt)
         value_label = QLabel(fmt.format(default))
         value_label.setMinimumWidth(50)
 
@@ -410,6 +531,43 @@ class EffectsPanel(QDialog):
             slider.setValue(default_step)
         self.runtime.set_slider("camera_yaw", 0.0)
         self.runtime.set_slider("camera_pitch", 0.0)
+        self.runtime.set_slider("camera_zoom", 1.0)
+        self.runtime.set_slider("camera_focus_y", 0.0)
+
+    def _snap_view(self, yaw: float, pitch: float) -> None:
+        """Snap to a preset camera view-angle. Camera sliders for
+        yaw and pitch live at indices 0 and 1 of ``_cam_sliders``."""
+        if len(self._cam_sliders) < 2:
+            return
+        yaw_slider = self._cam_sliders[0][0]
+        pitch_slider = self._cam_sliders[1][0]
+        for slider, value in ((yaw_slider, yaw), (pitch_slider, pitch)):
+            lo = slider.property("float_lo")
+            step = slider.property("float_step")
+            if lo is None or step is None or step == 0:
+                continue
+            pos = int(round((float(value) - float(lo)) / float(step)))
+            pos = max(slider.minimum(), min(slider.maximum(), pos))
+            slider.setValue(pos)  # triggers on_change → runtime
+
+    def _snap_zoom(self, zoom: float, focus_y: float) -> None:
+        """Apply a preset (zoom, focus_y) pair from the snap buttons
+        and move the matching sliders to reflect the new values.
+        Camera sliders are stored as (widget, step) pairs in
+        ``_cam_sliders`` in creation order (yaw, pitch, zoom, focus_y).
+        """
+        if len(self._cam_sliders) < 4:
+            return
+        zoom_slider = self._cam_sliders[2][0]
+        focus_slider = self._cam_sliders[3][0]
+        for slider, value in ((zoom_slider, zoom), (focus_slider, focus_y)):
+            lo = slider.property("float_lo")
+            step = slider.property("float_step")
+            if lo is None or step is None or step == 0:
+                continue
+            pos = int(round((float(value) - float(lo)) / float(step)))
+            pos = max(slider.minimum(), min(slider.maximum(), pos))
+            slider.setValue(pos)  # triggers on_change → runtime update
 
     def _pick_hair_color(self) -> None:
         col = QColorDialog.getColor(parent=self)
