@@ -93,11 +93,39 @@ faceView/
 │   │   ├── arkit_blendshapes.py 52 ARKit blendshapes (industry std,
 │   │   │                        used by MediaPipe / iOS / MetaHumans)
 │   │   │                        + two-way mapping to/from our 12 AUs
+│   │   ├── skeleton.py          Full BP3D skeleton (~231 bones across
+│   │   │                        cervical/thoracic/lumbar/skull/jaw/
+│   │   │                        ribs/pelvis/upper_limb/hand/lower_limb/
+│   │   │                        foot). Loads STLs, transforms BP3D→ICT.
+│   │   ├── skeleton_fit.py      Region-aware skeleton-to-skin fit:
+│   │   │                        per-region bbox + chain-rotation +
+│   │   │                        Y-piecewise face fit. Two-segment
+│   │   │                        arm/leg chains rotate independently
+│   │   │                        around shoulder/elbow and hip/knee.
+│   │   ├── skeleton_landmarks.py  Avatar-skin landmarks measured off
+│   │   │                        the body + face meshes (torso widths
+│   │   │                        per Y band, arm centroid X at three
+│   │   │                        levels, ICT crown/eye/mouth/chin).
 │   │   ├── ict_face.py          USC ICT-FaceKit blendshape head —
 │   │   │                        26K verts, 157 ARKit-aligned shapes,
 │   │   │                        per-material colours + SSS shader +
-│   │   │                        eye specular. Realistic-animated
-│   │   │                        endpoint of the project.
+│   │   │                        eye specular. Owns the head-pitch
+│   │   │                        `_apply_cervical_cascade` + the
+│   │   │                        `_NOD_MODES` registry. Realistic-
+│   │   │                        animated endpoint of the project.
+│   │   ├── body_3d.py           Procedural human body (male + female
+│   │   │                        10.5K-vert OBJs, blended by
+│   │   │                        `body_morph` ∈ ±1). Strips above the
+│   │   │                        chin so the ICT head transplants on
+│   │   │                        top. Snaps intermediate morphs to the
+│   │   │                        nearest baked NPZ extreme.
+│   │   ├── body_rig.py          Hierarchical body rig: skin →
+│   │   │                        per-vertex BPF labels (16 regions)
+│   │   │                        → per-effect bone deformations. Hard
+│   │   │                        or graded skinning weights via
+│   │   │                        `FACEVIEW_RIG_WEIGHT_MODE`. Manual
+│   │   │                        per-vert overrides honoured before
+│   │   │                        phantom-triangle filtering.
 │   │   ├── openfacs_bridge.py   UDP bridge: emit our AU stream as
 │   │   │                        JSON to a phuselab/openFACS Unreal
 │   │   │                        instance.
@@ -121,6 +149,17 @@ faceView/
 │       │       ├── cervical_vertebrae.json  C1-C7
 │       │       ├── eye_colors.json     Brown/blue/green/hazel/grey
 │       │       └── skin.json           Face skin (FMA7163)
+│       ├── body_part_labels_{male,female}.npz
+│       │                            Baked per-vertex BPF labels
+│       │                            (16-region body-part painting)
+│       │                            for the body rig. Created via
+│       │                            `tools/import_part_painting.py`
+│       │                            + `tools/skeleton_voxel_relabel`.
+│       │                            Originals preserved as
+│       │                            `..._orig.npz`.
+│       ├── body_label_overrides_{male,female}_baked.json
+│       │                            JSON record of manual per-vert
+│       │                            overrides baked into the NPZs.
 │       └── data/
 │           └── cmu_dict_compact.json   150-word CMU pronouncing dict
 │   ├── llm/
@@ -155,9 +194,60 @@ faceView/
     ├── render_neutral_face_texture.py  Generate the BP3D photo-anatomical
     │                            face texture for face_warp_2d (one-time)
     ├── copy_anatomy_meshes.py   Copy head+neck STLs from a BodyParts3D dump
+    ├── render_skeleton_overlay.py  Front+side avatar with the fitted
+    │                            BP3D skeleton overlaid as colour-coded
+    │                            dots — for eyeballing the per-region fit
+    ├── render_body_parts.py     Front+side avatar tinted by the 16
+    │                            fine body-part labels (neck/chest/
+    │                            abdomen/pelvis/upper-arm/forearm/
+    │                            hand/thigh/shin/foot, L/R per limb)
     ├── render_personas.py       Persona contact sheet (docs/images/personas.png)
     ├── enroll_owner.py          One-time face-enrollment routine
-    └── run_mcp_server.py        Standalone MCP entry for Claude Code config
+    ├── run_mcp_server.py        Standalone MCP entry for Claude Code config
+    │
+    │   --- Body-rig diagnostic + relabel tools ---
+    ├── skeleton_voxel_relabel.py  Stick-figure-driven voxel relabel:
+    │                            move skeleton bones with the rig and
+    │                            measure per-pose bone-to-vertex
+    │                            distances. Reassigns systematically-
+    │                            mislabelled verts (~700 male / 500
+    │                            female caught on first pass).
+    ├── bake_label_overrides.py  Merge JSON per-vert overrides into the
+    │                            body_part_labels_{male,female}.npz
+    │                            files (backs up originals as _orig).
+    ├── highlight_problem_voxels.py  Visualize spatial outliers + mesh
+    │                            label-islands per painting NPZ.
+    ├── paint_body_parts.py      Manual painting tool (Pygame canvas)
+    │                            with diagnostic overlay support.
+    ├── import_part_painting.py  Import painted images → NPZ labels.
+    ├── diagnose_body_rig.py     Per-effect dispersion stats.
+    │
+    │   --- Head-nod (cervical cascade) diagnostic tools ---
+    ├── _nod_motion_overlay.py   Cyan-rest / red-pitched side-view
+    │                            overlay per FACEVIEW_NOD_MODE.
+    │                            Reveals where motion lives in
+    │                            rendered avatars (see
+    │                            docs/images/nod_overlay_*.png).
+    ├── _quadrant_motion_assess.py  Counts cyan/red pixels per
+    │                            above-ear × front/back quadrant
+    │                            with 3-px erosion to discount
+    │                            anti-aliasing edge noise.
+    ├── _neck_base_sweep.py      Parameter sweep over cascade configs:
+    │                            tracks per-Y-band displacement on
+    │                            BOTH ICT head + body meshes; reports
+    │                            chin Z/Y delta and base motion for
+    │                            ranking. Outputs neck_sweep.json.
+    ├── _nod_drift_measure.py    Per-Y-band quick measurement at
+    │                            full pitch (older diagnostic).
+    ├── _nod_drift_inspect.py    Dump cascade params + per-disc
+    │                            Y/cumul values for a single render.
+    ├── _capture_nod_sideview.py Baseline side-view grid at varying
+    │                            pitch.
+    ├── _compare_nod_modes.py    All-mode visual side-by-side grid.
+    ├── _nod_final_compare.py    Before/after 2×2 with reference lines.
+    ├── _nod_table.py            Numerical comparison table image.
+    └── _gui_tour.sh             Drive GUI through 28 body effects
+                                 per gender + capture screenshots.
 ```
 
 CI: `.github/workflows/test.yml` runs pytest + the headless smoke on
@@ -180,6 +270,10 @@ every push, archiving the screenshot as a build artefact.
 | `TalkingAvatar` | `vision/avatar.py` | Owns FaceState; ticks combine baseline emotion + idle (blink/breath/saccade) + utterance lip-sync. |
 | `SpeechEngine` | `vision/speech.py` | Text → ARPAbet phonemes (CMU dict + letter rules) → timed visemes → AU targets. |
 | `FaceViewService (FastAPI app)` | `server/api.py` | Wraps `Service`; cross-thread via `QMetaObject.invokeMethod` / signals |
+| `_NOD_MODES` | `vision/ict_face.py` | Registry of head-nod cascade profiles. Each entry: `pitch`/`yaw` cumul fractions over 12 spine levels, `fade`, `anchor_y_norm`, `anchor_fade_band`, `pivot_z_offset`, optional `single_pivot_y_norm`. Selected via `FACEVIEW_NOD_MODE`. Default `head_block_neck_stretch`: single ear-level pivot, whole head rotates rigidly, throat stretches. |
+| `_apply_cervical_cascade` | `vision/ict_face.py` | Applies head pitch / yaw / roll. Single-pivot path runs when a mode supplies `single_pivot_y_norm` (whole-head block); otherwise iterates over per-vertebra discs with smoothstep falloff. Always followed by the optional post-anchor smoothstep blend back to rest below `anchor_y_norm`. |
+| `gen_body_mesh` | `vision/body_3d.py` | Returns `BodyMesh` for a given `body_morph`. Snaps intermediate morphs to nearest baked extreme (±1) because BPF labels are only baked at the two ends. |
+| `apply_body_rig_v2` | `vision/body_rig.py` | Bone-driven body deformation. Per-vert BPF label drives which bones influence it; weight mode (`hard` / `graded_3ring`) chosen via env var. |
 
 ## Cross-module flow
 

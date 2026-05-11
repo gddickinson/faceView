@@ -250,6 +250,38 @@ The CPU lifelike renderer is too heavy to animate, and the stylised 2D path does
 
 *The three new render tracks side-by-side: **stylised 2D** (cartoony, fastest), **lite 3D** (animatable, low-poly with depth + rotation), **GPU lifelike** (photo-anatomical from real BP3D meshes, ~36 fps via Apple Metal).*
 
+## Full-body avatar + head nod
+
+The ICT-FaceKit head can be transplanted onto a procedural human body
+(male + female 10.5K-vertex OBJs, blended by a `body_morph ∈ ±1`
+slider). The body carries 16 per-vertex BPF labels (neck / chest /
+abdomen / pelvis / upper-arm / forearm / hand / thigh / shin / foot
+× L/R) painted once and baked into NPZs at the two morph extremes.
+A hierarchical rig drives 28 body effects (arms_up, salute, kick_left,
+squat, …) via per-region bone rotations.
+
+Head rotation is the cervical cascade in `_apply_cervical_cascade`.
+The default mode `head_block_neck_stretch` (selected via
+`FACEVIEW_NOD_MODE`) does a single rigid rotation around an ear-level
+back-of-neck pivot (atlanto-occipital joint), with the throat
+smoothstep-blending toward rest so the neck stretches/compresses to
+absorb the motion. The body below stays anchored.
+
+```bash
+# Run the GUI with the procedural body + head-nod cascade
+FACEVIEW_AVATAR=1 faceview
+
+# A/B alternative cascades
+FACEVIEW_NOD_MODE=cranium_only       faceview   # only the cranium rotates
+FACEVIEW_NOD_MODE=head_block_short_neck faceview # tighter stretch zone
+FACEVIEW_NOD_MODE=current             faceview   # legacy
+```
+
+`tools/_nod_motion_overlay.py` and `tools/_quadrant_motion_assess.py`
+generate cyan-rest / red-pitched silhouette diffs per mode and
+quantify motion in the above-ear vs below-ear regions; see the saved
+overlays in `docs/images/nod_overlay_*.png`.
+
 ### Render-mode reference
 
 Switchable at runtime via `POST /avatar/persona`:

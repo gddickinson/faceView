@@ -37,5 +37,20 @@ python -m tools.run_headless              # offscreen smoke + screenshot
 pytest                                    # tests
 ```
 
+## Runtime env-var switches
+- `FACEVIEW_AVATAR=1` — enable the procedural talking avatar (sim
+  camera worker) instead of a real webcam. Default persona is
+  `ict_xray_young` when ICT-FaceKit data is present.
+- `FACEVIEW_NOD_MODE=<mode>` — selects the head-nod cascade.
+  Default is `head_block_neck_stretch` (single ear-level pivot,
+  whole-head rigid block, neck stretches). See `_NOD_MODES` in
+  `src/faceview/vision/ict_face.py` for the full list.
+- `FACEVIEW_RIG_WEIGHT_MODE=hard|graded_3ring` — skinning weight
+  mode for the body rig. Default `graded_3ring` smooths
+  shoulder/armpit seams.
+- `FACEVIEW_KINK_FIX=below_chin|legacy` — body-mesh strip cut.
+- `FACEVIEW_DEBUG_PARTS=1` — log per-part displacement during
+  cervical cascade for debugging.
+
 ## Updating session log
 Update `SESSION_Log.md` whenever you finish a meaningful chunk of work.
