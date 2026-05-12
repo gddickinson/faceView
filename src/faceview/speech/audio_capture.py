@@ -86,10 +86,25 @@ class AudioCapture:
         log.info("audio.stopped")
 
     def _fanout(self) -> None:
+        import time as _time
         bus = get_bus()
+        last_log = _time.time()
+        count = 0
+        empties = 0
         while not self._stop.is_set():
             try:
                 chunk = self._q.get(timeout=0.25)
             except queue.Empty:
+                empties += 1
+                # If we go 4 seconds without seeing a chunk, surface that
+                # loudly — almost always macOS denying mic permission.
+                if _time.time() - last_log > 4.0:
+                    log.warning("audio.no_chunks_yet", empties=empties)
+                    last_log = _time.time()
                 continue
+            count += 1
+            if _time.time() - last_log > 2.0:
+                log.info("audio.flowing", chunks_per_sec=int(count / 2))
+                last_log = _time.time()
+                count = 0
             bus.publish(EventType.AUDIO_CHUNK, chunk)

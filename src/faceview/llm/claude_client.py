@@ -70,9 +70,12 @@ class AnthropicEngine:
     def stream_reply(self, conv: Conversation, user_text: str):
         client = self._ensure_client()
         messages = conv.for_anthropic()
-        # Caller already added the user message to ``conv`` before invoking.
+        # Re-read from settings on each call so the config dialog can
+        # switch models live without restarting the client.
+        from faceview.config import settings as _s
+        active_model = _s.anthropic_model or self.model
         with client.messages.stream(
-            model=self.model,
+            model=active_model,
             max_tokens=1024,
             system=conv.system,
             messages=messages,

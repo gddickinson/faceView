@@ -34,11 +34,13 @@ class EventType(Enum):
     TTS_FINISHED = auto()
 
     # Vision
-    FRAME = auto()
+    FRAME = auto()           # real webcam frame (the user)
+    AVATAR_FRAME = auto()    # rendered avatar frame (Claude)
     PRESENCE = auto()
     IDENTITY = auto()
     EMOTION = auto()
     MOUTH_ACTIVITY = auto()
+    HEAD_POSE = auto()       # yaw/pitch/roll from face-mesh landmarks
 
     # Lifecycle / generic
     SCREENSHOT_TAKEN = auto()
@@ -91,6 +93,14 @@ class Emotion:
     label: str  # happy | sad | angry | surprise | fear | disgust | neutral
     confidence: float
     scores: dict[str, float] = field(default_factory=dict)
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class HeadPose:
+    yaw: float       # left/right rotation, -1..1 (positive = turning right)
+    pitch: float     # up/down, -1..1 (positive = chin up)
+    roll: float      # tilt, -1..1 (positive = right ear toward shoulder)
     ts: float = field(default_factory=time)
 
 

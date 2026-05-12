@@ -28,6 +28,18 @@ from faceview.core.events import (
 )
 
 
+def _model_short(name: str) -> str:
+    """Compact label for the LLM pill: 'claude-opus-4-7' → 'opus 4.7'."""
+    n = name.lower()
+    if "opus" in n:
+        return "opus " + n.split("opus-")[-1].replace("-", ".")[:3]
+    if "sonnet" in n:
+        return "sonnet " + n.split("sonnet-")[-1].replace("-", ".")[:3]
+    if "haiku" in n:
+        return "haiku " + n.split("haiku-")[-1].replace("-", ".")[:3]
+    return name
+
+
 class _Pill(QLabel):
     def __init__(self, text: str = "—", color: str = "#444"):
         super().__init__(text)
@@ -106,7 +118,17 @@ class StatusPanel(QWidget):
     @staticmethod
     def _llm_initial_label() -> str:
         from faceview.config import settings
-        return "claude (key)" if settings.has_claude_key else "demo mode"
+        if not settings.has_claude_key:
+            return "demo mode"
+        return _model_short(settings.anthropic_model)
+
+    def set_llm_label(self, text: str, *, has_key: bool | None = None) -> None:
+        """Update the LLM pill (called when the user changes models)."""
+        self.llm.setText(text)
+        if has_key is None:
+            from faceview.config import settings
+            has_key = settings.has_claude_key
+        self.llm.set_color("#3a8" if has_key else "#666")
 
     # ── slots ────────────────────────────────────────────────────────
 

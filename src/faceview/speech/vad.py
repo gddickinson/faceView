@@ -21,6 +21,9 @@ log = get_logger("vad")
 
 
 class VadGate:
+    # silero-vad v5+ requires exactly 512 samples per call at 16 kHz.
+    SILERO_WINDOW = 512
+
     def __init__(self, threshold: float = 0.5, hangover_ms: int = 300) -> None:
         self.threshold = threshold
         self.hangover_ms = hangover_ms
@@ -29,6 +32,9 @@ class VadGate:
         self._is_speaking = False
         self._silence_run = 0
         self._utterance: list[np.ndarray] = []
+        # Rolling buffer for chunks smaller than SILERO_WINDOW.
+        self._pending: list[np.ndarray] = []
+        self._pending_len = 0
 
     def start(self) -> None:
         try:
@@ -42,8 +48,21 @@ class VadGate:
         log.info("vad.started", threshold=self.threshold)
 
     def _on_chunk(self, chunk: np.ndarray) -> None:
-        # silero-vad expects float32 in [-1, 1] at 16 kHz.
-        x = chunk.astype(np.float32) / 32768.0
+        # Buffer incoming chunks until we have a full 512-sample window
+        # for silero — anything smaller raises "Input audio chunk is too
+        # short" inside the TorchScript model.
+        self._pending.append(chunk)
+        self._pending_len += len(chunk)
+        while self._pending_len >= self.SILERO_WINDOW:
+            combined = np.concatenate(self._pending)
+            window = combined[: self.SILERO_WINDOW]
+            leftover = combined[self.SILERO_WINDOW :]
+            self._pending = [leftover] if leftover.size else []
+            self._pending_len = leftover.size
+            self._process_window(window)
+
+    def _process_window(self, window: np.ndarray) -> None:
+        x = window.astype(np.float32) / 32768.0
         try:
             import torch  # type: ignore
             t = torch.from_numpy(x)
@@ -60,12 +79,11 @@ class VadGate:
                     self._is_speaking = True
                     self._utterance.clear()
                     bus.publish(EventType.VAD_SPEECH_START)
-                self._utterance.append(chunk)
+                self._utterance.append(window)
                 self._silence_run = 0
             elif self._is_speaking:
-                self._utterance.append(chunk)
-                self._silence_run += len(chunk)
-                # convert hangover to samples
+                self._utterance.append(window)
+                self._silence_run += len(window)
                 if self._silence_run > self.hangover_ms * 16:
                     full = np.concatenate(self._utterance)
                     self._is_speaking = False

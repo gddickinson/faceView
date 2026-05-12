@@ -48,11 +48,15 @@ class SimCameraWorker:
         emotion: str = "neutral",
         persona: str = "default",
         wire_to_llm: bool = False,
+        frame_channel: EventType = EventType.AVATAR_FRAME,
+        publish_user_events: bool = False,
     ) -> None:
         self.size = size
         self.fps = fps
         self.scenario = scenario
         self.wire_to_llm = wire_to_llm
+        self.frame_channel = frame_channel
+        self.publish_user_events = publish_user_events
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._params = FaceParams.neutral()
@@ -77,6 +81,13 @@ class SimCameraWorker:
 
     def stop(self) -> None:
         self._stop.set()
+        # Wait for the render thread to fully exit before returning so a
+        # subsequent ``start()`` (e.g. after a persona swap) doesn't race
+        # the still-running renderer — heavy 3-D backends (ICT, BP3D) are
+        # not thread-safe and concurrent ticks crash the process.
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self._thread = None
         log.info("sim_camera.stopped")
 
     # ── manual override ─────────────────────────────────────────────
@@ -87,6 +98,11 @@ class SimCameraWorker:
     def say(self, text: str, *, speed: float = 1.0) -> None:
         """Drive the avatar to mouth ``text`` (only used in the avatar scenario)."""
         self.avatar.say(text, speed=speed)
+
+    def set_mirror_provider(self, provider) -> None:
+        """Attach a callable ``f(t) -> FaceParams | None`` that overrides
+        the avatar's idle ticks when present. Pass ``None`` to clear."""
+        self._mirror_provider = provider
 
     def _wire_llm_chat(self) -> None:
         bus = get_bus()
@@ -120,43 +136,44 @@ class SimCameraWorker:
             # the actual eyes/cheeks/mouth.
             feat = getattr(params, "_feature_pixels", {}) or {}
             frame = rt.apply_post(frame, feature_pixels=feat)
-            bus.publish(EventType.FRAME, frame)
+            bus.publish(self.frame_channel, frame)
 
-            # Post derived events so the status panel updates as if the
-            # vision pipeline had analysed the frame.
-            bus.publish(
-                EventType.PRESENCE,
-                Presence(
-                    face_count=1,
-                    bboxes=[(self.size[0] // 4, self.size[1] // 4, self.size[0] // 2, self.size[1] // 2)],
-                ),
-            )
-            speaking = params.jaw_open > 0.07
-            viseme = self._viseme_for(params)
-            bus.publish(
-                EventType.MOUTH_ACTIVITY,
-                MouthActivity(
-                    speaking=speaking,
-                    jaw_open=params.jaw_open,
-                    mouth_funnel=max(0.0, params.jaw_open - 0.05),
-                    mouth_pucker=max(0.0, -params.smile) * 0.6,
-                    viseme=viseme,
-                ),
-            )
-            label, conf = self._emotion_for(params)
-            if label != self._last_emotion:
+            # Optional: emit fake user-vision events. Off by default
+            # because the real webcam pipeline now owns those signals.
+            # Tests and screenshot tooling that need a self-contained
+            # event stream can set publish_user_events=True.
+            if self.publish_user_events:
                 bus.publish(
-                    EventType.EMOTION,
-                    Emotion(label=label, confidence=conf, scores={label: conf}),
+                    EventType.PRESENCE,
+                    Presence(
+                        face_count=1,
+                        bboxes=[(self.size[0] // 4, self.size[1] // 4, self.size[0] // 2, self.size[1] // 2)],
+                    ),
                 )
-                self._last_emotion = label
-
-            # Identity heartbeat (sim → "owner" with a stable similarity).
-            if int(t * 2) != int((t - period) * 2):
+                speaking = params.jaw_open > 0.07
+                viseme = self._viseme_for(params)
                 bus.publish(
-                    EventType.IDENTITY,
-                    Identity(is_owner=True, similarity=0.71, label="sim-owner"),
+                    EventType.MOUTH_ACTIVITY,
+                    MouthActivity(
+                        speaking=speaking,
+                        jaw_open=params.jaw_open,
+                        mouth_funnel=max(0.0, params.jaw_open - 0.05),
+                        mouth_pucker=max(0.0, -params.smile) * 0.6,
+                        viseme=viseme,
+                    ),
                 )
+                label, conf = self._emotion_for(params)
+                if label != self._last_emotion:
+                    bus.publish(
+                        EventType.EMOTION,
+                        Emotion(label=label, confidence=conf, scores={label: conf}),
+                    )
+                    self._last_emotion = label
+                if int(t * 2) != int((t - period) * 2):
+                    bus.publish(
+                        EventType.IDENTITY,
+                        Identity(is_owner=True, similarity=0.71, label="sim-owner"),
+                    )
 
             time.sleep(period)
 
@@ -165,8 +182,24 @@ class SimCameraWorker:
     def _scenario_params(self, t: float) -> FaceParams:
         s = self.scenario
         # AU-based avatar — handles its own idle behaviour and any active
-        # utterance scheduled via avatar.say().
+        # utterance scheduled via avatar.say(). If a mirror_provider is
+        # attached, its FaceParams override the avatar's idle/talk state.
         if s == "avatar":
+            provider = getattr(self, "_mirror_provider", None)
+            if callable(provider):
+                try:
+                    mirrored = provider(t)
+                    if mirrored is not None:
+                        # Mirror params come back as a "naked" FaceParams
+                        # without persona styling. Apply the avatar's
+                        # current persona so render_face keeps using the
+                        # selected render_mode (ict_face_3d / makehuman_3d
+                        # / etc.) — otherwise mirror mode would drop us
+                        # back to the stylised cartoon look.
+                        from faceview.vision.personas import apply_persona
+                        return apply_persona(mirrored, self.avatar.persona)
+                except Exception:  # noqa: BLE001
+                    pass
             return self.avatar.tick(t)
         if s == "neutral":
             return FaceParams.neutral()
