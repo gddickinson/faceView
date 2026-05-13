@@ -1730,3 +1730,170 @@ chin = perceived rigid block.
   anti-aliasing edge noise.
 
 User's final note: "This is better — not perfect but much improved."
+
+
+## 2026-05-12 → 2026-05-13 — Sessions: Mutual-vision GUI, cognition, voice
+
+A multi-session arc that turned faceView from a webcam-pipeline +
+chat demo into a real face-to-face conversation app with persistent
+identity. Headline outcome: type or speak, the avatar (chosen from
+8 named characters) replies in a natural neural voice with cross-
+session memory that any LLM backend can draw from identically.
+
+### GUI rework (2026-05-12)
+
+Restructured so the camera panel is the **user's** webcam (Claude
+sees through it) and a separate **Avatar window** shows Claude's
+face. Vision analysers (presence / identity / mouth / emotion) now
+actually publish events. Mirror mode lets the avatar mimic the
+user's expression + mouth + head pose live. Config dialog
+consolidates worker toggles, persona, head-nod mode, LLM engine,
+TTS controls.
+
+### Detachable panels (`gui/layout.py`)
+
+Every panel (camera / chat / status / transcript) is wrapped in a
+`QDockWidget`. Drag out to float, tab two together, hide/show via
+the Window menu. `LayoutManager` snapshots a default state and
+persists user choices via `QSettings`. Save layout = Cmd-Shift-Y,
+Reset = Cmd-Shift-L.
+
+### LLM engine layer
+
+`ClaudeClient.select_engine(name, model)` live-swaps between
+`anthropic`, `ollama`, and `demo` without restarting the app. Auto
+falls back: Anthropic if key set → Ollama if reachable → demo.
+Config dialog "LLM" tab exposes it; status pill (`StatusPanel`)
+shows the active engine in colour (green / blue / grey, `⇄` prefix
+when test mode overrides).
+
+### Test mode → real LLMs in character
+
+`TestConversation` got an LLM mode. Each bot has its own
+`Conversation` + character; the partner persona is picked from
+registered characters (filtered to stylised render modes to avoid
+moderngl framebuffer races on parallel ICT-3D workers). Replies
+route through `chat_panel.append_external_message`, so the
+two-bot orchestrator doesn't re-trigger the main client.
+
+### Cognition + character system
+
+Three-layer cognition (`llm/cognition.py`):
+
+- **Episodic** — `{ts, type, text, significance, emotion, recalled}`
+  rows. Recall scored by recency × significance × emotion × context
+  × rehearsal. Consolidates at 500 entries → 400 by retention.
+- **Semantic** — facts keyed by subject (`player`, `history`,
+  `self`) with confidence. No decay.
+- **Emotional** — current emotions, ~6h half-life exponential decay.
+- **Relationship score** brackets into character-defined levels
+  (Acquaintance → Companion). Significant turns add points.
+
+Real-time decay: 30-day recency half-life, 6h emotion half-life.
+Schema v2; auto-migrates v1 MemoryStore files from earlier in the
+session.
+
+Character system (`llm/character.py` + `assets/config/characters.json`):
+`Character` dataclass with name, age, occupation, backstory, Big
+Five traits, conversation style (verbosity / humor / topics /
+catchphrases / outlook), goals, preferred voice, relationship-level
+thresholds.
+
+Eight characters authored:
+- **Claude** (max-capability, ICT face) — `bf_emma` voice
+- **Claude (avatar)** (playful, cartoon) — `bf_lily`
+- **Iris** (neuroscience PhD, x-ray glow) — `af_nicole`
+- **Bayard** (retired classical guitarist) — `bm_george`
+- **Niko** (indie game developer) — `af_sky`
+- **Soraya** (ER nurse) — `af_sarah`
+- **Theo** (bookshop owner) — `bm_daniel`
+
+Persona swap rebinds the cognition store + swaps the TTS voice +
+updates the LLM pill in one atomic flow.
+
+### Persona editor (`gui/character_editor.py`)
+
+View → "Edit personas…" (Cmd-Shift-I). Sidebar lists registered
+personas, right pane edits name / age / occupation / backstory /
+Big Five sliders / topics / catchphrases / goals. Save writes to
+`characters.json` and rebinds the running cognition store. New +
+delete supported.
+
+### Voice (Kokoro neural TTS)
+
+`speech/tts_kokoro.py` integrates kokoro-onnx (~310 MB model + 27
+MB voices, fetched on demand into `.faceview/tts/`). Plays through
+`afplay` on a temp WAV — `sounddevice.play` collided with the mic
+capture `InputStream` and produced loud digital noise. Subprocess
+handle is tracked so push-to-speak can interrupt mid-play.
+
+54 voices: `af_*` / `am_*` / `bf_*` / `bm_*`. Each character has a
+voice in `characters.json`; persona swap calls
+`TtsWorker.set_voice(name)`.
+
+Engine selector in `speech/tts.py`: auto picks Kokoro if installed
++ assets present, else pyttsx3 fallback. Live-swappable via the
+config dialog's "Voice engine" + "Voice" combos.
+
+### Echo loop fixes
+
+Three problems addressed:
+
+1. **TTS → mic → STT → LLM feedback loop**. `AudioCapture.muted`
+   flag drops chunks at source while TTS is busy. MainWindow
+   flips it on `TTS_STARTED`, releases 250 ms after `TTS_FINISHED`.
+2. **Duplicate transcript display**. Same source-level mute
+   prevents VAD / STT / transcript panel from ever seeing the
+   avatar's voice.
+3. **TTS spoke each reply twice**. `TTS_SPEAK` was being published
+   from both `ClaudeClient._loop` and `MainWindow`'s `LLM_REPLY`
+   subscriber. Removed the direct publish; the conditional
+   MainWindow one stays.
+
+### Push-to-speak
+
+"🎤 Hold to talk" button in the chat panel. Press → kills active
+Kokoro utterance (`afplay` SIGTERM) + un-mutes mic + overrides
+echo gate. Release → normal mute-during-TTS resumes.
+
+### Voice → LLM bridge (the speech-not-reaching-LLM bug)
+
+Mic STT was hitting the transcript panel but never reaching the
+LLM — nothing converted `TRANSCRIPT_FINAL` events into
+`CHAT_USER_MESSAGE`. Bridge added in
+`MainWindow._start_stt_chain`, gated by `tts_busy` + 2.5 s
+cooldown for the faster-whisper async transcribe lag.
+
+### CLI control surface
+
+Two scripts let me drive + monitor the running GUI from outside:
+
+- `tools/faceview_monitor.py` — `status / chat / events / memory /
+  watch / screenshot` (read-only).
+- `tools/faceview_drive.py` — `launch / stop / chat / say /
+  persona / emotion / engine / test / lifecycle / memory` (writes).
+  `launch` pulls the Anthropic key from macOS Keychain so the
+  same one-liner works whether the GUI is up or down.
+
+Backed by extended `/monitor`, `/memory`, `/llm/engine`,
+`/test/engine`, `/lifecycle`, `/shutdown` endpoints on the local
+FastAPI server. Server-side ops marshal Qt-touching work onto the
+GUI thread via `_GuiBridge` slots.
+
+### Crash fixes encountered
+
+- **Camera-stop SIGSEGV** in `cv::VideoCapture::read` →
+  `-[CaptureDelegate grabImageUntilDate:]` when test mode flipped
+  the camera off mid-frame. Fix: `CameraWorker.stop` joins the
+  worker thread before releasing the AVFoundation capture.
+- **moderngl framebuffer race** in test mode when both the
+  avatar-side and camera-side bots ran ICT-3D workers in
+  parallel. Fix: partner-picker filters to stylised render modes.
+
+### Final state
+
+158 tests pass. README + INTERFACE rewritten. Eight characters with
+distinct voices, three-layer cognition persisted per-persona,
+natural neural voice, real STT, push-to-speak interrupt, two-bot
+test mode, detachable panels, persona editor, full CLI + HTTP
+control surface, MCP adapter.
