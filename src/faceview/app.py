@@ -57,6 +57,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     from faceview.llm.claude_client import ClaudeClient
     client = ClaudeClient()
     window.llm_client = client
+    # Load persistent memory for the current persona so chats build up
+    # context across sessions (and across LLM engines).
+    window._bind_memory_for_current_persona()
     # Show the actual engine on the LLM pill from boot, not just the
     # initial label baked into StatusPanel.__init__ (which assumes
     # anthropic-or-demo).

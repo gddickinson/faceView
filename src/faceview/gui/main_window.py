@@ -126,6 +126,11 @@ class MainWindow(QMainWindow):
         a_styles.triggered.connect(self._open_persona_picker)
         m_view.addAction(a_styles)
 
+        a_chars = QAction("Edit personas…", self)
+        a_chars.setShortcut(QKeySequence("Ctrl+Shift+I"))
+        a_chars.triggered.connect(self._open_character_editor)
+        m_view.addAction(a_chars)
+
         m_tools = self.menuBar().addMenu("&Tools")
         a_cfg = QAction("Configuration…", self)
         a_cfg.setShortcut(QKeySequence("Ctrl+,"))
@@ -208,6 +213,16 @@ class MainWindow(QMainWindow):
         self._cfg_dialog.show()
         self._cfg_dialog.raise_()
         self._cfg_dialog.activateWindow()
+
+    def _open_character_editor(self) -> None:
+        from faceview.gui.character_editor import CharacterEditor
+        if not hasattr(self, "_char_editor") or self._char_editor is None:
+            self._char_editor = CharacterEditor(self, self)
+        else:
+            self._char_editor._reload_from_disk()
+        self._char_editor.show()
+        self._char_editor.raise_()
+        self._char_editor.activateWindow()
 
     def _open_persona_picker(self) -> None:
         from faceview.gui.persona_picker import PersonaPicker
@@ -557,6 +572,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Avatar stopped")
 
     def set_persona(self, name: str) -> None:
+        prev = self._current_persona
         self._current_persona = name
         # Swap the persona in place rather than restarting the worker —
         # restarting raced the old + new render threads on the ICT mesh
@@ -570,6 +586,26 @@ class MainWindow(QMainWindow):
             except Exception as exc:  # noqa: BLE001
                 log.warning("persona.swap_failed", error=str(exc))
                 self.statusBar().showMessage(f"Persona swap failed: {exc}")
+        # Flip the LLM client to this persona's memory pool so the new
+        # face also has a matching set of recollections + ledger.
+        if prev != name:
+            self._bind_memory_for_current_persona(save_previous=True)
+
+    def _bind_memory_for_current_persona(self, *, save_previous: bool = False) -> None:
+        client = getattr(self, "llm_client", None)
+        if client is None or not hasattr(client, "bind_memory"):
+            return
+        if save_previous and getattr(client, "memory", None) is not None:
+            try:
+                client.memory.save()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            from faceview.llm.cognition import CognitionStore
+            store = CognitionStore.load(self._current_persona)
+            client.bind_memory(store)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("memory.bind_failed", error=str(exc))
 
     def _start_avatar_worker(self, persona: str) -> None:
         from faceview.core.events import EventType as _ET
@@ -632,12 +668,16 @@ class MainWindow(QMainWindow):
         self._user_avatar_worker.start()
 
         engine_a, engine_b, engine_name = self._build_test_engines()
+        persona_a = self._test_mode_partner_persona()
+        persona_b = self._current_persona
         self._test_orchestrator = TestConversation(
             avatar_worker=self._avatar_worker,
             user_worker=self._user_avatar_worker,
             engine_a=engine_a,
             engine_b=engine_b,
             chat_panel=self.chat,
+            persona_a=persona_a,
+            persona_b=persona_b,
         )
         self._test_orchestrator.start()
         mode = "LLM (" + engine_name + ")" if engine_a is not None else "canned"
@@ -707,11 +747,36 @@ class MainWindow(QMainWindow):
         self.refresh_llm_pill()
 
     def _test_mode_partner_persona(self) -> str:
-        # Pick a different-looking persona for the user-side bot so the
-        # two windows feel distinct.
-        if self._current_persona in {"claude", "default"}:
-            return "warm_tan"
-        return "claude"
+        # Pick a different persona (and therefore character) for the
+        # camera-window bot. Prefer lightweight (non-ICT-3D, non-GPU)
+        # personas because running two heavy renderers in parallel races
+        # on moderngl's GL context and segfaults the process.
+        try:
+            from faceview.llm.character import list_character_keys
+            from faceview.vision.personas import load_persona
+            keys = [k for k in list_character_keys()
+                    if k != self._current_persona and not k.endswith("_fallback")]
+        except Exception:  # noqa: BLE001
+            keys = []
+        # Filter to stylised render modes for safety, fall back to any
+        # registered character if no stylised ones are available.
+        safe: list[str] = []
+        try:
+            from faceview.vision.personas import load_persona
+            for k in keys:
+                try:
+                    mode = getattr(load_persona(k), "render_mode", "stylised") or "stylised"
+                except Exception:  # noqa: BLE001
+                    mode = "stylised"
+                if mode in {"stylised", "anatomical", "anatomy_overlay", "wireframe"}:
+                    safe.append(k)
+        except Exception:  # noqa: BLE001
+            safe = keys
+        pool = safe or keys
+        if not pool:
+            return "warm_tan" if self._current_persona != "warm_tan" else "claude"
+        idx = abs(hash(self._current_persona)) % len(pool)
+        return pool[idx]
 
     # ── lifecycle: clean shutdown ─────────────────────────────────
 
@@ -722,6 +787,13 @@ class MainWindow(QMainWindow):
             self.layout_mgr.save(quiet=True)
         except Exception:  # noqa: BLE001
             pass
+        # Flush LLM memory to disk so this session's turns survive.
+        client = getattr(self, "llm_client", None)
+        if client is not None and getattr(client, "memory", None) is not None:
+            try:
+                client.memory.save()
+            except Exception:  # noqa: BLE001
+                pass
         for stopper in (
             self._stop_test_mode,
             lambda: self.set_camera_enabled(False),

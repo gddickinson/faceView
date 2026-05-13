@@ -165,6 +165,47 @@ def cmd_test(args) -> None:
     print(json.dumps(_post(args.host, "/test/engine", body), indent=2))
 
 
+def cmd_memory(args) -> None:
+    if args.action == "show":
+        data = _get(args.host, "/memory")
+        if not data.get("ok"):
+            print(json.dumps(data, indent=2))
+            return
+        rel = data.get("relationship") or {}
+        emo = data.get("current_emotion") or ["neutral", 0]
+        print(f"persona:      {data.get('persona')} ({data.get('character')})")
+        print(f"path:         {data.get('path')}")
+        print(f"first_seen:   {data.get('first_seen')}   session #{data.get('session_count')}")
+        print(f"user_name:    {data.get('user_name') or '—'}")
+        print(f"relationship  Lv {rel.get('level')} · {rel.get('name')}  (score {rel.get('score')})")
+        print(f"mood          {emo[0]} ({int((emo[1] or 0)*100)}%)")
+        print(f"episodic      {data.get('episodic')} entries")
+        print()
+        print("── narrate (system-prompt injection) ──")
+        print(data.get("narrate") or "(empty)")
+        print()
+        print("── recent episodic ──")
+        for m in (data.get("recent_episodic") or [])[-10:]:
+            ts = m.get("ts", 0)
+            from datetime import datetime
+            when = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
+            sig = m.get("significance", 0)
+            print(f"  [{when}] sig={sig} {m.get('emotion','neutral'):11s} {m.get('text','')[:110]}")
+    elif args.action == "clear":
+        print(json.dumps(_post(args.host, "/memory/clear", {}), indent=2))
+    elif args.action == "export":
+        data = _get(args.host, "/memory")
+        if not data.get("ok"):
+            print(json.dumps(data, indent=2))
+            return
+        with open(args.path, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+        print(f"exported → {args.path}")
+    else:
+        sys.stderr.write(f"unknown memory action: {args.action}\n")
+        sys.exit(2)
+
+
 def cmd_lifecycle(args) -> None:
     on = True if args.on else False if args.off else None
     if on is None:
@@ -222,6 +263,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("engine", choices=("canned", "ollama", "anthropic", "demo"))
     sp.add_argument("--model", default=None)
     sp.set_defaults(func=cmd_test)
+
+    sp = sub.add_parser("memory", help="Inspect / manage the avatar's persistent memory")
+    sp.add_argument("action", choices=("show", "clear", "export"))
+    sp.add_argument("--path", default="memory.json",
+                    help="Export target path (for `memory export`)")
+    sp.set_defaults(func=cmd_memory)
 
     sp = sub.add_parser("lifecycle", help="Toggle a worker on/off")
     sp.add_argument("name",

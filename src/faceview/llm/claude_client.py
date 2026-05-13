@@ -77,7 +77,7 @@ class AnthropicEngine:
         with client.messages.stream(
             model=active_model,
             max_tokens=1024,
-            system=conv.system,
+            system=conv.effective_system(),
             messages=messages,
         ) as stream:
             for text in stream.text_stream:
@@ -98,6 +98,10 @@ class ClaudeClient:
         self.bus = get_bus()
         self.conversation = conversation or Conversation()
         self._engine_name = "custom" if engine is not None else ""
+        # Memory store (persistent per-persona). Bound after construction
+        # via :meth:`bind_memory`. Until then, the system prompt is just
+        # the default — no persistent context.
+        self.memory = None
         if engine is not None:
             self.engine = engine
         else:
@@ -106,6 +110,20 @@ class ClaudeClient:
         self._q: queue.Queue[str | None] = queue.Queue()
         self._thread = threading.Thread(target=self._loop, name="claude-worker", daemon=True)
         self._thread.start()
+
+    # ── memory wiring ────────────────────────────────────────────────
+
+    def bind_memory(self, store) -> None:
+        """Attach a :class:`MemoryStore`. Its narrate_for_prompt() output
+        will be prepended to the system prompt on every turn, regardless
+        of which engine (Anthropic / Ollama / Demo) is active."""
+        self.memory = store
+        if store is None:
+            self.conversation.set_system_extras_provider(None)
+        else:
+            self.conversation.set_system_extras_provider(
+                store.narrate_for_prompt,
+            )
 
     # ── live engine selection ────────────────────────────────────────
 
@@ -179,7 +197,17 @@ class ClaudeClient:
             return f"[error: {exc}]"
         reply = "".join(chunks)
         self.conversation.add_assistant(reply)
+        self._record_turn(text, reply)
         return reply
+
+    def _record_turn(self, user_text: str, assistant_text: str) -> None:
+        if self.memory is None:
+            return
+        try:
+            self.memory.record_chat_turn(user_text, assistant_text)
+            self.memory.maybe_decay_and_compact()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("memory.record_failed", error=str(exc))
 
     def stop(self) -> None:
         self._q.put(None)
@@ -200,6 +228,7 @@ class ClaudeClient:
                     self.bus.publish(EventType.LLM_TOKEN, str(tok))
                 final = "".join(chunks)
                 self.conversation.add_assistant(final)
+                self._record_turn(user_text, final)
                 self.bus.publish(EventType.LLM_REPLY, ChatMessage("assistant", final))
                 self.bus.publish(EventType.TTS_SPEAK, final)
             except Exception as exc:  # noqa: BLE001

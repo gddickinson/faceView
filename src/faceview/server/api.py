@@ -96,6 +96,14 @@ def build_app(service: Service) -> FastAPI:
     def monitor(chat_n: int = 20, events_n: int = 30) -> dict[str, Any]:
         return service.monitor_snapshot(chat_n=chat_n, events_n=events_n)
 
+    @app.get("/memory")
+    def memory(recent_n: int = 20) -> dict[str, Any]:
+        return service.get_memory(recent_n=recent_n)
+
+    @app.post("/memory/clear")
+    def memory_clear() -> dict[str, Any]:
+        return service.clear_memory()
+
     @app.post("/llm/engine")
     def set_engine(req: EngineRequest) -> dict[str, Any]:
         return service.set_engine(req.engine, model=req.model)

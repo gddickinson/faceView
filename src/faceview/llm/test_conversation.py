@@ -88,6 +88,26 @@ _DEFAULT_SYSTEM_B = (
 )
 _DEFAULT_SEED = "Hi! What's something interesting you've thought about today?"
 
+_TURN_RULES = (
+    "\n\nThis is a face-to-face avatar chat with another character. "
+    "Keep every reply to 1–3 short sentences. Stay completely in character; "
+    "do not break the fourth wall or mention being an AI."
+)
+
+
+def _system_for_persona(persona: str, *, fallback: str) -> str:
+    """Build a bot system prompt from the persona's Character if one exists."""
+    try:
+        from faceview.llm.character import character_for
+        c = character_for(persona)
+        # If we got the default Character (no custom backstory), fall back.
+        from faceview.llm.character import _DEFAULT_CHARACTER  # noqa: WPS437
+        if c.name == _DEFAULT_CHARACTER.name and c.occupation == _DEFAULT_CHARACTER.occupation:
+            return fallback + _TURN_RULES
+        return c.narrate_identity() + _TURN_RULES
+    except Exception:  # noqa: BLE001
+        return fallback + _TURN_RULES
+
 
 @dataclass
 class TestConversation:
@@ -104,6 +124,8 @@ class TestConversation:
     engine_a:      Optional[Any] = None       # drives the camera-window bot
     engine_b:      Optional[Any] = None       # drives the avatar-window bot
     chat_panel:    Optional["ChatPanel"] = None
+    persona_a:     Optional[str] = None       # camera-side persona → Character
+    persona_b:     Optional[str] = None       # avatar-side persona → Character
     system_a:      str = _DEFAULT_SYSTEM_A
     system_b:      str = _DEFAULT_SYSTEM_B
     seed_prompt:   str = _DEFAULT_SEED
@@ -117,8 +139,28 @@ class TestConversation:
     _conv_b:       Optional[Conversation]      = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._conv_a = Conversation(system=self.system_a)
-        self._conv_b = Conversation(system=self.system_b)
+        # If persona names were supplied, build the system prompts from
+        # the matching Character. Otherwise fall back to the canned
+        # student/mentor strings.
+        sys_a = (_system_for_persona(self.persona_a, fallback=self.system_a)
+                 if self.persona_a else self.system_a + _TURN_RULES)
+        sys_b = (_system_for_persona(self.persona_b, fallback=self.system_b)
+                 if self.persona_b else self.system_b + _TURN_RULES)
+        self._conv_a = Conversation(system=sys_a)
+        self._conv_b = Conversation(system=sys_b)
+        # Surface the characters' display names if they exist.
+        try:
+            from faceview.llm.character import character_for, _DEFAULT_CHARACTER  # noqa: WPS437
+            if self.persona_a:
+                ca = character_for(self.persona_a)
+                if ca.name != _DEFAULT_CHARACTER.name:
+                    self.label_a = ca.name
+            if self.persona_b:
+                cb = character_for(self.persona_b)
+                if cb.name != _DEFAULT_CHARACTER.name:
+                    self.label_b = cb.name
+        except Exception:  # noqa: BLE001
+            pass
 
     # ── lifecycle ────────────────────────────────────────────────────
 

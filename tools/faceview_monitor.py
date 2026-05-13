@@ -143,6 +143,43 @@ def cmd_watch(args) -> None:
         pass
 
 
+def cmd_memory(args) -> None:
+    data = _get(args.host, "/memory")
+    if args.raw:
+        print(json.dumps(data, indent=2, default=str))
+        return
+    if not data.get("ok"):
+        print(json.dumps(data, indent=2))
+        return
+    rel = data.get("relationship") or {}
+    emo = data.get("current_emotion") or ["neutral", 0]
+    print(f"╭─ cognition · {data.get('persona')} ({data.get('character')}) ──")
+    print(f"│ path:        {data.get('path')}")
+    print(f"│ first_seen:  {data.get('first_seen')}   session #{data.get('session_count')}")
+    print(f"│ user_name:   {data.get('user_name') or '—'}")
+    print(f"│ relationship Lv {rel.get('level')} · {rel.get('name')}"
+          f"  (score {rel.get('score')})")
+    print(f"│ mood         {emo[0]} ({int((emo[1] or 0)*100)}%)")
+    print(f"│ episodic     {data.get('episodic')} entries")
+    print(f"│ semantic     subjects: {', '.join(data.get('semantic_subjects') or []) or '—'}")
+    sem = (data.get("semantic") or {}).get("player") or {}
+    if sem:
+        print("│")
+        print("│ known about player:")
+        for k, v in list(sem.items())[-6:]:
+            val = v.get('value') if isinstance(v, dict) else v
+            print(f"│   {k[:22]:22s} {str(val)[:70]}")
+    recent = (data.get("recent_episodic") or [])[-5:]
+    if recent:
+        print("│")
+        print("│ recent episodic:")
+        for m in recent:
+            sig = m.get("significance", 0)
+            emo = m.get("emotion", "neutral")
+            print(f"│   sig={sig} {emo:11s} {m.get('text','')[:80]}")
+    print("╰──────────────────────────────────────────")
+
+
 def cmd_screenshot(args) -> None:
     resp = _post(args.host, "/screenshot", {"name": args.path, "encode_b64": False})
     if not resp.get("ok"):
@@ -173,6 +210,10 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("watch", help="Re-print the snapshot on an interval")
     w.add_argument("--interval", type=float, default=2.0)
     w.set_defaults(func=cmd_watch)
+
+    mem = sub.add_parser("memory", help="Show the avatar's persistent memory store")
+    mem.add_argument("--raw", action="store_true", help="Print raw JSON")
+    mem.set_defaults(func=cmd_memory)
 
     sh = sub.add_parser("screenshot", help="Save a window screenshot via the API")
     sh.add_argument("path", help="Filename (e.g. shot.png)")

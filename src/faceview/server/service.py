@@ -96,6 +96,15 @@ class _GuiBridge(QObject):
             except Exception:  # noqa: BLE001
                 pass
 
+    @Slot(str)
+    def set_persona(self, name: str) -> None:
+        fn = getattr(self._window, "set_persona", None)
+        if callable(fn):
+            try:
+                fn(str(name))
+            except Exception:  # noqa: BLE001
+                pass
+
     def reset(self) -> None:
         self._last_pix = None
         self._evt.clear()
@@ -169,12 +178,19 @@ class Service:
         return {"ok": True, "emotion": str(name)}
 
     def set_persona(self, name: str) -> dict[str, Any]:
-        """Switch the avatar's appearance preset to ``name``."""
-        avatar = self._avatar()
-        if avatar is None:
-            return {"ok": False, "error": "no avatar bound (set FACEVIEW_AVATAR=1)"}
+        """Switch the avatar's appearance + character + memory pool.
+
+        Routes through MainWindow.set_persona on the GUI thread so the
+        cognition store rebinds and the LLM picks up the new character.
+        """
+        if getattr(self.window, "set_persona", None) is None:
+            return {"ok": False, "error": "window has no set_persona"}
         try:
-            avatar.set_persona(str(name))
+            QMetaObject.invokeMethod(
+                self.bridge, "set_persona",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, str(name)),
+            )
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "persona": str(name)}
@@ -322,6 +338,35 @@ class Service:
         return {"ok": True, "queued": True}
 
     # ── monitoring (read) ───────────────────────────────────────────
+
+    # ── memory ─────────────────────────────────────────────────────
+
+    def get_memory(self, *, recent_n: int = 20) -> dict[str, Any]:
+        client = getattr(self.window, "llm_client", None)
+        store = getattr(client, "memory", None) if client is not None else None
+        if store is None:
+            return {"ok": False, "error": "no memory store bound"}
+        summary = store.summary()
+        return {
+            "ok": True,
+            **summary,
+            "narrate": store.narrate_for_prompt(),
+            "recent_episodic": store.episodic[-recent_n:],
+            "semantic": store.semantic,
+            "emotional": store.current_emotions(),
+        }
+
+    def clear_memory(self) -> dict[str, Any]:
+        client = getattr(self.window, "llm_client", None)
+        store = getattr(client, "memory", None) if client is not None else None
+        if store is None:
+            return {"ok": False, "error": "no memory store bound"}
+        try:
+            store.clear()
+            store.save()
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "persona": store.persona}
 
     def list_chat_log(self, n: int = 50) -> list[dict[str, Any]]:
         out = []
