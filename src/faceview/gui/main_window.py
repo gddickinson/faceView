@@ -860,6 +860,11 @@ class MainWindow(QMainWindow):
         self.refresh_llm_pill()
 
     def _test_mode_partner_persona(self) -> str:
+        # Explicit user override wins: FACEVIEW_TEST_PARTNER_PERSONA or
+        # the config dialog's "Partner persona" combo writes this.
+        forced = os.environ.get("FACEVIEW_TEST_PARTNER_PERSONA")
+        if forced and forced != self._current_persona:
+            return forced
         # Pick a different persona (and therefore character) for the
         # camera-window bot. Prefer lightweight (non-ICT-3D, non-GPU)
         # personas because running two heavy renderers in parallel races

@@ -242,6 +242,24 @@ class ConfigDialog(QDialog):
         form.addRow("Bot model", self.test_model_combo)
         self._refresh_test_models()
 
+        # Camera-side persona (the user-window bot). Lists registered
+        # characters; "Auto" lets MainWindow pick a stylised one.
+        self.test_partner_combo = QComboBox()
+        self.test_partner_combo.addItem("Auto (pick a stylised persona)", "")
+        try:
+            from faceview.llm.character import list_character_keys
+            for key in list_character_keys():
+                if key.endswith("_fallback"):
+                    continue
+                self.test_partner_combo.addItem(key, key)
+        except Exception:  # noqa: BLE001
+            pass
+        cur_partner = os.environ.get("FACEVIEW_TEST_PARTNER_PERSONA") or ""
+        idx = self.test_partner_combo.findData(cur_partner)
+        self.test_partner_combo.setCurrentIndex(max(0, idx))
+        self.test_partner_combo.currentIndexChanged.connect(self._on_test_partner_changed)
+        form.addRow("Partner persona", self.test_partner_combo)
+
         bot_hint = QLabel(
             "Drives the two bots when Test mode is enabled (General tab). "
             "Changing engine or model restarts test mode."
@@ -396,6 +414,14 @@ class ConfigDialog(QDialog):
             self._update_status_pill("anthropic")
         else:
             self._refresh_status_pill_from_client()
+
+    def _on_test_partner_changed(self, _idx: int) -> None:
+        key = self.test_partner_combo.currentData() or ""
+        if key:
+            os.environ["FACEVIEW_TEST_PARTNER_PERSONA"] = key
+        else:
+            os.environ.pop("FACEVIEW_TEST_PARTNER_PERSONA", None)
+        self._restart_test_mode_if_running()
 
     def _on_ollama_model_changed(self, name: str) -> None:
         if not name or name.startswith("("):
