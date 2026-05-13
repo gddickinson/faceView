@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from faceview.core.event_bus import get_bus
-from faceview.core.events import ChatMessage, EventType
+from faceview.core.events import ChatLogEntry, ChatMessage, EventType
 
 
 class ChatPanel(QWidget):
@@ -94,6 +94,15 @@ class ChatPanel(QWidget):
     def _on_reply(self, msg: ChatMessage) -> None:
         if not self._streaming_buffer:
             self._append_block("Claude", msg.content, color="#9b51e0")
+        else:
+            # Streaming wrote tokens directly into the open block, so
+            # _append_block never logged this line — publish CHAT_LOG
+            # here so the monitor still captures Claude's full reply.
+            if msg.content:
+                get_bus().publish(
+                    EventType.CHAT_LOG,
+                    ChatLogEntry(who="Claude", text=msg.content, color="#9b51e0"),
+                )
         self._streaming_buffer = ""
         self._append_separator()
 
@@ -110,6 +119,13 @@ class ChatPanel(QWidget):
             f'</div>'
         )
         self.history.append(html)
+        # Mirror every rendered line onto the bus so the monitor endpoint
+        # can show the same transcript as the GUI without screen-scraping.
+        if body:
+            get_bus().publish(
+                EventType.CHAT_LOG,
+                ChatLogEntry(who=who, text=body, color=color),
+            )
 
     def _append_separator(self) -> None:
         self.history.append('<div style="color:#aaa;">—</div>')

@@ -58,6 +58,21 @@ class AvatarSayRequest(BaseModel):
     speed: float = 1.0
 
 
+class EngineRequest(BaseModel):
+    engine: str               # "auto" | "anthropic" | "ollama" | "demo"
+    model: str | None = None
+
+
+class TestEngineRequest(BaseModel):
+    engine: str               # "canned" | "ollama" | "anthropic" | "demo"
+    model: str | None = None
+
+
+class LifecycleRequest(BaseModel):
+    name: str   # "camera" | "mic" | "tts" | "avatar" | "test_mode" | "mirror"
+    on: bool
+
+
 def build_app(service: Service) -> FastAPI:
     app = FastAPI(title="faceView Control API", version="0.1.0")
 
@@ -72,6 +87,30 @@ def build_app(service: Service) -> FastAPI:
     @app.get("/events")
     def events(n: int = 50) -> list[dict[str, Any]]:
         return service.list_events(n=n)
+
+    @app.get("/chat/log")
+    def chat_log(n: int = 50) -> dict[str, Any]:
+        return {"ok": True, "chat": service.list_chat_log(n=n)}
+
+    @app.get("/monitor")
+    def monitor(chat_n: int = 20, events_n: int = 30) -> dict[str, Any]:
+        return service.monitor_snapshot(chat_n=chat_n, events_n=events_n)
+
+    @app.post("/llm/engine")
+    def set_engine(req: EngineRequest) -> dict[str, Any]:
+        return service.set_engine(req.engine, model=req.model)
+
+    @app.post("/test/engine")
+    def set_test_engine(req: TestEngineRequest) -> dict[str, Any]:
+        return service.set_test_engine(req.engine, model=req.model)
+
+    @app.post("/lifecycle")
+    def lifecycle(req: LifecycleRequest) -> dict[str, Any]:
+        return service.set_lifecycle(req.name, req.on)
+
+    @app.post("/shutdown")
+    def shutdown() -> dict[str, Any]:
+        return service.shutdown()
 
     @app.post("/chat")
     def chat(req: ChatRequest) -> dict[str, Any]:

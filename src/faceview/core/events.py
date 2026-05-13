@@ -27,6 +27,7 @@ class EventType(Enum):
     LLM_TOKEN = auto()
     LLM_REPLY = auto()
     LLM_ERROR = auto()
+    CHAT_LOG = auto()        # any line that hit the chat panel (incl. test mode)
 
     # TTS
     TTS_SPEAK = auto()
@@ -119,6 +120,15 @@ class StatusEvent:
     source: str
     message: str
     level: str = "info"  # info | warning | error
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class ChatLogEntry:
+    """One rendered line in the chat panel (any source)."""
+    who: str          # "You", "Claude", "Camera bot", "Avatar bot", "error", ...
+    text: str
+    color: str = "#666"
     ts: float = field(default_factory=time)
 
 
