@@ -1,18 +1,19 @@
 """ConfigDialog — runtime settings for the faceView GUI.
 
-Accessible from Tools → Configuration… in the main window. Lets the user:
+Accessible from Tools → Configuration… in the main window. Tabs:
 
-- enable / disable the webcam capture worker (controls what Claude "sees")
-- enable / disable the avatar worker (controls what the user "sees")
-- pick a persona / render-mode for the avatar
-- pick the LLM model
-- pick a head-nod mode for animated 3-D heads
-- toggle mic capture (placeholder for the STT pipeline wire-up)
+- **General**: webcam / mic / TTS / avatar / test / mirror toggles.
+- **LLM**:     engine picker (auto / anthropic / ollama / demo) plus the
+               model combo for whichever engine is active, with a live
+               status pill update.
+- **Avatar**:  persona combo + persona-picker shortcut, head-nod cascade
+               mode, body-rig weighting mode.
 
-Settings are applied live where possible and persisted to
-:class:`faceview.config.settings` for the lifetime of the process. The
-heavier reload paths (changing persona while the avatar is running)
-restart the avatar worker through the parent ``MainWindow``.
+Settings apply live where possible: workers stop/start through the
+``MainWindow`` lifecycle methods, the LLM engine is swapped on
+``window.llm_client`` (no app restart), and rendering env-vars
+(``FACEVIEW_NOD_MODE``, ``FACEVIEW_RIG_WEIGHT_MODE``) update in-place
+for any new render thread.
 """
 
 from __future__ import annotations
@@ -27,8 +28,10 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
-    QFrame,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -39,79 +42,214 @@ if TYPE_CHECKING:
     from faceview.gui.main_window import MainWindow
 
 
-_MODELS = [
+_ANTHROPIC_MODELS = [
     "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
 ]
 
+_ENGINE_CHOICES = [
+    ("auto",      "Auto — key → Anthropic, else Ollama, else demo"),
+    ("anthropic", "Anthropic (cloud, needs ANTHROPIC_API_KEY)"),
+    ("ollama",    "Ollama (local, needs `ollama serve`)"),
+    ("demo",      "Demo echo (no network)"),
+]
+
+# For test-mode bots only (no "auto" — the user must pick deliberately).
+_TEST_ENGINE_CHOICES = [
+    ("canned",    "Canned seed prompts (no network, deterministic)"),
+    ("ollama",    "Ollama (local) — two bots, same model"),
+    ("anthropic", "Anthropic — two bots, same model (uses tokens)"),
+    ("demo",      "Demo echo (stub, mostly for tests)"),
+]
+
+_RIG_MODES = ["graded_3ring", "hard"]
+
+_ENGINE_PILL_COLOR = {
+    "anthropic": "#3a8",     # green — premium cloud
+    "ollama":    "#5e72e4",  # blue — local
+    "demo":      "#666",     # grey — stub
+}
+
 
 class ConfigDialog(QDialog):
-    """Modeless settings dialog."""
+    """Tabbed runtime-settings dialog."""
 
-    def __init__(self, main_window: "MainWindow", parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        main_window: "MainWindow",
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent or main_window)
         self.setWindowTitle("Configuration")
-        self.setMinimumWidth(420)
+        self.setMinimumSize(520, 460)
         self.main_window = main_window
         self._build_ui()
+
+    # ── layout ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         intro = QLabel(
-            "Configure the GUI: pick what Claude looks like, which model "
-            "powers the conversation, and whether the camera/mic are on."
+            "Configure faceView: enable / disable workers, pick an LLM "
+            "engine, choose how the avatar looks and moves."
         )
         intro.setWordWrap(True)
+        intro.setStyleSheet("color:#9aa3b2;")
         root.addWidget(intro)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        root.addWidget(sep)
+        tabs = QTabWidget(self)
+        tabs.addTab(self._build_general_tab(), "General")
+        tabs.addTab(self._build_llm_tab(), "LLM")
+        tabs.addTab(self._build_avatar_tab(), "Avatar")
+        root.addWidget(tabs, 1)
 
-        form = QFormLayout()
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.close)
+        buttons.accepted.connect(self.close)
+        root.addWidget(buttons)
+
+    def _build_general_tab(self) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
         form.setVerticalSpacing(8)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # Hardware
+        mw = self.main_window
+
         self.cam_box = QCheckBox("Enable webcam (Claude sees the user)")
-        self.cam_box.setChecked(self.main_window.camera_running())
-        self.cam_box.toggled.connect(self.main_window.set_camera_enabled)
+        self.cam_box.setChecked(mw.camera_running())
+        self.cam_box.toggled.connect(mw.set_camera_enabled)
         form.addRow("Camera", self.cam_box)
 
         self.mic_box = QCheckBox("Enable microphone (STT to chat input)")
-        self.mic_box.setChecked(self.main_window.audio_running())
-        self.mic_box.toggled.connect(self.main_window.set_audio_enabled)
+        self.mic_box.setChecked(mw.audio_running())
+        self.mic_box.toggled.connect(mw.set_audio_enabled)
         form.addRow("Microphone", self.mic_box)
 
         self.tts_box = QCheckBox("Speak Claude's replies aloud (TTS)")
-        self.tts_box.setChecked(self.main_window.tts_running())
-        self.tts_box.toggled.connect(self.main_window.set_tts_enabled)
+        self.tts_box.setChecked(mw.tts_running())
+        self.tts_box.toggled.connect(mw.set_tts_enabled)
         form.addRow("Claude voice", self.tts_box)
 
-        # Avatar
         self.avatar_box = QCheckBox("Show Claude avatar (separate window)")
-        self.avatar_box.setChecked(self.main_window.avatar_running())
-        self.avatar_box.toggled.connect(self.main_window.set_avatar_enabled)
+        self.avatar_box.setChecked(mw.avatar_running())
+        self.avatar_box.toggled.connect(mw.set_avatar_enabled)
         form.addRow("Avatar", self.avatar_box)
 
-        # Dual-Claude test mode
         self.test_box = QCheckBox(
             "Test mode: two bots talk to each other (camera + avatar windows)"
         )
-        self.test_box.setChecked(self.main_window.test_mode_running())
-        self.test_box.toggled.connect(self.main_window.set_test_mode_enabled)
+        self.test_box.setChecked(mw.test_mode_running())
+        self.test_box.toggled.connect(mw.set_test_mode_enabled)
         form.addRow("Test mode", self.test_box)
 
-        # Mirror mode
         self.mirror_box = QCheckBox(
             "Mirror mode: avatar mimics user's expression + mouth"
         )
-        self.mirror_box.setChecked(self.main_window.mirror_running())
-        self.mirror_box.toggled.connect(self.main_window.set_mirror_mode_enabled)
+        self.mirror_box.setChecked(mw.mirror_running())
+        self.mirror_box.toggled.connect(mw.set_mirror_mode_enabled)
         form.addRow("Mirror", self.mirror_box)
 
-        # Persona
+        return w
+
+    def _build_llm_tab(self) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setVerticalSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self.engine_combo = QComboBox()
+        for key, label in _ENGINE_CHOICES:
+            self.engine_combo.addItem(label, key)
+        idx = self.engine_combo.findData(self._current_engine_key())
+        self.engine_combo.setCurrentIndex(max(0, idx))
+        self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+        form.addRow("Engine", self.engine_combo)
+
+        self.anthropic_combo = QComboBox()
+        for m in _ANTHROPIC_MODELS:
+            self.anthropic_combo.addItem(m)
+        if settings.anthropic_model not in _ANTHROPIC_MODELS:
+            self.anthropic_combo.addItem(settings.anthropic_model)
+        self.anthropic_combo.setCurrentText(settings.anthropic_model)
+        self.anthropic_combo.currentTextChanged.connect(self._on_anthropic_model_changed)
+        form.addRow("Anthropic model", self.anthropic_combo)
+
+        ollama_row = QWidget()
+        oh = QHBoxLayout(ollama_row)
+        oh.setContentsMargins(0, 0, 0, 0)
+        self.ollama_combo = QComboBox()
+        self.ollama_combo.setMinimumWidth(220)
+        refresh = QPushButton("Refresh")
+        refresh.setMaximumWidth(80)
+        refresh.clicked.connect(self._refresh_ollama_models)
+        oh.addWidget(self.ollama_combo, 1)
+        oh.addWidget(refresh, 0)
+        self.ollama_combo.currentTextChanged.connect(self._on_ollama_model_changed)
+        form.addRow("Ollama model", ollama_row)
+        self._refresh_ollama_models()
+
+        key_state = "set" if settings.has_claude_key else "missing — Anthropic disabled"
+        self.key_label = QLabel(f"ANTHROPIC_API_KEY: <b>{key_state}</b>")
+        self.key_label.setTextFormat(Qt.TextFormat.RichText)
+        form.addRow("API key", self.key_label)
+
+        hint = QLabel(
+            "Engines swap live — no app restart. Auto re-detects on each "
+            "selection. Demo never hits the network."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#9aa3b2;font-size:11px;")
+        form.addRow(" ", hint)
+
+        # ── Test-mode bot engine ─────────────────────────────────────
+        from PySide6.QtWidgets import QFrame
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color:#444;")
+        form.addRow(sep)
+
+        bots_header = QLabel("<b>Test-mode bots</b>")
+        bots_header.setTextFormat(Qt.TextFormat.RichText)
+        form.addRow(bots_header)
+
+        self.test_engine_combo = QComboBox()
+        for key, label in _TEST_ENGINE_CHOICES:
+            self.test_engine_combo.addItem(label, key)
+        current_test = (os.environ.get("FACEVIEW_TEST_ENGINE") or "canned").lower()
+        idx = self.test_engine_combo.findData(current_test)
+        self.test_engine_combo.setCurrentIndex(max(0, idx))
+        self.test_engine_combo.currentIndexChanged.connect(self._on_test_engine_changed)
+        form.addRow("Bot engine", self.test_engine_combo)
+
+        self.test_model_combo = QComboBox()
+        self.test_model_combo.setEditable(True)
+        self.test_model_combo.setMinimumWidth(220)
+        self.test_model_combo.currentTextChanged.connect(self._on_test_model_changed)
+        form.addRow("Bot model", self.test_model_combo)
+        self._refresh_test_models()
+
+        bot_hint = QLabel(
+            "Drives the two bots when Test mode is enabled (General tab). "
+            "Changing engine or model restarts test mode."
+        )
+        bot_hint.setWordWrap(True)
+        bot_hint.setStyleSheet("color:#9aa3b2;font-size:11px;")
+        form.addRow(" ", bot_hint)
+
+        self._update_engine_widgets()
+        return w
+
+    def _build_avatar_tab(self) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setVerticalSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        persona_row = QWidget()
+        ph = QHBoxLayout(persona_row)
+        ph.setContentsMargins(0, 0, 0, 0)
         self.persona_combo = QComboBox()
         for name in self._persona_names():
             self.persona_combo.addItem(name)
@@ -120,9 +258,13 @@ class ConfigDialog(QDialog):
         if idx >= 0:
             self.persona_combo.setCurrentIndex(idx)
         self.persona_combo.currentTextChanged.connect(self.main_window.set_persona)
-        form.addRow("Persona", self.persona_combo)
+        picker_btn = QPushButton("Open picker…")
+        picker_btn.setMaximumWidth(130)
+        picker_btn.clicked.connect(self.main_window._open_persona_picker)
+        ph.addWidget(self.persona_combo, 1)
+        ph.addWidget(picker_btn, 0)
+        form.addRow("Persona", persona_row)
 
-        # Nod mode (ICT 3-D heads)
         self.nod_combo = QComboBox()
         for name in self._nod_modes():
             self.nod_combo.addItem(name)
@@ -133,30 +275,27 @@ class ConfigDialog(QDialog):
         self.nod_combo.currentTextChanged.connect(self._on_nod_changed)
         form.addRow("Head-nod mode", self.nod_combo)
 
-        # Model
-        self.model_combo = QComboBox()
-        for m in _MODELS:
-            self.model_combo.addItem(m)
-        if settings.anthropic_model not in _MODELS:
-            self.model_combo.addItem(settings.anthropic_model)
-        self.model_combo.setCurrentText(settings.anthropic_model)
-        self.model_combo.currentTextChanged.connect(self._on_model_changed)
-        form.addRow("LLM model", self.model_combo)
+        self.rig_combo = QComboBox()
+        for name in _RIG_MODES:
+            self.rig_combo.addItem(name)
+        current_rig = os.environ.get("FACEVIEW_RIG_WEIGHT_MODE", "graded_3ring")
+        idx = self.rig_combo.findText(current_rig)
+        if idx >= 0:
+            self.rig_combo.setCurrentIndex(idx)
+        self.rig_combo.currentTextChanged.connect(self._on_rig_changed)
+        form.addRow("Body rig weights", self.rig_combo)
 
-        root.addLayout(form)
+        hint = QLabel(
+            "Avatar style picker (Cmd-Shift-P) groups the 41 bundled "
+            "personas by renderer for easier browsing."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#9aa3b2;font-size:11px;")
+        form.addRow(" ", hint)
 
-        # API-key status (read-only — set via env var)
-        key_state = "set" if settings.has_claude_key else "missing — using demo echo"
-        key_label = QLabel(f"ANTHROPIC_API_KEY: <b>{key_state}</b>")
-        key_label.setTextFormat(Qt.TextFormat.RichText)
-        root.addWidget(key_label)
+        return w
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.close)
-        buttons.accepted.connect(self.close)
-        root.addWidget(buttons)
-
-    # ── helpers ──────────────────────────────────────────────────────
+    # ── data helpers ─────────────────────────────────────────────────
 
     @staticmethod
     def _persona_names() -> list[str]:
@@ -174,20 +313,175 @@ class ConfigDialog(QDialog):
         except Exception:  # noqa: BLE001
             return ["head_block_neck_stretch"]
 
+    def _current_engine_key(self) -> str:
+        client = getattr(self.main_window, "llm_client", None)
+        if client is not None and hasattr(client, "current_engine"):
+            engine = client.current_engine()
+            if engine in {"anthropic", "ollama", "demo"}:
+                return engine
+        return "auto"
+
+    def _refresh_ollama_models(self) -> None:
+        try:
+            from faceview.llm.ollama_client import is_ollama_available, list_ollama_models
+            available = is_ollama_available()
+            models = list_ollama_models() if available else []
+        except Exception:  # noqa: BLE001
+            models = []
+        self.ollama_combo.blockSignals(True)
+        self.ollama_combo.clear()
+        if not models:
+            self.ollama_combo.addItem("(no models — start `ollama serve` and pull one)")
+            self.ollama_combo.setEnabled(False)
+        else:
+            for m in models:
+                self.ollama_combo.addItem(m)
+            self.ollama_combo.setEnabled(True)
+            preferred = os.environ.get("FACEVIEW_OLLAMA_MODEL") or models[0]
+            idx = self.ollama_combo.findText(preferred)
+            if idx >= 0:
+                self.ollama_combo.setCurrentIndex(idx)
+        self.ollama_combo.blockSignals(False)
+
+    def _update_engine_widgets(self) -> None:
+        engine = self.engine_combo.currentData()
+        self.anthropic_combo.setEnabled(engine in {"anthropic", "auto"})
+        # The ollama combo's enabled state was set by _refresh_ollama_models
+        # based on availability; only force-disable when irrelevant.
+        if engine in {"anthropic", "demo"}:
+            self.ollama_combo.setEnabled(False)
+        elif self.ollama_combo.count() > 0 and not self.ollama_combo.itemText(0).startswith("("):
+            self.ollama_combo.setEnabled(True)
+
     # ── slots ────────────────────────────────────────────────────────
+
+    def _on_engine_changed(self, _idx: int) -> None:
+        engine = self.engine_combo.currentData()
+        model: Optional[str] = None
+        if engine == "anthropic":
+            model = self.anthropic_combo.currentText()
+        elif engine == "ollama" and self.ollama_combo.isEnabled():
+            text = self.ollama_combo.currentText()
+            if text and not text.startswith("("):
+                model = text
+        client = getattr(self.main_window, "llm_client", None)
+        if client is not None and hasattr(client, "select_engine"):
+            actual = client.select_engine(engine, model=model)
+            self._update_status_pill(actual)
+        self._update_engine_widgets()
+
+    def _on_anthropic_model_changed(self, name: str) -> None:
+        if not name:
+            return
+        settings.anthropic_model = name
+        os.environ["FACEVIEW_MODEL"] = name
+        client = getattr(self.main_window, "llm_client", None)
+        # Only re-create the engine if anthropic is the active engine, so
+        # changing the dropdown while on Ollama doesn't surprise-switch.
+        if (client is not None and hasattr(client, "current_engine")
+                and client.current_engine() == "anthropic"):
+            client.select_engine("anthropic", model=name)
+            self._update_status_pill("anthropic")
+        else:
+            self._refresh_status_pill_from_client()
+
+    def _on_ollama_model_changed(self, name: str) -> None:
+        if not name or name.startswith("("):
+            return
+        os.environ["FACEVIEW_OLLAMA_MODEL"] = name
+        client = getattr(self.main_window, "llm_client", None)
+        if (client is not None and hasattr(client, "current_engine")
+                and client.current_engine() == "ollama"):
+            client.select_engine("ollama", model=name)
+            self._update_status_pill("ollama")
 
     def _on_nod_changed(self, name: str) -> None:
         os.environ["FACEVIEW_NOD_MODE"] = name
 
-    def _on_model_changed(self, name: str) -> None:
-        settings.anthropic_model = name
-        os.environ["FACEVIEW_MODEL"] = name
-        # Refresh the LLM pill in the main window's status panel.
+    def _on_rig_changed(self, name: str) -> None:
+        os.environ["FACEVIEW_RIG_WEIGHT_MODE"] = name
+
+    # ── test-mode bot engine ─────────────────────────────────────────
+
+    def _refresh_test_models(self) -> None:
+        engine = self.test_engine_combo.currentData()
+        self.test_model_combo.blockSignals(True)
+        self.test_model_combo.clear()
+        if engine == "anthropic":
+            for m in _ANTHROPIC_MODELS:
+                self.test_model_combo.addItem(m)
+            preferred = os.environ.get("FACEVIEW_TEST_MODEL") or settings.anthropic_model
+            idx = self.test_model_combo.findText(preferred)
+            self.test_model_combo.setCurrentIndex(max(0, idx))
+            self.test_model_combo.setEnabled(True)
+        elif engine == "ollama":
+            try:
+                from faceview.llm.ollama_client import is_ollama_available, list_ollama_models
+                models = list_ollama_models() if is_ollama_available() else []
+            except Exception:  # noqa: BLE001
+                models = []
+            if not models:
+                self.test_model_combo.addItem("(no models — start `ollama serve`)")
+                self.test_model_combo.setEnabled(False)
+            else:
+                for m in models:
+                    self.test_model_combo.addItem(m)
+                preferred = os.environ.get("FACEVIEW_TEST_MODEL") or models[0]
+                idx = self.test_model_combo.findText(preferred)
+                self.test_model_combo.setCurrentIndex(max(0, idx))
+                self.test_model_combo.setEnabled(True)
+        else:
+            self.test_model_combo.addItem("—")
+            self.test_model_combo.setEnabled(False)
+        self.test_model_combo.blockSignals(False)
+
+    def _on_test_engine_changed(self, _idx: int) -> None:
+        engine = self.test_engine_combo.currentData()
+        os.environ["FACEVIEW_TEST_ENGINE"] = engine
+        self._refresh_test_models()
+        # Push the current model selection too (so restart picks it up).
+        text = self.test_model_combo.currentText()
+        if text and not text.startswith("(") and text != "—":
+            os.environ["FACEVIEW_TEST_MODEL"] = text
+        else:
+            os.environ.pop("FACEVIEW_TEST_MODEL", None)
+        self._restart_test_mode_if_running()
+
+    def _on_test_model_changed(self, name: str) -> None:
+        if not name or name.startswith("(") or name == "—":
+            return
+        os.environ["FACEVIEW_TEST_MODEL"] = name
+        self._restart_test_mode_if_running()
+
+    def _restart_test_mode_if_running(self) -> None:
+        mw = self.main_window
         try:
-            from faceview.gui.status_panel import _model_short
-            label = _model_short(name) if settings.has_claude_key else f"demo · {_model_short(name)}"
-            self.main_window.status_panel.set_llm_label(label)
+            if mw.test_mode_running():
+                mw.restart_test_mode()
         except Exception:  # noqa: BLE001
             pass
-        # The Anthropic engine re-reads settings.anthropic_model on each
-        # send_reply call, so the new model takes effect on the next message.
+
+    # ── status-pill plumbing ─────────────────────────────────────────
+
+    def _refresh_status_pill_from_client(self) -> None:
+        client = getattr(self.main_window, "llm_client", None)
+        if client is not None and hasattr(client, "current_engine"):
+            self._update_status_pill(client.current_engine())
+
+    def _update_status_pill(self, engine: str) -> None:
+        try:
+            from faceview.gui.status_panel import _model_short
+        except Exception:  # noqa: BLE001
+            return
+        if engine == "anthropic":
+            text = _model_short(settings.anthropic_model)
+        elif engine == "ollama":
+            text = os.environ.get("FACEVIEW_OLLAMA_MODEL") or "ollama"
+            text = text.split(":")[0]  # trim ":latest" etc for the pill
+        else:
+            text = "demo mode"
+        color = _ENGINE_PILL_COLOR.get(engine, "#666")
+        try:
+            self.main_window.status_panel.set_llm_label(text, color=color)
+        except Exception:  # noqa: BLE001
+            pass

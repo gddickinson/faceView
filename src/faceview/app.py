@@ -52,9 +52,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     window = MainWindow()
 
-    # Wire LLM client to chat events.
+    # Wire LLM client to chat events. Stash on the window so the config
+    # dialog can swap engines / models live.
     from faceview.llm.claude_client import ClaudeClient
     client = ClaudeClient()
+    window.llm_client = client
 
     bus = get_bus()
     bus.subscribe(

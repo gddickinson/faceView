@@ -114,6 +114,13 @@ class ChatPanel(QWidget):
     def _append_separator(self) -> None:
         self.history.append('<div style="color:#aaa;">—</div>')
 
+    def append_external_message(self, who: str, text: str, *, color: str = "#666") -> None:
+        """Display a message from a non-bus source (e.g. test-mode bots).
+
+        Bypasses the event bus so it can't re-trigger ``ClaudeClient.send_async``.
+        """
+        self._append_block(who, text, color=color)
+
     @staticmethod
     def _escape(s: str) -> str:
         return (

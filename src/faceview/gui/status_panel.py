@@ -122,13 +122,25 @@ class StatusPanel(QWidget):
             return "demo mode"
         return _model_short(settings.anthropic_model)
 
-    def set_llm_label(self, text: str, *, has_key: bool | None = None) -> None:
-        """Update the LLM pill (called when the user changes models)."""
+    def set_llm_label(
+        self,
+        text: str,
+        *,
+        has_key: bool | None = None,
+        color: str | None = None,
+    ) -> None:
+        """Update the LLM pill (called when the user changes engines / models).
+
+        Pass ``color`` to override the pill colour explicitly — used by the
+        config dialog to distinguish anthropic / ollama / demo at a glance.
+        """
         self.llm.setText(text)
-        if has_key is None:
-            from faceview.config import settings
-            has_key = settings.has_claude_key
-        self.llm.set_color("#3a8" if has_key else "#666")
+        if color is None:
+            if has_key is None:
+                from faceview.config import settings
+                has_key = settings.has_claude_key
+            color = "#3a8" if has_key else "#666"
+        self.llm.set_color(color)
 
     # ── slots ────────────────────────────────────────────────────────
 

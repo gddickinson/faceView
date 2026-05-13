@@ -605,12 +605,64 @@ class MainWindow(QMainWindow):
             publish_user_events=False,
         )
         self._user_avatar_worker.start()
+
+        engine_a, engine_b, engine_name = self._build_test_engines()
         self._test_orchestrator = TestConversation(
             avatar_worker=self._avatar_worker,
             user_worker=self._user_avatar_worker,
+            engine_a=engine_a,
+            engine_b=engine_b,
+            chat_panel=self.chat,
         )
         self._test_orchestrator.start()
-        self.statusBar().showMessage("Test mode: two bots conversing")
+        mode = "LLM (" + engine_name + ")" if engine_a is not None else "canned"
+        self.statusBar().showMessage(f"Test mode: two bots conversing — {mode}")
+
+    def _build_test_engines(self) -> tuple[object | None, object | None, str]:
+        """Construct two engines for test mode based on env vars / settings.
+
+        Honours ``FACEVIEW_TEST_ENGINE`` (canned / anthropic / ollama / demo)
+        and ``FACEVIEW_TEST_MODEL`` (model id for the chosen engine).
+        Returns ``(engine_a, engine_b, name)``; ``(None, None, "canned")``
+        falls back to the seed-prompt loop.
+        """
+        engine_name = (os.environ.get("FACEVIEW_TEST_ENGINE") or "canned").lower()
+        model = os.environ.get("FACEVIEW_TEST_MODEL") or None
+        if engine_name in ("", "canned", "seed", "off"):
+            return None, None, "canned"
+        try:
+            if engine_name == "anthropic":
+                if not settings.has_claude_key:
+                    raise RuntimeError("ANTHROPIC_API_KEY not set")
+                from faceview.llm.claude_client import AnthropicEngine
+                m = model or settings.anthropic_model
+                return (
+                    AnthropicEngine(api_key=settings.anthropic_api_key, model=m),  # type: ignore[arg-type]
+                    AnthropicEngine(api_key=settings.anthropic_api_key, model=m),  # type: ignore[arg-type]
+                    f"anthropic:{m}",
+                )
+            if engine_name == "ollama":
+                from faceview.llm.ollama_client import OllamaEngine, pick_default_model
+                m = model or pick_default_model()
+                if not m:
+                    raise RuntimeError("no ollama models installed")
+                return OllamaEngine(model=m), OllamaEngine(model=m), f"ollama:{m}"
+            if engine_name == "demo":
+                from faceview.llm.claude_client import EchoEngine
+                return EchoEngine(), EchoEngine(), "demo"
+        except Exception as exc:  # noqa: BLE001
+            log.warning("test_mode.engine_build_failed", engine=engine_name, error=str(exc))
+            self.statusBar().showMessage(
+                f"Test mode: {engine_name} unavailable — falling back to canned"
+            )
+        return None, None, "canned"
+
+    def restart_test_mode(self) -> None:
+        """Stop and re-start test mode so engine-config changes take effect."""
+        if self._test_orchestrator is None:
+            return
+        self._stop_test_mode()
+        self._start_test_mode()
 
     def _stop_test_mode(self) -> None:
         if self._test_orchestrator is not None:

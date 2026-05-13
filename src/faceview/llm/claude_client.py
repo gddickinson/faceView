@@ -97,35 +97,70 @@ class ClaudeClient:
     ) -> None:
         self.bus = get_bus()
         self.conversation = conversation or Conversation()
+        self._engine_name = "custom" if engine is not None else ""
         if engine is not None:
             self.engine = engine
-        elif settings.has_claude_key:
-            self.engine = AnthropicEngine(
-                api_key=settings.anthropic_api_key,  # type: ignore[arg-type]
-                model=settings.anthropic_model,
-            )
-            log.info("llm.engine", engine="anthropic", model=settings.anthropic_model)
         else:
-            # No Anthropic key — try local Ollama, then demo.
-            from faceview.llm.ollama_client import (
-                OllamaEngine, is_ollama_available, pick_default_model,
-            )
-            if is_ollama_available():
-                model = pick_default_model()
-                if model:
-                    self.engine = OllamaEngine(model=model)
-                    log.info("llm.engine", engine="ollama", model=model)
-                else:
-                    self.engine = EchoEngine()
-                    log.info("llm.engine", engine="demo",
-                              note="ollama running but no models")
-            else:
-                self.engine = EchoEngine()
-                log.info("llm.engine", engine="demo")
+            self.select_engine("auto")
 
         self._q: queue.Queue[str | None] = queue.Queue()
         self._thread = threading.Thread(target=self._loop, name="claude-worker", daemon=True)
         self._thread.start()
+
+    # ── live engine selection ────────────────────────────────────────
+
+    def current_engine(self) -> str:
+        return self._engine_name or "demo"
+
+    def select_engine(self, name: str, *, model: Optional[str] = None) -> str:
+        """Swap the active LLM engine. Returns the engine actually selected.
+
+        ``name`` is ``"auto"``, ``"anthropic"``, ``"ollama"``, or ``"demo"``.
+        ``"auto"`` picks anthropic when a key is set, otherwise ollama if a
+        local server is reachable, otherwise demo. Falls back to demo if a
+        requested engine is unavailable (e.g. anthropic without a key).
+        """
+        requested = (name or "auto").lower()
+        actual = requested
+        if requested == "auto":
+            if settings.has_claude_key:
+                actual = "anthropic"
+            else:
+                try:
+                    from faceview.llm.ollama_client import is_ollama_available
+                    actual = "ollama" if is_ollama_available() else "demo"
+                except Exception:  # noqa: BLE001
+                    actual = "demo"
+
+        if actual == "anthropic":
+            if not settings.has_claude_key:
+                actual = "demo"
+            else:
+                self.engine = AnthropicEngine(
+                    api_key=settings.anthropic_api_key,  # type: ignore[arg-type]
+                    model=model or settings.anthropic_model,
+                )
+                log.info("llm.engine", engine="anthropic",
+                         model=settings.anthropic_model)
+
+        if actual == "ollama":
+            try:
+                from faceview.llm.ollama_client import OllamaEngine, pick_default_model
+                chosen = model or pick_default_model()
+            except Exception:  # noqa: BLE001
+                chosen = None
+            if not chosen:
+                actual = "demo"
+            else:
+                self.engine = OllamaEngine(model=chosen)
+                log.info("llm.engine", engine="ollama", model=chosen)
+
+        if actual == "demo":
+            self.engine = EchoEngine()
+            log.info("llm.engine", engine="demo")
+
+        self._engine_name = actual
+        return actual
 
     # ── public ──────────────────────────────────────────────────────
 
