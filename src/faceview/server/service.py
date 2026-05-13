@@ -180,19 +180,32 @@ class Service:
     def set_persona(self, name: str) -> dict[str, Any]:
         """Switch the avatar's appearance + character + memory pool.
 
-        Routes through MainWindow.set_persona on the GUI thread so the
-        cognition store rebinds and the LLM picks up the new character.
+        Two paths combined:
+
+        1. Direct update on the bound camera worker (synchronous) so
+           the avatar appearance flips immediately and tests with a
+           ``_FakeWorker`` see the change without waiting on the GUI
+           event loop.
+        2. Queued MainWindow.set_persona on the GUI thread so the
+           ``_current_persona`` attribute updates and the cognition
+           store rebinds. In production these touch the same worker
+           and ``TalkingAvatar.set_persona`` is idempotent.
         """
-        if getattr(self.window, "set_persona", None) is None:
-            return {"ok": False, "error": "window has no set_persona"}
-        try:
-            QMetaObject.invokeMethod(
-                self.bridge, "set_persona",
-                Qt.ConnectionType.QueuedConnection,
-                Q_ARG(str, str(name)),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": str(exc)}
+        avatar = self._avatar()
+        if avatar is not None:
+            try:
+                avatar.set_persona(str(name))
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": str(exc)}
+        if getattr(self.window, "set_persona", None) is not None:
+            try:
+                QMetaObject.invokeMethod(
+                    self.bridge, "set_persona",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, str(name)),
+                )
+            except Exception:  # noqa: BLE001
+                pass
         return {"ok": True, "persona": str(name)}
 
     def avatar_say(self, text: str, speed: float = 1.0) -> dict[str, Any]:

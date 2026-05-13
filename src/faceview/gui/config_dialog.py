@@ -126,6 +126,24 @@ class ConfigDialog(QDialog):
         self.tts_box.toggled.connect(mw.set_tts_enabled)
         form.addRow("Claude voice", self.tts_box)
 
+        # TTS engine + voice
+        self.tts_engine_combo = QComboBox()
+        self.tts_engine_combo.addItem("Auto (kokoro if available, else pyttsx3)", "auto")
+        self.tts_engine_combo.addItem("Kokoro (neural, local)", "kokoro")
+        self.tts_engine_combo.addItem("pyttsx3 (macOS system voices)", "pyttsx3")
+        cur = (os.environ.get("FACEVIEW_TTS_ENGINE") or "auto").lower()
+        idx = self.tts_engine_combo.findData(cur)
+        self.tts_engine_combo.setCurrentIndex(max(0, idx))
+        self.tts_engine_combo.currentIndexChanged.connect(self._on_tts_engine_changed)
+        form.addRow("Voice engine", self.tts_engine_combo)
+
+        self.tts_voice_combo = QComboBox()
+        self.tts_voice_combo.setEditable(True)
+        self.tts_voice_combo.setMinimumWidth(240)
+        self._refresh_tts_voices()
+        self.tts_voice_combo.currentTextChanged.connect(self._on_tts_voice_changed)
+        form.addRow("Voice", self.tts_voice_combo)
+
         self.avatar_box = QCheckBox("Show Claude avatar (separate window)")
         self.avatar_box.setChecked(mw.avatar_running())
         self.avatar_box.toggled.connect(mw.set_avatar_enabled)
@@ -391,6 +409,62 @@ class ConfigDialog(QDialog):
 
     def _on_nod_changed(self, name: str) -> None:
         os.environ["FACEVIEW_NOD_MODE"] = name
+
+    # ── TTS engine + voice ──────────────────────────────────────────
+
+    def _restart_tts_if_running(self) -> None:
+        try:
+            mw = self.main_window
+            if mw.tts_running():
+                mw.set_tts_enabled(False)
+                mw.set_tts_enabled(True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_tts_engine_changed(self, _idx: int) -> None:
+        os.environ["FACEVIEW_TTS_ENGINE"] = self.tts_engine_combo.currentData()
+        self._refresh_tts_voices()
+        self._restart_tts_if_running()
+
+    def _on_tts_voice_changed(self, name: str) -> None:
+        name = (name or "").strip()
+        if not name or name.startswith("("):
+            return
+        os.environ["FACEVIEW_TTS_VOICE"] = name
+        self._restart_tts_if_running()
+
+    def _refresh_tts_voices(self) -> None:
+        from faceview.speech.tts_kokoro import KokoroEngine, assets_present
+        engine = self.tts_engine_combo.currentData()
+        self.tts_voice_combo.blockSignals(True)
+        self.tts_voice_combo.clear()
+        added = False
+        if engine in ("kokoro", "auto"):
+            if assets_present():
+                try:
+                    for v in KokoroEngine().voices():
+                        self.tts_voice_combo.addItem(v)
+                    added = True
+                except Exception:  # noqa: BLE001
+                    self.tts_voice_combo.addItem("(kokoro install incomplete)")
+            elif engine == "kokoro":
+                self.tts_voice_combo.addItem(
+                    "(no model — run `python -m faceview.speech.tts_kokoro --download`)")
+        if engine in ("pyttsx3", "auto") and not added:
+            try:
+                import pyttsx3  # type: ignore
+                for v in pyttsx3.init().getProperty("voices"):
+                    if v.name:
+                        self.tts_voice_combo.addItem(v.name)
+            except Exception:  # noqa: BLE001
+                pass
+        if self.tts_voice_combo.count() == 0:
+            self.tts_voice_combo.addItem("(no voices found)")
+        preferred = os.environ.get("FACEVIEW_TTS_VOICE") or "af_sarah"
+        idx = self.tts_voice_combo.findText(preferred)
+        if idx >= 0:
+            self.tts_voice_combo.setCurrentIndex(idx)
+        self.tts_voice_combo.blockSignals(False)
 
     def _on_rig_changed(self, name: str) -> None:
         os.environ["FACEVIEW_RIG_WEIGHT_MODE"] = name

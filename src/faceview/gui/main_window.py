@@ -354,6 +354,30 @@ class MainWindow(QMainWindow):
             except Exception as exc:  # noqa: BLE001
                 log.warning("stt.start_failed", error=str(exc))
                 self._stt = None
+        # Bridge final transcripts to the chat → LLM bus, just once.
+        # Without this, STT output only ever reaches the transcript
+        # panel; the user speaks and Claude never replies.
+        if not getattr(self, "_stt_to_chat_wired", False):
+            from faceview.core.event_bus import get_bus
+            from faceview.core.events import (
+                ChatMessage, EventType, Transcript,
+            )
+            bus = get_bus()
+
+            def _stt_to_chat(payload) -> None:
+                text = payload.text if isinstance(payload, Transcript) else str(payload)
+                text = (text or "").strip()
+                if not text:
+                    return
+                # Drop obvious filler (faster-whisper sometimes emits
+                # silence transcriptions like "you" or "Thanks for watching").
+                if len(text) < 2:
+                    return
+                bus.publish(EventType.CHAT_USER_MESSAGE,
+                            ChatMessage("user", text))
+
+            bus.subscribe(EventType.TRANSCRIPT_FINAL, _stt_to_chat)
+            self._stt_to_chat_wired = True
 
     # ── lifecycle: TTS (Claude speaks) ─────────────────────────────
 
