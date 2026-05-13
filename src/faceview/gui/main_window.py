@@ -628,8 +628,22 @@ class MainWindow(QMainWindow):
             from faceview.llm.cognition import CognitionStore
             store = CognitionStore.load(self._current_persona)
             client.bind_memory(store)
+            self._sync_tts_voice_to_character(store.character)
         except Exception as exc:  # noqa: BLE001
             log.warning("memory.bind_failed", error=str(exc))
+
+    def _sync_tts_voice_to_character(self, character) -> None:
+        """Apply the character's preferred Kokoro voice to the TTS worker."""
+        voice = getattr(character, "voice", None)
+        if not voice:
+            return
+        os.environ["FACEVIEW_TTS_VOICE"] = voice
+        worker = self._tts
+        if worker is not None and hasattr(worker, "set_voice"):
+            try:
+                worker.set_voice(voice)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("tts.set_voice_failed", error=str(exc))
 
     def _start_avatar_worker(self, persona: str) -> None:
         from faceview.core.events import EventType as _ET

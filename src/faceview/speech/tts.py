@@ -73,6 +73,19 @@ class TtsWorker:
     def stop(self) -> None:
         self._q.put(None)
 
+    def set_voice(self, voice: str) -> None:
+        """Live-swap the voice on the running engine. No-op if the
+        active engine doesn't support runtime voice changes."""
+        if not voice:
+            return
+        os.environ["FACEVIEW_TTS_VOICE"] = voice
+        eng = self._engine
+        if eng is not None and hasattr(eng, "set_voice"):
+            try:
+                eng.set_voice(voice)
+            except Exception:  # noqa: BLE001
+                pass
+
     # ── engine selection (lazy, on worker thread) ────────────
 
     def engine_name(self) -> str:

@@ -51,6 +51,11 @@ class Character:
         "outlook":            "",
     })
     goals: list[str] = field(default_factory=list)
+    # Preferred Kokoro voice (bf_emma, af_sarah, bm_george, …). None
+    # means "use the env var / global default". Persona swap applies
+    # this to the TTS worker; the user can still override via the
+    # config dialog mid-session.
+    voice: Optional[str] = None
     relationship_levels: list[dict] = field(default_factory=lambda: [
         {"level": 1, "name": "Acquaintance", "threshold": 0,
          "unlocks": "Polite chat, surface topics"},
