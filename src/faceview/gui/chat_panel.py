@@ -60,6 +60,19 @@ class ChatPanel(QWidget):
         send = QPushButton("Send", self)
         send.clicked.connect(self._on_submit)
         row.addWidget(send)
+
+        # Push-to-speak — hold to interrupt the avatar and capture
+        # speech without the TTS echo gate dropping it. Released =
+        # back to normal mute-during-TTS behaviour.
+        self.push_to_talk = QPushButton("🎤 Hold to talk", self)
+        self.push_to_talk.setToolTip(
+            "Hold while speaking to interrupt the avatar and route your "
+            "voice into chat (bypasses the echo gate)."
+        )
+        self.push_to_talk.setAutoDefault(False)
+        self.push_to_talk.pressed.connect(self._on_push_to_talk_pressed)
+        self.push_to_talk.released.connect(self._on_push_to_talk_released)
+        row.addWidget(self.push_to_talk)
         root.addLayout(row)
 
     def _wire_bus(self) -> None:
@@ -81,6 +94,25 @@ class ChatPanel(QWidget):
 
     def _on_user_msg_published(self, msg: ChatMessage) -> None:
         self._append_block("You", msg.content, color="#1a73e8")
+
+    def _main_window(self):
+        """Walk up the parent chain to find the MainWindow."""
+        w = self.parent()
+        while w is not None:
+            if hasattr(w, "push_to_speak_pressed"):
+                return w
+            w = w.parent()
+        return None
+
+    def _on_push_to_talk_pressed(self) -> None:
+        mw = self._main_window()
+        if mw is not None:
+            mw.push_to_speak_pressed()
+
+    def _on_push_to_talk_released(self) -> None:
+        mw = self._main_window()
+        if mw is not None:
+            mw.push_to_speak_released()
 
     def _on_token(self, token: str) -> None:
         if not self._streaming_buffer:

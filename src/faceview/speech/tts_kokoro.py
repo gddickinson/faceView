@@ -106,6 +106,9 @@ class KokoroEngine:
         self._engine = None
         self._sd = None
         self._lock = threading.Lock()
+        # Handle to the active afplay subprocess so an interrupt
+        # request from the GUI can kill the current utterance mid-play.
+        self._proc: Optional[subprocess.Popen] = None
 
     # ── lifecycle ─────────────────────────────────────────────
 
@@ -171,19 +174,36 @@ class KokoroEngine:
                  voice=self.voice)
         # Write a temp WAV and play via macOS `afplay`. Avoids
         # sounddevice conflicting with the mic-capture InputStream.
+        # Track the subprocess so push-to-talk can interrupt mid-play.
         fd, path = tempfile.mkstemp(suffix=".wav", prefix="faceview_tts_")
         os.close(fd)
         try:
             sf.write(path, samples, int(sr))
-            subprocess.run(["afplay", path], check=False,
-                           stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(
+                ["afplay", path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self._proc = proc
+            try:
+                proc.wait()
+            finally:
+                self._proc = None
         finally:
             try:
                 os.unlink(path)
             except OSError:
                 pass
         return duration
+
+    def stop(self) -> None:
+        """Interrupt the current utterance, if any."""
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
 
     def set_voice(self, voice: str) -> None:
         self.voice = voice

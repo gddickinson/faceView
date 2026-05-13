@@ -73,6 +73,21 @@ class TtsWorker:
     def stop(self) -> None:
         self._q.put(None)
 
+    def interrupt(self) -> None:
+        """Stop the current utterance immediately. Drops any queued text."""
+        # Flush queue so we don't speak something already in flight.
+        while True:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
+        eng = self._engine
+        if eng is not None and hasattr(eng, "stop"):
+            try:
+                eng.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
     def set_voice(self, voice: str) -> None:
         """Live-swap the voice on the running engine. No-op if the
         active engine doesn't support runtime voice changes."""

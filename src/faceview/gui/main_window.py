@@ -358,20 +358,63 @@ class MainWindow(QMainWindow):
         # Without this, STT output only ever reaches the transcript
         # panel; the user speaks and Claude never replies.
         if not getattr(self, "_stt_to_chat_wired", False):
+            import time as _time
             from faceview.core.event_bus import get_bus
             from faceview.core.events import (
                 ChatMessage, EventType, Transcript,
             )
             bus = get_bus()
 
+            # Suppress STT during + briefly after Claude's TTS so the
+            # mic doesn't echo the avatar's voice back into chat and
+            # start an infinite self-loop. faster-whisper transcribes
+            # after VAD-speech-end, so we hold the gate a couple of
+            # seconds past TTS_FINISHED to cover the lag.
+            self._tts_busy = False
+            self._tts_quiet_until = 0.0
+            self._push_to_speak = False  # see push_to_speak_*
+            TTS_COOLDOWN_S = 2.5
+
+            def _mute_audio(on: bool) -> None:
+                w = self._audio_worker
+                if w is not None:
+                    try:
+                        w.muted = bool(on)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            def _on_tts_started(_p) -> None:
+                self._tts_busy = True
+                # Drop AUDIO_CHUNKs entirely so VAD/STT/transcript-panel
+                # never see the avatar's own voice — fixes the echo loop
+                # AND the duplicate transcripts of Claude's speech.
+                _mute_audio(True)
+
+            def _on_tts_finished(_p) -> None:
+                self._tts_busy = False
+                self._tts_quiet_until = _time.time() + TTS_COOLDOWN_S
+                # Brief post-playback hold so the speaker's trailing
+                # tail doesn't leak through the mic in the moment
+                # before audio fully stops.
+                import threading as _th
+                _th.Timer(0.25, lambda: _mute_audio(False)).start()
+
+            bus.subscribe(EventType.TTS_STARTED, _on_tts_started)
+            bus.subscribe(EventType.TTS_FINISHED, _on_tts_finished)
+
             def _stt_to_chat(payload) -> None:
                 text = payload.text if isinstance(payload, Transcript) else str(payload)
                 text = (text or "").strip()
-                if not text:
+                if not text or len(text) < 2:
                     return
-                # Drop obvious filler (faster-whisper sometimes emits
-                # silence transcriptions like "you" or "Thanks for watching").
-                if len(text) < 2:
+                # Drop transcripts captured while the avatar was speaking
+                # or right after — those are the avatar's own voice
+                # coming back through the mic. Push-to-speak overrides
+                # the gate so the user can interrupt mid-reply.
+                if not self._push_to_speak and (
+                    self._tts_busy or _time.time() < self._tts_quiet_until
+                ):
+                    log.info("stt.dropped_echo", text=text[:80])
                     return
                 bus.publish(EventType.CHAT_USER_MESSAGE,
                             ChatMessage("user", text))
@@ -412,6 +455,38 @@ class MainWindow(QMainWindow):
                 pass
             self._tts = None
             self.statusBar().showMessage("TTS stopped")
+
+    # ── push-to-speak ─────────────────────────────────────────────
+
+    def push_to_speak_pressed(self) -> None:
+        """User started holding the talk button — interrupt TTS, open mic."""
+        self._push_to_speak = True
+        if self._tts is not None and hasattr(self._tts, "interrupt"):
+            try:
+                self._tts.interrupt()
+            except Exception:  # noqa: BLE001
+                pass
+        # Force-clear the echo gate + un-mute the mic so the user's
+        # voice reaches VAD/STT immediately.
+        self._tts_busy = False
+        self._tts_quiet_until = 0.0
+        if self._audio_worker is not None:
+            try:
+                self._audio_worker.muted = False
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            self.statusBar().showMessage("Listening…")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def push_to_speak_released(self) -> None:
+        """User let go — let normal echo-gate behaviour resume."""
+        self._push_to_speak = False
+        try:
+            self.statusBar().clearMessage()
+        except Exception:  # noqa: BLE001
+            pass
 
     # ── lifecycle: mirror mode ────────────────────────────────────
 

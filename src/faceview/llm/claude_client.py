@@ -230,7 +230,10 @@ class ClaudeClient:
                 self.conversation.add_assistant(final)
                 self._record_turn(user_text, final)
                 self.bus.publish(EventType.LLM_REPLY, ChatMessage("assistant", final))
-                self.bus.publish(EventType.TTS_SPEAK, final)
+                # TTS_SPEAK is routed via MainWindow's set_tts_enabled
+                # subscription (conditional on the TTS worker being on);
+                # publishing here would cause the worker to speak twice
+                # because both subscribers fire.
             except Exception as exc:  # noqa: BLE001
                 log.error("llm.error", error=str(exc))
                 self.bus.publish(EventType.LLM_ERROR, str(exc))
