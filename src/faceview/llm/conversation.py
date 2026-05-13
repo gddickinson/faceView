@@ -16,6 +16,29 @@ class Conversation:
     def __init__(self, system: str | None = None) -> None:
         self.system = system or DEFAULT_SYSTEM
         self._messages: list[ChatMessage] = []
+        # Optional callable that returns extra system context to prepend
+        # to ``system`` at inference time. Used by the memory subsystem
+        # so persistent context is recomputed on every turn rather than
+        # baked in once.
+        self._system_extras_provider = None
+
+    def set_system_extras_provider(self, provider) -> None:
+        """Attach a ``() -> str`` callable. Returned text is prepended to
+        ``system`` whenever :meth:`effective_system` is called."""
+        self._system_extras_provider = provider
+
+    def effective_system(self) -> str:
+        """System prompt seen by the engine on this turn."""
+        provider = self._system_extras_provider
+        if provider is None:
+            return self.system
+        try:
+            extras = provider() or ""
+        except Exception:  # noqa: BLE001
+            extras = ""
+        if not extras:
+            return self.system
+        return f"{extras}\n\n{self.system}"
 
     def append(self, msg: ChatMessage) -> None:
         self._messages.append(msg)

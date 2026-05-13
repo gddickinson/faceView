@@ -478,4 +478,14 @@ def face_params_to_au_values(params) -> dict[str, float]:
         "AU22": float(getattr(params, "mouth_pucker", 0.0)),
         "AU25": min(1.0, max(0.0, float(getattr(params, "jaw_open", 0.0)) * 1.4)),
         "AU26": min(1.0, float(getattr(params, "jaw_open", 0.0))),
+        # Eye blink — closed amount = 1 - eye_open. Without this the
+        # ARKit eyeBlink blendshapes never fire and `eye_open` has no
+        # visible effect on the ICT renderer.
+        "AU45": max(0.0, min(1.0, 1.0 - float(getattr(params, "eye_open", 1.0)))),
+        # New mouth shapes:
+        "AU17": float(getattr(params, "chin_raise", 0.0)),       # pout / chin raise
+        "AU23": float(getattr(params, "lip_tighten", 0.0)),      # lips drawn tight
+        "AU24": float(getattr(params, "lip_press", 0.0)),        # lips pressed
+        "AU10": float(getattr(params, "upper_lip_raise", 0.0)),  # snarl
+        "AU14": float(getattr(params, "dimpler", 0.0)),          # smirk
     }

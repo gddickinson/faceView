@@ -48,16 +48,35 @@ class CameraWorker:
         log.info("camera.started", index=self.index, target_fps=self.target_fps)
 
     def stop(self) -> None:
+        # Tell the loop to exit FIRST, then wait for it, THEN release the
+        # AVFoundation capture. Releasing while the loop is blocked inside
+        # ``cap.read()`` triggers a SIGSEGV in -[CaptureDelegate
+        # grabImageUntilDate:] when test-mode flips the camera off
+        # mid-frame.
         self._stop.set()
-        if self._cap is not None:
-            self._cap.release()
+        t = self._thread
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=2.0)
+        cap = self._cap
+        self._cap = None
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:  # noqa: BLE001
+                pass
+        self._thread = None
         log.info("camera.stopped")
 
     def _loop(self) -> None:
         bus = get_bus()
         period = 1.0 / max(1, self.target_fps)
         while not self._stop.is_set():
-            ok, frame = self._cap.read()  # type: ignore[union-attr]
+            cap = self._cap
+            if cap is None:
+                break
+            ok, frame = cap.read()
+            if self._stop.is_set():
+                break
             if not ok or frame is None:
                 time.sleep(0.05)
                 continue

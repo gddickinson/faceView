@@ -94,8 +94,10 @@ class OllamaEngine:
         """Yield text chunks from Ollama's streaming /api/chat endpoint."""
         # Convert our Conversation history into Ollama's chat format.
         messages: list[dict] = []
-        if getattr(conv, "system", None):
-            messages.append({"role": "system", "content": conv.system})
+        sys_fn = getattr(conv, "effective_system", None)
+        sys_text = sys_fn() if callable(sys_fn) else getattr(conv, "system", None)
+        if sys_text:
+            messages.append({"role": "system", "content": sys_text})
         # Conversation.messages() is a method that returns a list copy.
         msg_list = conv.messages() if callable(getattr(conv, "messages", None)) \
                    else getattr(conv, "_messages", [])

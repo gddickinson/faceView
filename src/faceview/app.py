@@ -1,8 +1,9 @@
 """Application wiring.
 
-Constructs the QApplication, MainWindow, optional speech/vision/llm/server
-workers, and runs the Qt event loop. Heavy ML modules are imported lazily so
-this file imports cleanly even when only the minimum extras are installed.
+Constructs the QApplication, MainWindow (the user-facing webcam side),
+the AvatarWindow (Claude's face), and the optional speech / vision /
+LLM / server workers. Heavy ML modules are imported lazily so this file
+imports cleanly even when only the minimum extras are installed.
 
 Run with::
 
@@ -32,11 +33,17 @@ def _maybe_enable_offscreen() -> None:
         enable_offscreen()
 
 
+def _env_truthy(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     configure_logging()
     _maybe_enable_offscreen()
 
-    # Import PySide6 only after the offscreen flag is set.
     from PySide6.QtWidgets import QApplication
     from faceview.gui.main_window import MainWindow
 
@@ -45,10 +52,18 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     window = MainWindow()
 
-    # Wire LLM client to chat events. The client itself decides whether to
-    # call Anthropic or fall back to demo mode.
+    # Wire LLM client to chat events. Stash on the window so the config
+    # dialog can swap engines / models live.
     from faceview.llm.claude_client import ClaudeClient
     client = ClaudeClient()
+    window.llm_client = client
+    # Load persistent memory for the current persona so chats build up
+    # context across sessions (and across LLM engines).
+    window._bind_memory_for_current_persona()
+    # Show the actual engine on the LLM pill from boot, not just the
+    # initial label baked into StatusPanel.__init__ (which assumes
+    # anthropic-or-demo).
+    window.refresh_llm_pill()
 
     bus = get_bus()
     bus.subscribe(
@@ -56,32 +71,31 @@ def main(argv: Optional[list[str]] = None) -> int:
         lambda msg: client.send_async(msg) if isinstance(msg, ChatMessage) and msg.role == "user" else None,
     )
 
-    # Optional: avatar mode — talking head driven by Claude replies, shown
-    # in the camera panel. Toggle with ``FACEVIEW_AVATAR=1``. Created before
-    # the API server so the Service can bind it for set_emotion / set_persona
-    # / avatar_say.
-    avatar_worker = None
-    if os.environ.get("FACEVIEW_AVATAR", "").strip().lower() in {"1", "true", "yes", "on"}:
-        from faceview.vision.sim_camera import SimCameraWorker
-        # Default to the most realistic mode (ICT-FaceKit) when its
-        # data is present; fall back to stylised 2D otherwise.
-        from faceview.vision.ict_face import _data_path as _ict_data
-        default_persona = "ict_claude" if _ict_data().exists() else "claude"
-        avatar_worker = SimCameraWorker(
-            scenario="avatar", emotion="happy", persona=default_persona,
-            wire_to_llm=True,
-        )
-        avatar_worker.start()
-        log.info("avatar.started")
+    # Start the real webcam (the user side) by default. Toggleable via
+    # FACEVIEW_AUTOCAM and from Tools → Configuration… while running.
+    if not settings.headless and settings.auto_start_camera:
+        window.set_camera_enabled(True)
+
+    # Optional: microphone / STT. Off by default — speech extras are
+    # heavy. Users opt in via FACEVIEW_AUTOMIC or the config dialog.
+    if not settings.headless and settings.auto_start_audio:
+        window.set_audio_enabled(True)
+
+    # The Claude avatar (separate window) is on by default — that is the
+    # whole point of this GUI. Disable with FACEVIEW_AVATAR=0.
+    avatar_on = _env_truthy("FACEVIEW_AVATAR", default=True)
+    if avatar_on and not settings.headless:
+        window.set_avatar_enabled(True)
+
+    # Optional dual-Claude test mode at boot: FACEVIEW_TEST_MODE=1.
+    if not settings.headless and _env_truthy("FACEVIEW_TEST_MODE", default=False):
+        window.set_test_mode_enabled(True)
 
     # Optional control server (FastAPI on 127.0.0.1).
     if settings.api_enabled and not settings.headless:
         try:
             from faceview.server.api import start_api_server
-            from faceview.server.service import get_service
             start_api_server(window)
-            if avatar_worker is not None:
-                get_service().bind_camera_worker(avatar_worker)
             log.info("api.started", url=settings.api_url)
         except Exception as exc:  # noqa: BLE001
             log.warning("api.start_failed", error=str(exc))
@@ -91,7 +105,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         headless=settings.headless,
         claude_key=settings.has_claude_key,
         camera_index=settings.camera_index,
-        avatar=avatar_worker is not None,
+        avatar=avatar_on,
     )
 
     if not settings.headless:

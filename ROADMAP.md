@@ -94,6 +94,45 @@ Track legend:
 
 ## Done
 
+### 2026-05-11 — Head nod: rigid head + neck stretch
+- Earlier cervical-cascade work made the head look like a "rigid
+  block rotating in space" because pivots were at the mesh
+  centerline (`pivot_z=0`) and cumulative pitch was concentrated at
+  the top of the neck.
+- Added three new cascade dimensions: `pivot_z_offset` (back-of-neck
+  shift), `single_pivot_y_norm` (replaces the cascade with one
+  rotation around an ear-level pivot), and `anchor_fade_band`
+  (per-mode smoothstep width).
+- New default `head_block_neck_stretch`: single ear-level pivot at
+  y_norm=+0.30 (atlanto-occipital joint), pivot_z back at -0.20,
+  whole head rotates rigidly above y_norm=-0.10, throat at -0.30 to
+  -0.10 stretches, body below stays at rest.
+- Diagnostic tools added: `tools/_nod_motion_overlay.py` (cyan-rest
+  / red-pitched side-view overlays), `tools/_quadrant_motion_assess`
+  (counts cyan/red px in above-ear × front/back quadrants with
+  3-px erosion), `tools/_neck_base_sweep.py` (parameter sweep over
+  cascade configs).
+
+### 2026-05-10 — Body rig clean-up
+- Skeleton-driven voxel relabel (`tools/skeleton_voxel_relabel`)
+  fixed ~700 male / 500 female systematically mislabelled verts on
+  the procedural body OBJ. JSON overrides baked into
+  `body_part_labels_{male,female}.npz` via `tools/bake_label_overrides`.
+- Fixed phantom-filter ordering in `ict_face.py`: apply
+  `_apply_manual_overrides` BEFORE `filter_phantom_triangles` so
+  re-labeled verts don't keep stale bridge triangles to their old
+  region (root cause of the "necklace" artifact at shoulders).
+- `FACEVIEW_RIG_WEIGHT_MODE` default switched from `hard` to
+  `graded_3ring`.
+- `gen_body_mesh` snaps intermediate `body_morph` values to the
+  nearest baked extreme (±1) — labels NPZ only exists at the two
+  ends, so blended meshes were falling back to the threshold
+  classifier and producing flyaway voxels at the GUI default
+  (slider was 0.0).
+- New regression test `tests/test_body_rig_regression.py` — 32
+  arm/leg-effect cases assert that only the expected BPF labels
+  move > 1.0 ICT unit during each effect.
+
 ### 2026-05-06 — Session 5
 - A7 anatomical renderer: 86-point landmark template + 43 expression
   muscles (lifted from faceforge) drive AU-based 2D vertex

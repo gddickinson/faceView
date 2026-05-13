@@ -34,7 +34,9 @@ from faceview.vision.expressions import apply_expression
 from faceview.vision.face_state import AU_IDS, FaceState, face_state_to_params
 from faceview.vision.personas import Persona, apply_persona, load_persona
 from faceview.vision.sim_face import FaceParams
-from faceview.vision.speech import SpeechEngine, TimedViseme, viseme_at, viseme_blend_at
+from faceview.vision.speech import (
+    SpeechEngine, TimedViseme, tongue_pose_at, viseme_at, viseme_blend_at,
+)
 
 
 # ── Idle systems ─────────────────────────────────────────────────────────
@@ -225,8 +227,25 @@ class TalkingAvatar:
             if blend:
                 for au, val in blend.items():
                     setattr(self.target, au, max(getattr(self.target, au), float(val)))
+            # Speech-driven tongue. Each viseme has a target tongue
+            # pose (from visemes.TONGUE_POSE); coarticulation between
+            # adjacent visemes is smoothed by tongue_pose_at.
+            tongue = tongue_pose_at(self._utterance.timeline, rel)
+            if tongue is not None:
+                e, v, l, tp = tongue
+                self._talking_tongue = (e, v, l, tp)
+            else:
+                self._talking_tongue = (-0.85, 0.0, 0.0, 0.30)
+            # Subtle head sway while speaking — three out-of-phase
+            # sinusoids on yaw / pitch / roll.
+            self.target.head_yaw += 0.13 * math.sin(rel * 2.1)
+            self.target.head_pitch += 0.07 * math.sin(rel * 1.4 + 0.7)
+            self.target.head_roll += 0.05 * math.sin(rel * 1.7 + 2.3)
             if rel >= self._utterance.duration + 0.05:
                 self._utterance = None
+                self._talking_tongue = None
+        else:
+            self._talking_tongue = None
 
         # 3. Idle behaviours act on the *target*, not the rendered state, so
         # blinks/breathing/saccades don't get re-smoothed away on each tick.
@@ -249,4 +268,9 @@ class TalkingAvatar:
         self.state.blink_amount = self.target.blink_amount
 
         params = face_state_to_params(self.state)
+        # Forward the speech-driven tongue pose to the renderer so
+        # the EffectsRuntime can pick it up (only applied when the
+        # talking_tongue slider is enabled and no manual tongue
+        # slider has overridden it).
+        params._talking_tongue = getattr(self, "_talking_tongue", None)
         return apply_persona(params, self.persona)

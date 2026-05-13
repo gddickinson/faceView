@@ -1,5 +1,519 @@
 # faceView — Session Log
 
+## 2026-05-10 — Session: Diagnostic overlay in painting tool
+
+User: "Can you create painting images and modify the painting tool
+for me to show you the missed, or inappropriately moved voxels?
+Would this help you reclassify them to their correct labels?"
+
+Yes — built two new tools and modified the existing painting tool
+to support a diagnostic-overlay workflow.
+
+### `tools/highlight_problem_voxels.py`
+
+For each gender, scans the painted-label NPZ for two failure
+modes:
+
+* **Spatial outliers** — verts whose 3D position is far (>2.5σ)
+  from their label's main cluster centroid.
+* **Label islands** — verts whose label disagrees with the
+  majority of their 1-ring mesh neighbours.
+
+For each problem voxel, suggests the closest-centroid alternative
+label. Renders an overlay PNG per view (front / side_L / side_R /
+back) at the same projection used by `import_part_painting`:
+
+```
+docs/painting/{male,female}/diagnostic_<view>.png
+```
+
+Each problem voxel gets a magenta CROSS (visible at all sizes)
+ringed by the palette colour of the suggested label, drawn over a
+dimmed copy of the existing template so the user can see exactly
+which pixels need re-painting.
+
+For the male body: 178 problem voxels (133 spatial outliers + 45
+islands). For female: 167 problem voxels.
+
+### Modified `tools/paint_body_parts.py`
+
+Added a "diagnostic overlay" layer that the canvas paints with
+70% opacity on top of the working pixmap. New right-panel
+controls:
+
+* **Show diagnostic overlay** checkbox — toggles all canvases
+* **Regenerate diagnostic** button — re-runs
+  `highlight_problem_voxels` after the user changes labels
+
+Workflow:
+
+1. `python -m tools.paint_body_parts docs/painting/male` — opens
+   the editor with magenta crosses overlaid on each view template.
+2. User clicks the palette colour matching each cross's outer
+   ring (or whatever they think is correct), brushes over the
+   problem pixel.
+3. Save → `python -m tools.import_part_painting --in-dir
+   docs/painting/male --mirror` regenerates the NPZ.
+4. Click "Regenerate diagnostic" — the overlay updates with
+   remaining issues so the user can keep iterating.
+
+The painted-label NPZ is the authoritative source for `body_3d.
+classify_body_parts_fine` — corrections flow straight into the
+rig.
+
+## 2026-05-10 — Session: Painted-label revival + manual override path
+
+User: "Are you pre-filtering by muscle and body type? For arm
+movements, only arm and hand labelled skin voxels should move.
+The triangle-stretch tests seem like a clean-up step. Could be
+used to identify and reclassify incorrectly labelled voxels.
+There will need to be some stretching in areas around joints.
+I can also manually label incorrectly stretched and left-behind
+voxels. We can modify the same tool we used before for painting
+body parts."
+
+Three layered improvements working together:
+
+### 1. Stretch-driven label reclassification (algorithmic)
+
+Added `body_rig.reclassify_via_stretch_test`. Runs trial joint
+rotations during `build_rig_state`, then for any triangle whose
+longest edge grows >2× under the trial:
+
+* If 2 verts are in the moving group and 1 stayed — relabel the
+  stayed vert to match the moving group (it's geometrically with
+  the bone but mis-classified).
+* If 1 vert moves and 2 stayed — relabel the lone mover to the
+  static label (probably an isolated stray island).
+
+Iterates to convergence. Catches the dynamic mis-classifications
+that the static label-mode-smoother can't see.
+
+### 2. Manual JSON override file
+
+Added `body_rig._apply_manual_overrides` — loads
+`assets/body_label_overrides.json` (vert_idx → BPF label id) and
+applies on top of auto-classification. User can paste auto-suggested
+overrides from `tools/find_label_candidates.py` and edit by hand.
+
+### 3. Painted-label NPZ revival (the big win)
+
+The body OBJ has `body_part_labels_male.npz` and
+`..._female.npz` from the previous painting tool round-trip
+(`tools/paint_body_parts.py` → `tools/import_part_painting.py`).
+Those NPZ files were stale — built when the body mesh had 6884
+verts, but the current rendered mesh has 7037, so
+`_try_load_painted_labels` was rejecting them and falling through
+to the threshold classifier (which was the source of all the
+mislabel artifacts).
+
+Re-ran `python -m tools.import_part_painting --in-dir
+docs/painting/male --mirror`:
+
+```
+front:  6203 pixel votes
+side_R: 6334 pixel votes
+side_L: 6553 pixel votes
+back:   6793 pixel votes
+Wrote body_part_labels_male.npz: 7035/7037 verts overridden, 2 fallback
+```
+
+`body_3d.classify_body_parts_fine` now picks up the painted labels
+(7037 verts → matches current mesh). Result: visibly massive
+quality jump — limbs render as proper limbs, no more mis-classified
+torso patches that pull arm verts into the chest mask.
+
+### Workflow for further fixes
+
+User has a clean round-trip path:
+1. Edit templates in `docs/painting/{male,female}/template_*.png`
+   via `paint_body_parts.py` (interactive editor).
+2. Run `import_part_painting --in-dir docs/painting/male --mirror`
+   to regenerate the NPZ.
+3. Body re-renders with corrected labels.
+
+OR, for one-off voxel corrections, edit
+`assets/body_label_overrides.json` directly (overrides apply on
+top of any other classification).
+
+Diagnostic tool `tools/find_label_candidates.py` lists candidate
+verts to relabel, with their indices, current labels, and
+auto-suggested corrections.
+
+## 2026-05-10 — Session: Empirical bad-triangle filter (round 2)
+
+User: "Most bad voxels removed. A few still getting inappropriately
+stretched, or left behind when they should be moved. Another round
+of filtering?"
+
+Diagnostic showed:
+* 0 left-behind arm verts (label-mask is correct)
+* 6 isolated label verts (mis-labeled islands)
+* The remaining stretchers were all at legitimate chest↔arm
+  seams that the anatomical-pair filter still allowed
+
+The anatomical-pair filter is a **static** check — it knows about
+label graph topology but not about geometric reality. A triangle
+labeled (chest, upper_arm_L, chest) is "valid" by the chain rules
+but might still stretch 6× during an extreme rotation if the verts
+are positioned awkwardly.
+
+### Fix: empirical bad-triangle filter
+
+Added `body_rig.filter_empirical_bad_triangles` — runs trial
+rotations on every joint at the upper end of its anatomical limit
+(in each of yaw/pitch/roll axes), measures the longest-edge
+growth ratio for every triangle, and strips any triangle that
+grows by more than 3× under any test rotation.
+
+This is a **dynamic** test that doesn't rely on label correctness.
+It catches:
+* Phantom triangles the anatomical filter missed
+* Mis-classified verts on either side of a real seam
+* Triangles in topologically valid configurations that geometrically
+  break under rotation
+
+Wired in `ict_face.py` as a second filter pass after the
+anatomical-pair filter:
+
+```
+Pass 1 (anatomical):  14070 → 13667 tris  (-403 phantoms)
+Pass 2 (empirical):   13667 → 13363 tris  (-304 stretchers)
+```
+
+### Final stretch metrics
+
+After both filter passes:
+
+| pose                  | max edge growth | tris > 2× |
+|-----------------------|----------------:|----------:|
+| l_shoulder_roll=1.5   | 1.00            | 0         |
+| stretch_up peak       | 1.00            | 0         |
+| salute peak           | 1.00            | 0         |
+| arms_crossed peak     | 1.00            | 0         |
+| arms_up peak          | 1.00            | 0         |
+| hands_on_hips peak    | 1.00            | 0         |
+| lunge_left peak       | 2.10            | 5         |
+| jump peak             | 2.20            | 11        |
+
+Arm-driven poses now stretch ZERO triangles. Leg poses retain a
+few mild stretches at the hip seam (max 2.1×) — these are
+legitimate skin deformation at natural joints, not bridges.
+
+### Visual results
+`docs/images/_body_v12_empirical.png` (full pose grid) +
+`docs/images/_body_effects_animated.gif` (animation).
+
+## 2026-05-10 — Session: Phantom triangle filter
+
+User: "Your monitoring isn't picking up the bad voxels. Investigate
+other methods."
+
+Rebuilt the diagnostic from scratch as a TRIANGLE-stretch
+visualizer (`tools/visualize_stretch.py`) — colours each triangle
+by its post/pre rotation area+edge stretch ratio, and lists the
+top-stretched triangles with their BPF labels.
+
+That immediately exposed the actual bug. For `stretch_up`:
+
+```
+Top 15 most-stretched triangles:
+tri      badness  labels                      cross
+12474     104.13  thigh_R,hand_R,thigh_R      True
+13523      98.82  thigh_R,thigh_R,hand_R      True
+13725      95.84  hand_R,hand_R,thigh_R       True
+...
+```
+
+The body OBJ has **531 phantom triangles** that span anatomically-
+disconnected regions (mostly hand↔thigh). They're an artifact of
+the body OBJ being a single closed shell — when arms hang at the
+sides in T-pose, the inner side of the hand is mesh-adjacent to
+the outer thigh and the OBJ shell has triangles bridging them.
+When the arm rotates, these phantoms tear into long sail-shaped
+slivers — the visible "stretched skin" the user reported.
+
+The label-based rig monitor I built earlier couldn't detect this
+because each individual vert was still respecting its label-mask
+(arm verts moved, thigh verts stayed put). The artifact lived in
+the TRIANGLES that span the two regions, not in the verts.
+
+### Fix: anatomical adjacency filter
+
+Added `body_rig.filter_phantom_triangles(tris, fine_labels)` —
+defines which BPF label pairs can validly share a triangle:
+
+* Torso (neck/chest/abdomen/pelvis_skin) — fully interconnected
+* Hip↔thigh, shoulder↔upper_arm, neck↔upper_arm — limb attach
+* Limb chains (upper_arm↔forearm↔hand, thigh↔shin↔foot) — intra
+* Anything else (e.g. hand_L↔thigh_L) — REMOVED
+
+Wired in `ict_face.py` to strip the phantom triangles BEFORE the
+rig runs, so the rendered mesh has clean topology.
+
+Result on the same `l_shoulder_roll = 1.5` pose:
+
+| metric                   | before | after |
+|--------------------------|-------:|------:|
+| Max triangle badness     | 104.13 | 6.69  |
+| 99th-percentile badness  | 44.20  | 0.00  |
+| Triangles stretched > 2x | 531    | 64    |
+
+That's a **15× reduction** in worst-case stretch and an **8×
+reduction** in the count of badly-distorted triangles. The
+remaining stretches are all at the legitimate chest↔upper_arm
+seam (anatomically valid, ~6× max which is a ~2.5× edge stretch
+— small enough to render without obvious sails).
+
+### Visual results
+
+* `docs/images/_stretch_<pose>.png` — diagnostic per pose
+* `docs/images/_body_v11_permissive.png` — full pose grid
+* `docs/images/_body_effects_animated.gif` — 20-effect animation
+
+## 2026-05-10 — Session: Label-based rig monitor + zero-violation enforcement
+
+User: "If only an arm is supposed to move we should be able to
+monitor if other voxels move by looking at their body part labels"
+
+Built `tools/monitor_label_moves.py` — tests every isolated joint
+rotation (l_shoulder_pitch, l_elbow_pitch, etc.) at a representative
+magnitude, computes per-vertex displacement, and flags any vert
+in a NON-expected BPF label that moved more than 0.5 ICT units.
+
+The monitor exposed real bugs in earlier rig iterations:
+
+* `bilateral` fade leaked into thigh verts (170 thigh verts moved
+  38u when only the left shoulder rotated). Cause: hands hang next
+  to thighs in T-pose, so they're mesh-adjacent — the bilateral
+  fade walked outward into thigh territory.
+* `inner_1ring` fade had legitimate chest/neck pull (97 verts).
+
+Switched to **pure hard mask everywhere**. The monitor now reports:
+
+```
+TOTAL violations across all params: 0
+```
+
+across 24 isolated rotations (every shoulder/elbow/wrist/hip/knee/
+ankle axis), even at extreme magnitudes (l_shoulder_roll = 1.5).
+
+Also caught a stale label issue — the monitor was reading
+PRE-smoothed BPF labels but weights use POST-smoothed labels, so
+a few verts the label-smoother had reclassified as arm were flagged
+falsely. Patched the monitor to capture post-smoothed labels.
+
+**Joint-rotation clamps reduced** to anatomically-friendly + rig-
+friendly ranges (shoulder pitch/roll ±0.90 vs prior ±1.55/1.75).
+Single-bone rotation skinning fundamentally can't reach extreme
+angles without seam tearing — the clamps make it impossible to
+generate poses that trigger visible mesh artifacts. Effects that
+needed >50° rotations (stretch_up, salute) become more
+constrained but the rig stays clean.
+
+## 2026-05-10 — Session: Hard-mask rig + diagnostic visualizer
+
+User: "Skin pulled away from sides… arms deformed during movement
+due to left-behind arm voxels. Plan approaches to monitor and fix.
+Visualize. Ultrathink and test different approaches."
+
+### Diagnostic tooling
+
+Built `tools/diagnose_body_rig.py` — captures pre-/post-rig verts
+via runtime patching, then renders the body coloured by:
+
+* BPF labels (each region distinct colour)
+* Stranded verts (small disconnected components within a label)
+* Soft-weight per group (heat scale)
+* Per-vert displacement under a pose (heat scale)
+* Triangle area stretch ratio (red = high distortion)
+* Left-behind arm verts vs non-arm-moved verts highlighted
+
+That immediately exposed two confounding signals: in `stretch_up`
+the body_pitch -0.15 + head pitch -0.20 were legitimately moving
+1130 non-arm verts and the displacement-threshold "left-behind"
+metric was flagging the few near-shoulder verts that simply have
+small radii. Pure `l_shoulder_roll=1.5` (no body / head movement)
+isolated the actual rig artifact.
+
+### Quantitative test of fade strategies
+
+For pure shoulder rotation, measured non-arm displacement (torso
+pull) and within-arm triangle stretch (the "skin pulled from
+sides" / "deformed arms" the user reported):
+
+| approach                          | non_arm_moved | mean_inarm_stretch |
+|-----------------------------------|--------------:|-------------------:|
+| inner_1ring (was default, 0.7)    | 6             | 1.17               |
+| graded_3ring (0.85/0.95/1.0)      | 6             | 0.55               |
+| **hard (1.0/0.0 only)**           | **6**         | **0.04**           |
+| hard + in-mask seam smooth (new)  | 6             | 0.06               |
+
+The hard mask + in-mask Laplacian seam smoothing gives **20×
+better within-arm rigidity** than the previous inner-seam fade,
+without any increase in non-arm verts moving.
+
+### Implemented changes
+
+* `body_rig._soft_weight` now supports modes `hard` (default),
+  `inner_1ring`, `graded_3ring`. Hard mode = pure 1.0 inside, 0.0
+  outside. The earlier inner-seam fade was the source of the
+  within-arm distortion (weight discontinuity 1.0 → 0.7 → 0.0
+  caused triangles spanning bulk-arm and seam-arm to deform during
+  rotation).
+* Added `body_rig._smooth_seam` — Laplacian smoothing **restricted
+  to in-mask neighbours**. Run after each rotation on the seam-ring
+  verts of the rotated group. Smooths the worst seam triangles
+  without pulling toward torso (the in-mask restriction is what
+  keeps it surgical).
+* Pre-computed `seam_indices` in `RigState` so the per-frame seam
+  smoother is O(seam) per group, not O(n_verts).
+
+### Visual results
+
+* `docs/images/_diag_labels_<pose>.png` — labels + weights + strand
+* `docs/images/_diag_disp_<pose>.png` — displacement + stretch maps
+* `docs/images/_fade_mode_comparison.png` — 6 poses × 3 fade modes
+* `docs/images/_body_v7_hard_seam.png` — full pose grid post-fix
+* `docs/images/_body_effects_animated.gif` — 20-effect animation
+
+## 2026-05-10 — Session: Head-attach + inner-seam skinning
+
+User: "The head needs to stay attached to the body as it moves —
+it is becoming detached" / "Skin of the torso is still sometimes
+being pulled away from the body when the arms move."
+
+Two coupled fixes:
+
+1. **Removed body rotation from `apply_body_rig_v2`** — the v2
+   rig was double-rotating the body (its own torso-mask rotation
+   PLUS the existing `_apply_neck_rotation` later in the pipeline),
+   while the head was only rotating once. That gap is what looked
+   like the head detaching. Now v2 only does limb rotations + pivot
+   propagation; `_apply_neck_rotation` handles body bend and brings
+   the head along, so they stay locked together.
+
+2. **Inverted the soft-weight boundary** in
+   `body_rig._soft_weight`. Previously the 1-ring fade gave torso
+   verts adjacent to the limb a 0.15 weight — enough to visibly
+   pull the torso skin along with arm rotations. Now out-of-mask
+   verts always get 0.0 (torso never moves) and IN-mask seam verts
+   relax to 0.7 instead of 1.0, so the limb side absorbs the seam
+   discontinuity. Result: torso is fully stationary during all arm
+   rotations, the seam is still smooth.
+
+## 2026-05-10 — Session: Body-rig artifact fixes
+
+User report: "Strange deformations in the movements, voxels from
+unwanted body parts being included… feet being stretched… sides of
+body being pulled up with the arms… movement should be
+anatomically realistic and limited to realistic skeleton movement."
+
+Root cause for the worst artifact (stretched-stick arms reaching
+to the floor) was a **body-part classifier bug** — `hand_band` was
+defined as ``(y <= wrist_y) & (abs_x >= hand_x)``, which captured
+the wide outer-foot verts (~654 of them, at Y=-142, far below the
+wrist) and tagged them as `BPF_HAND_L/R`. Every shoulder rotation
+then yanked the foot along with the hand.
+
+Fixes:
+- **`body_3d.classify_body_parts_fine`** — `hand_band` now also
+  requires the vert to be within ~0.65 head-heights below the
+  wrist; foot verts at large |x| are no longer hand candidates.
+  Foot region drops the corresponding ``abs_x < hand_x`` cap so
+  wide outer-foot verts go to feet where they belong.
+  Counts after fix: hand_L 306 (was 960), foot_L 1137 (was 483).
+- **`body_rig.apply_body_rig_v2`** — child pivots now propagate
+  through every parent rotation. Shoulder rotation moves elbow +
+  wrist pivots; elbow rotation moves wrist pivot; same for
+  hip→knee→ankle. Without this, child rotations pivoted around
+  stale (pre-parent-rotation) joint positions and stretched the
+  forearm/hand into long thin sticks.
+- **`body_rig._smooth_labels_mode`** — 1-ring mesh-adjacency mode
+  filter (2 iterations) cleans up classifier boundary noise; stray
+  verts at limb/torso seams get pulled back into the majority
+  cluster of their neighbours.
+- **Anatomical joint clamps** in `body_rig._JOINT_LIMITS` —
+  shoulder pitch ±90°, roll ±100°, yaw ±29°; elbow flex 150°
+  (no hyperextension), elbow yaw/roll near zero; hip/knee/ankle
+  similar realistic ranges. Body bend (yaw/pitch/roll) clamped to
+  spinal ROM.
+- **Reduced soft-weight boundary fade** from 0.5 → 0.15 so
+  rotations don't visibly drag adjacent torso/leg verts (fixes
+  "sides being pulled up with the arms").
+
+Smoke test: ``tools/animate_body_effects.py`` renders all 20 new
+effects through their full timeline as a 5×4 animated GIF —
+anatomy stays intact across the entire arc.
+
+## 2026-05-10 — Session: Expanded body movement catalog
+
+User: "please add more body movement effects"
+
+Added 18 new pre-effect handlers to `effects_pre.py`, all built on
+the v2 painted-label rig (so torso/limb separation is artifact-free):
+
+- **Composite arm poses**: `shrug`, `arms_crossed`, `hands_on_hips`,
+  `point_left`, `point_right`, `thinking` (hand-to-chin), `clap`
+  (2-Hz oscillating), `stretch_up` (overhead V), `salute`, `curtsy`.
+- **Head/body animations**: `yes_nod` and `no_shake` (3-cycle
+  emphatic versions of head_nod / head_shake), `look_around`
+  (1-cycle sweep), `breathe` (subtle 2-Hz chest rise), `idle_sway`
+  (slow body roll for idle balance).
+- **Leg/whole-body**: `lunge_left`, `lunge_right`, `jump`
+  (crouch-then-leap two-hump envelope).
+
+All wired into the `HANDLERS` dict (62 total now). Smoke test:
+`tools/test_motion.py --effects` renders a 5x4 grid sampled at each
+effect's visual peak (per-effect `_EFFECT_U` overrides for
+multi-cycle oscillations) → `docs/images/_motion_grid_effects.png`.
+
+Tuning notes:
+- Single-axis shoulder roll clamps at π/2 ≈ horizontal; for
+  overhead poses (`stretch_up`, `salute`) push roll well past π/2
+  (≈ 1.45–2.1) to continue rotation toward vertical.
+- For `arms_crossed`, light outward shoulder roll (+0.35) keeps
+  upper arms near horizontal; deep elbow flex (−1.8) folds forearms
+  inward across the chest.
+- The renderer scales head pose by 0.4 (pitch) / 0.6 (yaw, roll) —
+  factor that in when picking effect magnitudes for emphatic head
+  movements like `yes_nod` (0.55 raw → ~13° rendered).
+
+## 2026-05-08 — Session: Anatomical body fit using mesh landmarks
+
+User: "There should be a way to match the heads to the bodies using the
+preexisting body heads... Please use actual anatomical measurement data
+to ensure the bodies look correct."
+
+Replaced the hand-tuned percentage approach in `body_3d.py` with a
+landmark-anchored fit that uses real measurements at both ends:
+
+- **Body chin from the Vitruvian canon**: adult humans are 7.5 head-
+  heights tall. ``chin_z = z_max − z_span / 7.5`` is computed from the
+  body OBJ's own bounding box, so the male and female meshes (which
+  ship in different sizes already) each get correct chin/neck/shoulder
+  landmarks in their own units.
+- **ICT chin from the real mesh landmark**: vertex 964 — the peak-
+  displacement vertex of the `jawOpen` blendshape — is the chin tip of
+  the ICT-FaceKit neutral mesh. Its Y coordinate (≈ −6.47) gives a
+  true ICT head height of ≈ 21 ICT units (chin → crown).
+- **1:1 placement**: scale the body so its `head_height` equals ICT's
+  `head_height`, then translate so the body's chin (= max-Y after
+  stripping above the chin) lands on ICT's chin Y. The result is
+  anatomically anchored — head and body meet exactly at the chin line
+  on the body's own preserved neck and clavicles.
+
+Sanity check: scaling produces 7.5 heads tall (157 ICT units) for both
+sexes. Female body uses scale 95.97, male uses 93.09 — the female head
+is naturally smaller in the source OBJ so the scale ratio differs while
+the rendered proportions stay canonical.
+
+Multi-view render (front / 3-quarter / profile / back × female / blend
+/ male) confirms heads attach cleanly to bodies with visible necks
+through each body's clavicle topology.
+
+124 tests pass.
+
 ## 2026-05-06 — Session 1: Scaffold + research
 
 - Spec: multimodal GUI (chat / STT / TTS / face presence / identity / emotion /
@@ -12,6 +526,122 @@
 - Created project tree, `pyproject.toml` with optional ML extras, `CLAUDE.md`,
   `INTERFACE.md` (full module map), this log, and `.gitignore`.
 - Conda env `faceview` created (Python 3.11).
+
+## 2026-05-07 — Session 21: Hairless xray + mood skin + glowing eyes + jelly anatomy
+
+User: "the Claude animated head with x-ray rendering is one of the best
+images for the avatar. No hair... mood-driven skin tones, glowing
+eyes, can we merge faceforge anatomy with the head for jelly-person
+effects?"
+
+Tackled in priority order: small visual wins first, then the bigger
+anatomy underlay.
+
+**Hairless xray** — `style=="xray"` skips the scalp Y-band so the
+ICT head reads as a bare skull. Avoids the green-hair uncanny look
+and matches the medical-glow aesthetic.
+
+**Mood-driven skin tone (xray)** — `_xray_mood_offset(params)`
+computes a small RGB delta from live AU values and mixes it into
+M_Face / M_BackHead before render:
+- AU12 (smile)        → green-cyan lift
+- AU4  (brow lower)   → red shift (anger)
+- AU15 (corner drop)  → cool blue (sad)
+- AU5  (lid raise)    → pale (fear)
+- AU25 (jaw open)     → magenta hot core (open mouth → glow)
+
+**Glowing eyes** — added a `v_emit` per-vertex attribute and a
+`u_emit_pulse` shader uniform. `_MATERIAL_EMISSIVE` baked from the
+ICT material map (iris/sclera/lacrimal/teeth glow; rest 0). Pulse is
+a per-style `(base, amp, hz)` time-modulated scalar (xray pulses
+~0.5 Hz, neon ~0.6, cyberpunk ~0.7, transparent ~0.4). Brightened
+xray iris colour to (0.30, 0.95, 1.00) so the glow reads.
+
+**CPU bloom post-process** — sci-fi modes get a Gaussian blur of
+bright pixels added back over the original. ~3 ms at 320×320.
+Halos the eye/teeth glow and gives a soft scifi rim around the
+head. Per-style amplitude tuned (xray strongest at 0.45).
+
+**Jelly-anatomy underlay** — new `style=="jelly"` mode composites
+BP3D head anatomy behind a translucent ICT xray skin:
+- `_render_jelly_composite` renders ICT (xray) and BP3D anatomy,
+  per-pixel alpha-blends them. Skin pixels semi-translucent
+  (0.05 + luma/255 * 0.85, mid-tone skin attenuated 0.35×); eye/
+  teeth glow stays opaque.
+- Cool tint + brightness lift on BP3D so muscles read against
+  cyan skin instead of warm bone.
+- Soft Gaussian silhouette mask of the ICT head clips BP3D to
+  inside the ICT outline.
+- Final bloom over composite halos the glow through both layers.
+
+**moderngl context-sharing** — moderngl 5.12 has no API for
+switching between two standalone GL contexts in the same thread
+(verified empirically: second renderer's draws turn into black
+frames). `_GpuRenderer.__init__` now accepts an optional `ctx`
+parameter, and ict_face's `_shared_anatomy_renderer` builds one
+that reuses the ICT renderer's context. Cold start ~5s
+(shader compile + mesh upload), warm ~90 ms per frame.
+
+**Anatomy alignment** — user noted "anatomy is much larger than
+the animation". Two fixes:
+1. Drop cervical vertebrae + neck muscle group from the rendered
+   spec list (`_NECK_MUSCLE_TOKENS`: Cap., Colli, Sterno, Thyro,
+   Hyoid, Scalene, Levator Scap, Omohyoid, Platysma, Digastric).
+   142 specs → ~110 head-only.
+2. `_align_anatomy_to_ict`: width-based uniform scale (0.96 ×
+   ict_w / bp3d_w) + bbox-centroid translation. No aspect
+   distortion; anatomy sits *just inside* the ICT silhouette so
+   the bloom halo frames it.
+
+Personas: added `ict_jelly` to `personas.json`. Live-verified
+through HTTP /avatar/persona — switches mid-session.
+
+Showcase images:
+- `docs/images/ict_xray_moods.png` — 6 moods, hairless xray + tint
+- `docs/images/ict_xray_glow.png` — 8-frame eye-pulse strip
+- `docs/images/ict_jelly_moods.png` — 6 moods, jelly underlay
+- `docs/images/live_*.png` — full-GUI captures via /screenshot
+
+## 2026-05-07 — Session 20: Sci-fi color profiles
+
+User asked for stylised color profiles: "transparent, neon, cyberpunk
+xray". Built four `style` presets that flip the ICT material palette
+and shader uniforms wholesale. Each is selectable as a persona.
+
+**Implementation**
+
+* `Persona.style` (default `"natural"`) added; `load_persona` /
+  `apply_persona` propagate it to `params._persona_style`.
+* `vision/ict_face.py`:
+  * `_SCIFI_PALETTES` — RGB tuples per ICT material name for each
+    of the four styles.
+  * `_shader_overrides_for_style` — per-style ambient / specular /
+    shininess / sss_tint dict. Xray boosts ambient + drops specular
+    for that flat medical-glow look. Neon flattens SSS + cranks
+    specular for plastic sheen.
+  * `_material_palette` returns the sci-fi palette wholesale when
+    style is non-natural; otherwise the natural HSV-derived skin
+    palette.
+  * `_per_vertex_colors_for` short-circuits the lip / brow / cheek
+    post-processing for sci-fi styles — those flourishes only make
+    sense on natural skin tones.
+  * `_ICTRenderer.render` reads `self._style_uniforms.get(...)`
+    rather than hardcoding shader values.
+* `personas.json`: 4 new entries (`ict_neon`, `ict_transparent`,
+  `ict_cyberpunk`, `ict_xray`) — each picks a black/dark background
+  to make the stylised palette pop.
+
+**Visual verification**
+
+Live-captured all four through `POST /avatar/persona` — round-trips
+cleanly. Showcase grid in `docs/images/ict_scifi_styles.png`:
+- neon: hot magenta skin, glowing cyan eyes, electric green crown
+- transparent: ghost pale-blue, ethereal
+- cyberpunk: cool teal skin, magenta hair
+- xray: dim cyan-bone with bright bone-white teeth/sclera
+
+Committed as `26ee828`. Push to origin blocked by no-direct-to-main
+policy — branch + PR needed.
 
 ## 2026-05-07 — Session 18: ICT polish v2 + Ollama bug-fix + live integration
 
@@ -774,3 +1404,496 @@ Tests: 83 → 92. Coverage: lite-3D template + dispatch + rotation
 - `git init`, push to private `gddickinson/faceView`.
 - Optional follow-ups: real Auto-AVSR ONNX upgrade for true VSR; Kokoro TTS;
   enrol-owner CLI; auto-start camera/audio toggles in the GUI menu.
+
+## 2026-05-09 — Full BP3D skeleton + region-aware skin fit
+
+- Loaded all 231 BP3D bones (cervical 15 / thoracic 22 / lumbar 11 /
+  skull 11 / jaw 1 / rib_cage 43 / pelvis 2 / upper_limb 10 / hand 54
+  / lower_limb 8 / foot 54) into `assets/skeleton/` plus their
+  per-group manifest JSONs in `assets/skeleton/configs/`.
+- Replaced the single uniform-scale fit with a region-aware fitter
+  (`vision.skeleton_fit.fit_to_body`): each anatomical region computes
+  its own bbox in BP3D-ICT frame and maps to a target box derived
+  from the avatar's actual body-skin landmarks (shoulder line, hip
+  line, knee/ankle bands), measured directly off the gendered body
+  mesh with IQR clipping so the hand outliers don't pollute torso
+  width.
+- Body width is sampled per-Y-band using `body_3d.classify_body_parts`
+  to mask away arm/hand verts at the hip line. Reuses the same
+  scale=118.3 / `body_mesh_alignment` calibration logic faceforge
+  already validated for the inverse problem (sex-transformation body
+  warp); we just go in the opposite direction (skeleton → skin).
+- New `tools/render_skeleton_overlay.py`: renders body+head at front
+  and side views with all fitted bones projected through the same MVP
+  as the avatar renderer. Output: `docs/images/_skeleton_male_full.png`
+  and `..._female_full.png`.
+- Split `skeleton.py` (was 702 lines after the new defs) into
+  `skeleton.py` (271 lines, defs/STL parse/transform) and
+  `skeleton_fit.py` (347 lines, landmarks + fit). Both now under the
+  500-line cap.
+- `INTERFACE.md` updated for the new module + tool.
+
+## 2026-05-09 — Limb chain rotation: BP3D bones aligned to skin arm/leg axis
+
+- Added `_chain_align(prox_src, dist_src, prox_tgt, dist_tgt)` — Z-axis
+  2D rotation in the XY plane that rotates a limb chain to match the
+  body skin's actual arm/leg direction. Rotates whole upper_limb +
+  hand together (one rotation around the shoulder); same for
+  lower_limb + foot (around the hip).
+- Endpoints are bone *ends*, not centroids: top of humerus / bottom of
+  radius for arms; top of femur / bottom of tibia for legs (use the
+  20% extreme-Y verts).
+- Fixed the L/R side handedness: BP3D R is at +X, ICT/avatar R is at
+  −X. Negated X in `_skull_to_ict` so R/L stay consistent across
+  frames — otherwise the rotation flipped the wrong direction.
+- Measured actual arm centroid X at three Y bands (shoulder / elbow /
+  wrist) from the body mesh's BP_LEFT_ARM/BP_RIGHT_ARM verts. The
+  BP3D shoulder→wrist target now uses these instead of the torso
+  hip width — so the arm chain lands at the body's hanging hand
+  position (≈±37 X at wrist) rather than the inner torso edge.
+- Restricted the rotation to Z axis only. Earlier 3D Rodrigues
+  rotated Z components too, which pushed the scapula / clavicle
+  bundle out of plane. XY-only rotation keeps the front-back ordering
+  intact.
+
+## 2026-05-09 — Per-segment limb fit + face-anchored skull/jaw + line rendering
+
+- Replaced the single-chain limb fit with a three-part rig per side:
+  shoulder girdle (clavicle+scapula bbox-fit onto the body shoulder
+  area), humerus (chain shoulder→elbow), radius+ulna (chain
+  elbow→wrist). Same idea for legs: femur (hip→knee) and
+  tibia/fibula/patella (knee→ankle) as separate chains.
+- New `skeleton_landmarks.limb_landmarks(body_morph)` measures 3D
+  shoulder/elbow/wrist and hip/knee/ankle joint positions off the
+  body skin, plus 3D bboxes for the body's hand and foot region.
+  Limb fits anchor to these so bones run along the body's actual
+  hanging-arm/leg cylinder (X + Z + Y), not just a vertical column.
+- Hand and foot now bbox-fit into the measured body hand/foot box —
+  guarantees they stay inside the visible silhouette.
+- Skull/jaw use a 4-anchor piecewise Y mapping (crown → eye → mouth
+  → chin), with eye_src derived from the orbit aperture (zygomatic
+  top + frontal bottom midpoint) and mouth_src from between-teeth
+  (maxilla bottom + mandible top). Eye sockets and chin land on the
+  ICT face mesh's iris materials and chin landmark vertex.
+- Pelvis raised: top of bowl now sits 0.85 head_h above hip joint,
+  putting the iliac crest in the lower torso instead of the leg.
+- Cervical Z shear backed off from 0.30 → 0.12 head_h; the spine
+  meets the skull base at the back of the head without poking
+  through it.
+- Bones rendered as PCA-axis lines (`tools/render_skeleton_overlay.py`).
+  PCA principal direction handles vertical bones (vertebrae, femur)
+  and horizontal ones (clavicle, ribs) uniformly — line goes between
+  the bone's two extremes along its long axis.
+- Split landmarks out of `skeleton_fit.py` into
+  `skeleton_landmarks.py` (now 366 lines); both fit + landmark
+  modules under the 500-line cap.
+
+## 2026-05-10 — Skeleton-bone voxel relabel
+
+Built `tools/skeleton_voxel_relabel.py` to detect mis-labeled body
+voxels by measuring each vert's distance to its owning bone segment
+(shoulder→elbow→wrist→hand_tip and hip→knee→ankle→foot_tip pivots
+from `RigState`). Three complementary detectors run together:
+
+- **Rest-pose bone-distance**: vert flagged if dist(current bone)
+  is `>1.5×` dist(closest limb bone) AND `>1.5` units farther.
+- **Cross-side anatomical check**: any `_R` label at +X (subject's
+  left) or `_L` at -X is mirrored to the same-chain label on the
+  correct side, but only if the mirror bone is actually nearby
+  (else defer to closest-bone pick).
+- **Per-pose bone-following** (latent): captured posed-pivot dict
+  via `_capture_rig_io`. Currently disabled — `apply_body_rig_v2`
+  works on a *local* copy of `rig.pivots` so the cached state never
+  reflects posed positions.
+
+Mirror-correct broken wrist_R pivot: the skeleton-fit puts wrist_R
+right next to elbow_R for both genders (likely a BP region-detection
+failure). When `|x_R| < 0.6 × |x_L|`, mirror the L-side joint to
+the R-side for the bone-distance test (the rig itself is unchanged).
+
+Convergence after multiple iterative passes:
+- `body_label_overrides_male.json`: ~366 → 983 overrides
+- `body_label_overrides_female.json`: ~464 → 856 overrides
+
+Visual: dramatic reduction in flyaway artifacts during stretch_up,
+arms_up, clap, etc. Remaining stragglers (a couple of thin streaks)
+require fixing the underlying wrist_R skeleton fit, not just label
+overrides.
+
+## 2026-05-10 — Bake overrides + phantom-filter ordering fix
+
+Created `tools/bake_label_overrides.py` to merge
+`body_label_overrides_{male,female}.json` into
+`body_part_labels_{male,female}.npz`. Renamed JSON files to
+`_baked.json` suffix so runtime no longer re-applies them.
+923 male / 789 female overrides baked. Backups of the original NPZ
+saved to `body_part_labels_<g>_orig.npz`.
+
+Also added one more direct armpit fix: male vert 1813 was labeled
+`u_arm_L` but sat in the left armpit cleft, far from the upper-arm
+bone — 12/19 neighbours were chest, so reassigned directly.
+
+**Root cause of the lingering "dark voxel necklace" at the shoulders**
+(visible across every effect, even in the rest pose):
+
+`ict_face.py` ran `filter_phantom_triangles` on the SMOOTHED but
+NOT-OVERRIDDEN labels (line 1412). When a vert was overridden to a
+different anatomical region (e.g. `u_arm_L` → `chest`), its old
+bridge triangles to neighbouring arm verts survived. During arm
+rotation those triangles stretched into dark slivers along the
+shoulder seam — the "necklace" we kept noticing.
+
+Fix in `ict_face.py`: apply `_apply_manual_overrides` to `_smoothed`
+BEFORE `filter_phantom_triangles`, then update `_fine` to the
+overridden labels for downstream `build_rig_state`.
+
+Result: GUI renders are dramatically cleaner — neutral, arms_up,
+clap, salute, arms_crossed all show clean limb motion with no
+necklace artifact.
+
+Dynamic test confirms 0 unexpected movers across all 12 effects ×
+2 genders.
+
+## 2026-05-10 — GUI tour + CI test + graded skinning weights
+
+**GUI tour**: scripted `tools/_gui_tour.sh` to drive the live GUI
+through 28 body effects per gender, captured screenshots, built
+labelled grids saved to `docs/images/body_effects_tour_{male,female}.png`.
+All poses render cleanly — no flyaways, no necklace artifact.
+
+**CI regression test**: `tests/test_body_rig_regression.py` covers
+26 cases: 13 arm-effect × 2 genders asserting only arm labels move,
+3 leg-effect × 2 genders asserting only leg labels move, and
+2 neutral-pose isolated-voxel checks. Threshold = 1.0 unit
+displacement. All 34 cases pass.
+
+**Graded skinning weights**: switched default
+`FACEVIEW_RIG_WEIGHT_MODE` from "hard" to "graded_3ring"
+(seam-ring 0.85, second ring 0.95, deeper 1.0). Visible
+improvement at shoulder/armpit transitions across arms_up,
+salute, arms_crossed for both genders — sharp seam and
+triangular armpit gap (HARD mode) are eliminated. Set env var
+to "hard" to revert.
+
+Regression tests still pass under graded mode — torso verts
+adjacent to arms remain weight 0.0 because they're not in the
+arm mask; only IN-mask seam-ring arm verts are graded down.
+
+## 2026-05-10 — body_morph intermediate-value regression fix
+
+**Symptom**: User opened the GUI fresh and reported "many bad voxels
+during movement" — massive flyaway pieces of arm/torso, holes in
+abdomen, despite the regression test suite passing and the prior
+GUI tour being clean.
+
+**Root cause**: `body_part_labels_{male,female}.npz` are baked for
+two specific vert counts only — 7037 (male) and 7028 (female).
+Inside `gen_body_mesh`, intermediate `body_morph` values blend the
+two raw OBJs (both 10582 verts), then the sloped chin-strip uses
+the BLENDED chin/neck Y, dropping a different number of top verts
+at every morph value (7028…7037). For any morph ∈ (-1, +1) the
+post-strip mesh has a count that matches NEITHER NPZ, so
+`_try_load_painted_labels` returns None and the old threshold
+classifier kicks in — undoing all the skeleton-relabel work.
+
+The GUI's `body_morph` slider default was 0.0, which produced a
+7029-vert mesh on every fresh launch — explaining why every user
+session started in the broken state.
+
+**Fix** (two edits):
+
+1. `src/faceview/vision/body_3d.py` — `gen_body_mesh` now snaps the
+   morph to the nearest baked extreme (`±1.0`) before picking the
+   raw mesh. The slider remains continuous in the UI but the
+   renderer treats it as a 2-state male/female selector. Labels
+   always match.
+2. `src/faceview/gui/effects_panel.py:373` — `body_morph` slider
+   default changed `0.0 → 1.0` with step `0.05 → 2.0` so the slider
+   behaves as a discrete toggle and fresh GUI sessions start at the
+   tested male morph.
+
+**Personas**: confirmed personas.json never sets `body_morph` —
+every persona inherits the slider value, so all 40 personas
+share the same body. No per-persona corrections were missed; the
+correction needed was only for the slider default.
+
+`tests/test_body_rig_regression.py` still passes (32 effect tests
++ 2 neutral skipped without scipy). GUI screenshot after fix
+shows a clean avatar across `arms_up`, `arms_out`, `kick_left` —
+no flyaways, no holes.
+
+## 2026-05-10 — Head-nod neck-base drift fix
+
+**Issue**: When the head pitches (slider `params.pitch`), the BASE of
+the neck visibly drifts even though the user expects it to stay
+stationary — only the top of the neck and skull should pivot.
+
+**Diagnosis** (`tools/_nod_drift_measure.py` + `_nod_drift_inspect.py`):
+The cervical cascade in `_apply_cervical_cascade` interpolates pitch
+across 12 spine levels with cumulative fractions
+`(1.00, 0.98, 0.85, 0.55, 0.25, 0.10, 0.04, ...)`. At C5 the cumulative
+pitch is still **10 %** and at C6 it's **4 %**, so mid-neck verts
+displace by ~0.25 ICT units at full pitch — the visible drift.
+
+**Fix**: Introduced `FACEVIEW_NOD_MODE` env var that selects from
+five cascade profiles, plus an optional post-anchor that snaps
+verts back to rest below a Y threshold:
+
+- `current` — legacy fractions (kept for A/B)
+- `sharper` — bend concentrated at C1-C3, C4-T4 → 0
+- `spine_ripple` — sharp top + tiny T1-T4 ripple **(NEW DEFAULT)**
+- `anchored` — legacy fractions + snap-to-rest below y_norm=-0.30
+- `sharp_anchored` — sharper + anchor below y_norm=-0.25
+
+Default chosen as `spine_ripple` because the user explicitly asked
+for "some flex passed down the spine" while keeping the neck-base
+junction visibly stationary.
+
+**Measured improvement** (body-mesh mean displacement at pitch=+1.0):
+
+| Y band | current | spine_ripple | change |
+|---|---|---|---|
+| upper-neck (C1-C3) | 1.0036 | 0.5838 | -42 % |
+| mid-neck (C4-C6) | 0.2472 | 0.0606 | -76 % |
+| neck-base (C7-T1) | 0.0344 | 0.0211 | -39 % |
+| upper-torso/clavicle | 0.0043 | 0.0079 | (tiny ripple) |
+| mid-torso | 0.0000 | 0.0000 | unchanged |
+
+`tests/test_body_rig_regression.py` still passes under the new
+default (32 effect tests + 2 neutral skipped without scipy).
+
+Tools added:
+- `tools/_capture_nod_sideview.py` — baseline side-view grid
+- `tools/_nod_drift_measure.py` — per-Y-band displacement table
+- `tools/_nod_drift_inspect.py` — cascade parameter dump
+- `tools/_compare_nod_modes.py` — all-mode visual grid
+- `tools/_nod_overlay_compare.py` — rest-vs-pitched colour overlay
+- `tools/_nod_final_compare.py` — before/after 2×2 grid
+- `tools/_nod_table.py` — labelled comparison table image
+
+Compare images at `/tmp/nod_modes_compare.png`,
+`/tmp/nod_final_compare.png`, `/tmp/nod_table.png`.
+
+## 2026-05-11 — Head nod: rigid-head + neck-stretch (single ear pivot)
+
+User feedback on earlier head-nod work: the cervical cascade made
+the head + upper neck look like a "rigid block" rotating in space,
+when in fact the user wanted (a) the entire head to rotate as one
+rigid block around a pivot at the ear/atlanto-occipital level, and
+(b) the NECK below the chin to absorb the motion via stretch.
+
+**What was wrong**: the cumulative pitch fractions of every cascade
+mode were applied around per-disc pivots at `pivot_z=0` (mesh
+centerline). The chin's distance to those pivots was tiny, so the
+chin barely swept in Z. Plus the cumul fractions stayed near 1.0
+through C1-C3, so the entire upper neck moved nearly as much as the
+chin = perceived rigid block.
+
+**Real fix**: added two new dimensions to the cascade:
+
+1. **`pivot_z_offset`** (head_h units) — shift every per-disc pivot
+   BACK into the neck. -0.20 = back of cervical spine.
+2. **`single_pivot_y_norm`** — when set, REPLACES the cascade with a
+   single rotation around (pivot_z_offset, single_pivot_y_norm).
+   This is the anatomically-correct head pivot at the
+   atlanto-occipital joint, at ear-bottom level.
+3. **`anchor_fade_band`** override — the post-anchor's smoothstep
+   width is now per-mode. Wide fade = head rotates rigidly and the
+   neck below stretches to absorb motion.
+
+**Default mode is now `head_block_neck_stretch`**:
+- `single_pivot_y_norm = +0.30` (ear-bottom level)
+- `pivot_z_offset = -0.20` (back of cervical spine)
+- `anchor_y_norm = -0.30, anchor_fade_band = 0.20` (top of fade at
+  y_norm = -0.10 — verts above stay full-rigid, throat region at
+  -0.30 to -0.10 stretches, body below -0.30 stays at rest)
+
+**Other modes available** via `FACEVIEW_NOD_MODE`:
+- `cranium_only` — locks face/jaw still, only upper skull rotates
+  (clean but distorts the face at the ear seam)
+- `head_block_short_neck` — fade 0.12, tight stretch zone
+- `head_block_long_neck` — fade 0.40, stretch reaches upper torso
+- `flex_anchored` / `spine_ripple` / `curve_back_pivot` / etc. —
+  older cascade-based experiments, kept for A/B
+
+**Diagnostic tools added**:
+- `tools/_neck_base_sweep.py` — parameter sweep tracking per-Y-band
+  displacement of specific tracked verts on both ICT head mesh and
+  body mesh under ±22.9° pitch. Reports chin_dz/dy and base motion
+  per config.
+- `tools/_nod_motion_overlay.py` — renders cyan (rest pose) + red
+  (pitched pose) silhouette diffs per mode. Used to visually verify
+  that motion is confined to the head/neck and the body stays still.
+- `tools/_quadrant_motion_assess.py` — counts cyan/red pixels in the
+  above-ear vs below-ear (and front-of-head vs back-of-head)
+  quadrants of each overlay. 3-pixel binary erosion strips
+  anti-aliasing edge noise.
+
+User's final note: "This is better — not perfect but much improved."
+
+
+## 2026-05-12 → 2026-05-13 — Sessions: Mutual-vision GUI, cognition, voice
+
+A multi-session arc that turned faceView from a webcam-pipeline +
+chat demo into a real face-to-face conversation app with persistent
+identity. Headline outcome: type or speak, the avatar (chosen from
+8 named characters) replies in a natural neural voice with cross-
+session memory that any LLM backend can draw from identically.
+
+### GUI rework (2026-05-12)
+
+Restructured so the camera panel is the **user's** webcam (Claude
+sees through it) and a separate **Avatar window** shows Claude's
+face. Vision analysers (presence / identity / mouth / emotion) now
+actually publish events. Mirror mode lets the avatar mimic the
+user's expression + mouth + head pose live. Config dialog
+consolidates worker toggles, persona, head-nod mode, LLM engine,
+TTS controls.
+
+### Detachable panels (`gui/layout.py`)
+
+Every panel (camera / chat / status / transcript) is wrapped in a
+`QDockWidget`. Drag out to float, tab two together, hide/show via
+the Window menu. `LayoutManager` snapshots a default state and
+persists user choices via `QSettings`. Save layout = Cmd-Shift-Y,
+Reset = Cmd-Shift-L.
+
+### LLM engine layer
+
+`ClaudeClient.select_engine(name, model)` live-swaps between
+`anthropic`, `ollama`, and `demo` without restarting the app. Auto
+falls back: Anthropic if key set → Ollama if reachable → demo.
+Config dialog "LLM" tab exposes it; status pill (`StatusPanel`)
+shows the active engine in colour (green / blue / grey, `⇄` prefix
+when test mode overrides).
+
+### Test mode → real LLMs in character
+
+`TestConversation` got an LLM mode. Each bot has its own
+`Conversation` + character; the partner persona is picked from
+registered characters (filtered to stylised render modes to avoid
+moderngl framebuffer races on parallel ICT-3D workers). Replies
+route through `chat_panel.append_external_message`, so the
+two-bot orchestrator doesn't re-trigger the main client.
+
+### Cognition + character system
+
+Three-layer cognition (`llm/cognition.py`):
+
+- **Episodic** — `{ts, type, text, significance, emotion, recalled}`
+  rows. Recall scored by recency × significance × emotion × context
+  × rehearsal. Consolidates at 500 entries → 400 by retention.
+- **Semantic** — facts keyed by subject (`player`, `history`,
+  `self`) with confidence. No decay.
+- **Emotional** — current emotions, ~6h half-life exponential decay.
+- **Relationship score** brackets into character-defined levels
+  (Acquaintance → Companion). Significant turns add points.
+
+Real-time decay: 30-day recency half-life, 6h emotion half-life.
+Schema v2; auto-migrates v1 MemoryStore files from earlier in the
+session.
+
+Character system (`llm/character.py` + `assets/config/characters.json`):
+`Character` dataclass with name, age, occupation, backstory, Big
+Five traits, conversation style (verbosity / humor / topics /
+catchphrases / outlook), goals, preferred voice, relationship-level
+thresholds.
+
+Eight characters authored:
+- **Claude** (max-capability, ICT face) — `bf_emma` voice
+- **Claude (avatar)** (playful, cartoon) — `bf_lily`
+- **Iris** (neuroscience PhD, x-ray glow) — `af_nicole`
+- **Bayard** (retired classical guitarist) — `bm_george`
+- **Niko** (indie game developer) — `af_sky`
+- **Soraya** (ER nurse) — `af_sarah`
+- **Theo** (bookshop owner) — `bm_daniel`
+
+Persona swap rebinds the cognition store + swaps the TTS voice +
+updates the LLM pill in one atomic flow.
+
+### Persona editor (`gui/character_editor.py`)
+
+View → "Edit personas…" (Cmd-Shift-I). Sidebar lists registered
+personas, right pane edits name / age / occupation / backstory /
+Big Five sliders / topics / catchphrases / goals. Save writes to
+`characters.json` and rebinds the running cognition store. New +
+delete supported.
+
+### Voice (Kokoro neural TTS)
+
+`speech/tts_kokoro.py` integrates kokoro-onnx (~310 MB model + 27
+MB voices, fetched on demand into `.faceview/tts/`). Plays through
+`afplay` on a temp WAV — `sounddevice.play` collided with the mic
+capture `InputStream` and produced loud digital noise. Subprocess
+handle is tracked so push-to-speak can interrupt mid-play.
+
+54 voices: `af_*` / `am_*` / `bf_*` / `bm_*`. Each character has a
+voice in `characters.json`; persona swap calls
+`TtsWorker.set_voice(name)`.
+
+Engine selector in `speech/tts.py`: auto picks Kokoro if installed
++ assets present, else pyttsx3 fallback. Live-swappable via the
+config dialog's "Voice engine" + "Voice" combos.
+
+### Echo loop fixes
+
+Three problems addressed:
+
+1. **TTS → mic → STT → LLM feedback loop**. `AudioCapture.muted`
+   flag drops chunks at source while TTS is busy. MainWindow
+   flips it on `TTS_STARTED`, releases 250 ms after `TTS_FINISHED`.
+2. **Duplicate transcript display**. Same source-level mute
+   prevents VAD / STT / transcript panel from ever seeing the
+   avatar's voice.
+3. **TTS spoke each reply twice**. `TTS_SPEAK` was being published
+   from both `ClaudeClient._loop` and `MainWindow`'s `LLM_REPLY`
+   subscriber. Removed the direct publish; the conditional
+   MainWindow one stays.
+
+### Push-to-speak
+
+"🎤 Hold to talk" button in the chat panel. Press → kills active
+Kokoro utterance (`afplay` SIGTERM) + un-mutes mic + overrides
+echo gate. Release → normal mute-during-TTS resumes.
+
+### Voice → LLM bridge (the speech-not-reaching-LLM bug)
+
+Mic STT was hitting the transcript panel but never reaching the
+LLM — nothing converted `TRANSCRIPT_FINAL` events into
+`CHAT_USER_MESSAGE`. Bridge added in
+`MainWindow._start_stt_chain`, gated by `tts_busy` + 2.5 s
+cooldown for the faster-whisper async transcribe lag.
+
+### CLI control surface
+
+Two scripts let me drive + monitor the running GUI from outside:
+
+- `tools/faceview_monitor.py` — `status / chat / events / memory /
+  watch / screenshot` (read-only).
+- `tools/faceview_drive.py` — `launch / stop / chat / say /
+  persona / emotion / engine / test / lifecycle / memory` (writes).
+  `launch` pulls the Anthropic key from macOS Keychain so the
+  same one-liner works whether the GUI is up or down.
+
+Backed by extended `/monitor`, `/memory`, `/llm/engine`,
+`/test/engine`, `/lifecycle`, `/shutdown` endpoints on the local
+FastAPI server. Server-side ops marshal Qt-touching work onto the
+GUI thread via `_GuiBridge` slots.
+
+### Crash fixes encountered
+
+- **Camera-stop SIGSEGV** in `cv::VideoCapture::read` →
+  `-[CaptureDelegate grabImageUntilDate:]` when test mode flipped
+  the camera off mid-frame. Fix: `CameraWorker.stop` joins the
+  worker thread before releasing the AVFoundation capture.
+- **moderngl framebuffer race** in test mode when both the
+  avatar-side and camera-side bots ran ICT-3D workers in
+  parallel. Fix: partner-picker filters to stylised render modes.
+
+### Final state
+
+158 tests pass. README + INTERFACE rewritten. Eight characters with
+distinct voices, three-layer cognition persisted per-persona,
+natural neural voice, real STT, push-to-speak interrupt, two-bot
+test mode, detachable panels, persona editor, full CLI + HTTP
+control surface, MCP adapter.

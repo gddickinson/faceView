@@ -24,7 +24,7 @@ from typing import Optional
 
 from faceview.core.errors import MissingDependency
 from faceview.core.event_bus import get_bus
-from faceview.core.events import EventType, MouthActivity
+from faceview.core.events import EventType, HeadPose, MouthActivity
 from faceview.core.logger import get_logger
 
 
@@ -130,3 +130,37 @@ class MouthAnalyzer:
                 viseme=viseme,
             ),
         )
+
+        # ── head pose (approximation from landmark geometry) ──
+        # MediaPipe FaceMesh landmarks are in normalised image coords
+        # (x, y in [0, 1]). We approximate head pose without solvePnP:
+        # - yaw   from nose-x vs face midline (between ear-anchor lms)
+        # - pitch from nose-y vs eye line
+        # - roll  from the slope of the eye line
+        # These are good enough for "mirror my head" feedback.
+        try:
+            left_eye = lms[33]   # outer corner of left eye
+            right_eye = lms[263]  # outer corner of right eye
+            mid_x = (left_eye.x + right_eye.x) * 0.5
+            mid_y = (left_eye.y + right_eye.y) * 0.5
+            eye_w = max(1e-3, abs(right_eye.x - left_eye.x))
+            # Yaw: how far is the nose tip from the eye midline,
+            # normalised by inter-eye distance. Mirror left/right.
+            yaw = -float((nose.x - mid_x) / eye_w) * 2.0
+            # Pitch: nose tip y vs eye y, normalised by chin distance.
+            chin_dist = max(1e-3, abs(chin.y - mid_y))
+            pitch = -float((nose.y - mid_y) / chin_dist - 0.6) * 2.0
+            # Roll: slope of the eye line.
+            import math
+            roll = float(math.atan2(right_eye.y - left_eye.y, right_eye.x - left_eye.x))
+            roll = roll / (math.pi * 0.25)  # ±45° → ±1
+            # Clamp to [-1, 1].
+            yaw = max(-1.0, min(1.0, yaw))
+            pitch = max(-1.0, min(1.0, pitch))
+            roll = max(-1.0, min(1.0, roll))
+            get_bus().publish(
+                EventType.HEAD_POSE,
+                HeadPose(yaw=yaw, pitch=pitch, roll=roll),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("mouth.head_pose_error", error=str(exc))

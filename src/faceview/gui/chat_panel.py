@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from faceview.core.event_bus import get_bus
-from faceview.core.events import ChatMessage, EventType
+from faceview.core.events import ChatLogEntry, ChatMessage, EventType
 
 
 class ChatPanel(QWidget):
@@ -60,6 +60,19 @@ class ChatPanel(QWidget):
         send = QPushButton("Send", self)
         send.clicked.connect(self._on_submit)
         row.addWidget(send)
+
+        # Push-to-speak — hold to interrupt the avatar and capture
+        # speech without the TTS echo gate dropping it. Released =
+        # back to normal mute-during-TTS behaviour.
+        self.push_to_talk = QPushButton("🎤 Hold to talk", self)
+        self.push_to_talk.setToolTip(
+            "Hold while speaking to interrupt the avatar and route your "
+            "voice into chat (bypasses the echo gate)."
+        )
+        self.push_to_talk.setAutoDefault(False)
+        self.push_to_talk.pressed.connect(self._on_push_to_talk_pressed)
+        self.push_to_talk.released.connect(self._on_push_to_talk_released)
+        row.addWidget(self.push_to_talk)
         root.addLayout(row)
 
     def _wire_bus(self) -> None:
@@ -82,6 +95,25 @@ class ChatPanel(QWidget):
     def _on_user_msg_published(self, msg: ChatMessage) -> None:
         self._append_block("You", msg.content, color="#1a73e8")
 
+    def _main_window(self):
+        """Walk up the parent chain to find the MainWindow."""
+        w = self.parent()
+        while w is not None:
+            if hasattr(w, "push_to_speak_pressed"):
+                return w
+            w = w.parent()
+        return None
+
+    def _on_push_to_talk_pressed(self) -> None:
+        mw = self._main_window()
+        if mw is not None:
+            mw.push_to_speak_pressed()
+
+    def _on_push_to_talk_released(self) -> None:
+        mw = self._main_window()
+        if mw is not None:
+            mw.push_to_speak_released()
+
     def _on_token(self, token: str) -> None:
         if not self._streaming_buffer:
             self._append_block("Claude", "", color="#9b51e0")
@@ -94,6 +126,15 @@ class ChatPanel(QWidget):
     def _on_reply(self, msg: ChatMessage) -> None:
         if not self._streaming_buffer:
             self._append_block("Claude", msg.content, color="#9b51e0")
+        else:
+            # Streaming wrote tokens directly into the open block, so
+            # _append_block never logged this line — publish CHAT_LOG
+            # here so the monitor still captures Claude's full reply.
+            if msg.content:
+                get_bus().publish(
+                    EventType.CHAT_LOG,
+                    ChatLogEntry(who="Claude", text=msg.content, color="#9b51e0"),
+                )
         self._streaming_buffer = ""
         self._append_separator()
 
@@ -110,9 +151,23 @@ class ChatPanel(QWidget):
             f'</div>'
         )
         self.history.append(html)
+        # Mirror every rendered line onto the bus so the monitor endpoint
+        # can show the same transcript as the GUI without screen-scraping.
+        if body:
+            get_bus().publish(
+                EventType.CHAT_LOG,
+                ChatLogEntry(who=who, text=body, color=color),
+            )
 
     def _append_separator(self) -> None:
         self.history.append('<div style="color:#aaa;">—</div>')
+
+    def append_external_message(self, who: str, text: str, *, color: str = "#666") -> None:
+        """Display a message from a non-bus source (e.g. test-mode bots).
+
+        Bypasses the event bus so it can't re-trigger ``ClaudeClient.send_async``.
+        """
+        self._append_block(who, text, color=color)
 
     @staticmethod
     def _escape(s: str) -> str:

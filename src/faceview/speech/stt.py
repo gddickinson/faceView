@@ -61,9 +61,10 @@ class SttWorker:
                 continue
             x = audio.astype(np.float32) / 32768.0
             try:
+                # faster-whisper assumes 16 kHz input; sampling_rate kwarg
+                # was removed in newer versions.
                 segments, _info = self._model.transcribe(  # type: ignore[union-attr]
                     x,
-                    sampling_rate=settings.sample_rate,
                     beam_size=1,
                     vad_filter=False,
                 )

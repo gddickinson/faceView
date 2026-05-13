@@ -27,6 +27,7 @@ class EventType(Enum):
     LLM_TOKEN = auto()
     LLM_REPLY = auto()
     LLM_ERROR = auto()
+    CHAT_LOG = auto()        # any line that hit the chat panel (incl. test mode)
 
     # TTS
     TTS_SPEAK = auto()
@@ -34,11 +35,13 @@ class EventType(Enum):
     TTS_FINISHED = auto()
 
     # Vision
-    FRAME = auto()
+    FRAME = auto()           # real webcam frame (the user)
+    AVATAR_FRAME = auto()    # rendered avatar frame (Claude)
     PRESENCE = auto()
     IDENTITY = auto()
     EMOTION = auto()
     MOUTH_ACTIVITY = auto()
+    HEAD_POSE = auto()       # yaw/pitch/roll from face-mesh landmarks
 
     # Lifecycle / generic
     SCREENSHOT_TAKEN = auto()
@@ -95,6 +98,14 @@ class Emotion:
 
 
 @dataclass
+class HeadPose:
+    yaw: float       # left/right rotation, -1..1 (positive = turning right)
+    pitch: float     # up/down, -1..1 (positive = chin up)
+    roll: float      # tilt, -1..1 (positive = right ear toward shoulder)
+    ts: float = field(default_factory=time)
+
+
+@dataclass
 class MouthActivity:
     speaking: bool
     jaw_open: float
@@ -109,6 +120,15 @@ class StatusEvent:
     source: str
     message: str
     level: str = "info"  # info | warning | error
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class ChatLogEntry:
+    """One rendered line in the chat panel (any source)."""
+    who: str          # "You", "Claude", "Camera bot", "Avatar bot", "error", ...
+    text: str
+    color: str = "#666"
     ts: float = field(default_factory=time)
 
 

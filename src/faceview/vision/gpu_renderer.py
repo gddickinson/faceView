@@ -91,15 +91,17 @@ class _GpuMesh:
 class _GpuRenderer:
     """Persistent moderngl context + cached mesh VBOs."""
 
-    def __init__(self) -> None:
+    def __init__(self, ctx=None) -> None:
         try:
             import moderngl
         except ImportError as exc:
             raise MissingDependency("moderngl", "gpu") from exc
         self._mgl = moderngl
-        self.ctx = moderngl.create_context(standalone=True, require=330)
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
+        if ctx is None:
+            ctx = moderngl.create_context(standalone=True, require=330)
+            ctx.enable(moderngl.DEPTH_TEST)
+            ctx.enable(moderngl.BLEND)
+        self.ctx = ctx
         self.prog = self.ctx.program(vertex_shader=VERT_SHADER,
                                        fragment_shader=FRAG_SHADER)
         self._meshes: dict[str, _GpuMesh] = {}
@@ -203,8 +205,10 @@ class _GpuRenderer:
                         [0, sp_, cp_, 0], [0, 0, 0, 1]], dtype=np.float32)
         T_centre = np.eye(4, dtype=np.float32)
         T_centre[:3, 3] = -centre
-        S = np.eye(4, dtype=np.float32) * scale
-        S[3, 3] = 1.0
+        # Aspect-correct the X scale so non-square framebuffers
+        # (e.g. 640×480) don't stretch the head horizontally.
+        aspect = float(h) / float(w) if w > 0 else 1.0
+        S = np.diag([scale * aspect, scale, scale, 1.0]).astype(np.float32)
         # Orthographic: world coords already in [-1, 1] after S.
         # No flipY in the matrix — np.flipud after fbo.read() handles
         # moderngl's bottom-up convention.
