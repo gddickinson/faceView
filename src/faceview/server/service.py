@@ -87,6 +87,15 @@ class _GuiBridge(QObject):
         except Exception:  # noqa: BLE001
             pass
 
+    @Slot()
+    def refresh_llm_pill(self) -> None:
+        fn = getattr(self._window, "refresh_llm_pill", None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:  # noqa: BLE001
+                pass
+
     def reset(self) -> None:
         self._last_pix = None
         self._evt.clear()
@@ -242,7 +251,17 @@ class Service:
             actual = client.select_engine(engine, model=model)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
+        self._marshal_pill_refresh()
         return {"ok": True, "engine": actual, "model": model}
+
+    def _marshal_pill_refresh(self) -> None:
+        try:
+            QMetaObject.invokeMethod(
+                self.bridge, "refresh_llm_pill",
+                Qt.ConnectionType.QueuedConnection,
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def set_test_engine(self, engine: str, *, model: Optional[str] = None) -> dict[str, Any]:
         """Configure the test-mode bot engine (restarts test mode if running)."""
@@ -264,6 +283,7 @@ class Service:
                 restarted = True
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
+        self._marshal_pill_refresh()
         return {"ok": True, "engine": engine, "model": model, "restarted": restarted}
 
     _LIFECYCLE_SLOTS = {
@@ -288,6 +308,8 @@ class Service:
             )
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
+        if name == "test_mode":
+            self._marshal_pill_refresh()
         return {"ok": True, "name": name, "on": bool(on)}
 
     def shutdown(self) -> dict[str, Any]:

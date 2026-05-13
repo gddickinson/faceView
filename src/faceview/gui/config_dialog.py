@@ -65,12 +65,6 @@ _TEST_ENGINE_CHOICES = [
 
 _RIG_MODES = ["graded_3ring", "hard"]
 
-_ENGINE_PILL_COLOR = {
-    "anthropic": "#3a8",     # green — premium cloud
-    "ollama":    "#5e72e4",  # blue — local
-    "demo":      "#666",     # grey — stub
-}
-
 
 class ConfigDialog(QDialog):
     """Tabbed runtime-settings dialog."""
@@ -464,24 +458,12 @@ class ConfigDialog(QDialog):
     # ── status-pill plumbing ─────────────────────────────────────────
 
     def _refresh_status_pill_from_client(self) -> None:
-        client = getattr(self.main_window, "llm_client", None)
-        if client is not None and hasattr(client, "current_engine"):
-            self._update_status_pill(client.current_engine())
+        self._update_status_pill(None)
 
-    def _update_status_pill(self, engine: str) -> None:
+    def _update_status_pill(self, _engine_hint) -> None:
+        """Delegate to MainWindow's single source of truth so the pill
+        consistently reflects test-mode engine when test mode is on."""
         try:
-            from faceview.gui.status_panel import _model_short
-        except Exception:  # noqa: BLE001
-            return
-        if engine == "anthropic":
-            text = _model_short(settings.anthropic_model)
-        elif engine == "ollama":
-            text = os.environ.get("FACEVIEW_OLLAMA_MODEL") or "ollama"
-            text = text.split(":")[0]  # trim ":latest" etc for the pill
-        else:
-            text = "demo mode"
-        color = _ENGINE_PILL_COLOR.get(engine, "#666")
-        try:
-            self.main_window.status_panel.set_llm_label(text, color=color)
+            self.main_window.refresh_llm_pill()
         except Exception:  # noqa: BLE001
             pass

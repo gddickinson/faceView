@@ -24,20 +24,14 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QMainWindow,
-    QSplitter,
-    QStatusBar,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QMainWindow, QStatusBar
 
 from faceview.config import settings
 from faceview.core.logger import get_logger
 from faceview.gui.avatar_window import AvatarWindow
 from faceview.gui.camera_panel import CameraPanel
 from faceview.gui.chat_panel import ChatPanel
+from faceview.gui.layout import LayoutManager
 from faceview.gui.screenshotter import Screenshotter
 from faceview.gui.status_panel import StatusPanel
 from faceview.gui.transcript_panel import TranscriptPanel
@@ -96,25 +90,11 @@ class MainWindow(QMainWindow):
     # ── layout ──────────────────────────────────────────────────────
 
     def _build_layout(self) -> None:
-        right_col = QWidget(self)
-        right_v = QVBoxLayout(right_col)
-        right_v.setContentsMargins(0, 0, 0, 0)
-        right_v.addWidget(self.status_panel, 0)
-        right_v.addWidget(self.transcript, 1)
-
-        split = QSplitter(Qt.Orientation.Horizontal, self)
-        split.addWidget(self.camera)
-        split.addWidget(self.chat)
-        split.addWidget(right_col)
-        split.setStretchFactor(0, 5)
-        split.setStretchFactor(1, 5)
-        split.setStretchFactor(2, 3)
-
-        wrapper = QWidget(self)
-        h = QHBoxLayout(wrapper)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.addWidget(split)
-        self.setCentralWidget(wrapper)
+        # Every panel is wrapped in a QDockWidget so it can detach,
+        # tab, hide, or re-dock. LayoutManager also persists state via
+        # QSettings and exposes save/reset to the menu.
+        self.layout_mgr = LayoutManager(self)
+        self.layout_mgr.build()
 
     def _build_menu(self) -> None:
         m_file = self.menuBar().addMenu("&File")
@@ -176,6 +156,9 @@ class MainWindow(QMainWindow):
         a_mirror.setShortcut(QKeySequence("Ctrl+Shift+R"))
         a_mirror.triggered.connect(lambda: self.set_mirror_mode_enabled(not self.mirror_running()))
         m_tools.addAction(a_mirror)
+
+        m_window = self.menuBar().addMenu("&Window")
+        self.layout_mgr.install_menu(m_window)
 
         m_monitor = self.menuBar().addMenu("&Monitor")
         for kind, label, shortcut in (
@@ -522,6 +505,48 @@ class MainWindow(QMainWindow):
     def current_persona(self) -> str:
         return self._current_persona
 
+    def refresh_llm_pill(self) -> None:
+        """Update the LLM status pill to reflect what's *actually* driving
+        conversation right now. Test mode with a real engine wins over the
+        main client — the visible state should match the running bots.
+        """
+        from faceview.gui.status_panel import _model_short
+        colors = {"anthropic": "#3a8", "ollama": "#5e72e4", "demo": "#666"}
+
+        # Test mode with an LLM engine overrides the main pill.
+        if self.test_mode_running():
+            test_engine = (os.environ.get("FACEVIEW_TEST_ENGINE") or "canned").lower()
+            if test_engine in ("anthropic", "ollama", "demo"):
+                model = os.environ.get("FACEVIEW_TEST_MODEL") or ""
+                if test_engine == "anthropic":
+                    label = _model_short(model or settings.anthropic_model)
+                elif test_engine == "ollama":
+                    label = (model or "ollama").split(":")[0]
+                else:
+                    label = "demo"
+                self.status_panel.set_llm_label(
+                    f"⇄ {label}", color=colors.get(test_engine, "#666"),
+                )
+                return
+            if test_engine == "canned":
+                self.status_panel.set_llm_label("⇄ canned", color="#666")
+                return
+
+        # Otherwise: the main ClaudeClient.
+        client = getattr(self, "llm_client", None)
+        engine = client.current_engine() if (
+            client is not None and hasattr(client, "current_engine")
+        ) else None
+        if engine == "anthropic":
+            label = _model_short(settings.anthropic_model)
+        elif engine == "ollama":
+            model = os.environ.get("FACEVIEW_OLLAMA_MODEL") or "ollama"
+            label = model.split(":")[0]
+        else:
+            label = "demo mode"
+            engine = engine or "demo"
+        self.status_panel.set_llm_label(label, color=colors.get(engine, "#666"))
+
     def set_avatar_enabled(self, on: bool) -> None:
         if on and self._avatar_worker is None:
             self._start_avatar_worker(self._current_persona)
@@ -617,6 +642,7 @@ class MainWindow(QMainWindow):
         self._test_orchestrator.start()
         mode = "LLM (" + engine_name + ")" if engine_a is not None else "canned"
         self.statusBar().showMessage(f"Test mode: two bots conversing — {mode}")
+        self.refresh_llm_pill()
 
     def _build_test_engines(self) -> tuple[object | None, object | None, str]:
         """Construct two engines for test mode based on env vars / settings.
@@ -678,6 +704,7 @@ class MainWindow(QMainWindow):
                 pass
             self._user_avatar_worker = None
         self.statusBar().showMessage("Test mode stopped")
+        self.refresh_llm_pill()
 
     def _test_mode_partner_persona(self) -> str:
         # Pick a different-looking persona for the user-side bot so the
@@ -689,6 +716,12 @@ class MainWindow(QMainWindow):
     # ── lifecycle: clean shutdown ─────────────────────────────────
 
     def closeEvent(self, ev) -> None:  # noqa: N802 — Qt API
+        # Persist the dock layout before workers shut down so the next
+        # launch restores the user's last arrangement.
+        try:
+            self.layout_mgr.save(quiet=True)
+        except Exception:  # noqa: BLE001
+            pass
         for stopper in (
             self._stop_test_mode,
             lambda: self.set_camera_enabled(False),

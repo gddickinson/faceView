@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from faceview.core.event_bus import get_bus
-from faceview.core.events import ChatMessage, Emotion, EventType
+from faceview.core.events import Emotion, EventType
 from faceview.core.logger import get_logger
 from faceview.llm.conversation import Conversation
 
@@ -153,6 +153,10 @@ class TestConversation:
     # ── canned: original behaviour ───────────────────────────────────
 
     def _canned_loop(self) -> None:
+        # Same display path as LLM mode — do NOT publish
+        # CHAT_USER_MESSAGE / LLM_REPLY because those would re-trigger
+        # the main ClaudeClient subscription and produce a real Claude
+        # reply interleaved with the canned ping-pong.
         bus = get_bus()
         sides = itertools.cycle(["user", "claude"])
         line_iter = itertools.cycle(list(SEED_PROMPTS))
@@ -162,12 +166,13 @@ class TestConversation:
             mood = _guess_emotion(text)
             if side == "user":
                 self.user_worker.avatar.say(text)
-                bus.publish(EventType.CHAT_USER_MESSAGE, ChatMessage("user", text))
-                bus.publish(EventType.EMOTION, Emotion(label=mood, confidence=0.7))
+                who, color = self.label_a, self.color_a
             else:
                 self.avatar_worker.avatar.say(text)
-                bus.publish(EventType.LLM_REPLY, ChatMessage("assistant", text))
-                bus.publish(EventType.EMOTION, Emotion(label=mood, confidence=0.7))
+                who, color = self.label_b, self.color_b
+            if self.chat_panel is not None:
+                self.chat_panel.append_external_message(who, text, color=color)
+            bus.publish(EventType.EMOTION, Emotion(label=mood, confidence=0.7))
             self._wait_paced(text)
 
     # ── LLM-driven: each bot has its own engine + history ────────────

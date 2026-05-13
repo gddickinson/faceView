@@ -57,6 +57,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     from faceview.llm.claude_client import ClaudeClient
     client = ClaudeClient()
     window.llm_client = client
+    # Show the actual engine on the LLM pill from boot, not just the
+    # initial label baked into StatusPanel.__init__ (which assumes
+    # anthropic-or-demo).
+    window.refresh_llm_pill()
 
     bus = get_bus()
     bus.subscribe(
