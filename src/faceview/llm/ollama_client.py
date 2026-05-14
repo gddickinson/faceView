@@ -252,6 +252,22 @@ class OllamaEngine:
                     except ValueError:
                         args = {}
                 log.info("ollama.tool_invoke", tool=name, args=args)
+                # PR2 — per-tool consent.
+                try:
+                    from faceview.core.consent import ConsentStore
+                    if not ConsentStore.shared().is_allowed(
+                        name, engine="ollama",
+                    ):
+                        result = ConsentStore.shared().refuse_message(name)
+                        log.info("ollama.tool_blocked", tool=name)
+                        messages.append({
+                            "role": "tool",
+                            "name": name,
+                            "content": result,
+                        })
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
                 if (name == "look_at_camera"
                         and grabber is not None and vlm is not None):
                     result = run_look_ollama(

@@ -14,6 +14,7 @@ is more useful for chat answers.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -23,6 +24,37 @@ from faceview.core.logger import get_logger
 
 
 log = get_logger("depth")
+
+
+# torch.hub repos that MiDaS pulls transitively. We append these to
+# the trusted-list file so the interactive y/N prompt — which never
+# gets answered from a background thread — doesn't kill the load.
+_HUB_TRUSTED_REPOS = (
+    "intel-isl_MiDaS",
+    "rwightman_gen-efficientnet-pytorch",
+)
+
+
+def _pre_trust_hub_repos(torch_mod) -> None:
+    try:
+        hub_dir = Path(torch_mod.hub.get_dir())
+        hub_dir.mkdir(parents=True, exist_ok=True)
+        trusted = hub_dir / "trusted_list"
+        existing: set[str] = set()
+        if trusted.exists():
+            existing = {
+                line.strip()
+                for line in trusted.read_text().splitlines()
+                if line.strip()
+            }
+        missing = [r for r in _HUB_TRUSTED_REPOS if r not in existing]
+        if missing:
+            with trusted.open("a", encoding="utf-8") as f:
+                for repo in missing:
+                    f.write(repo + "\n")
+            log.info("depth.trusted_repos_added", added=missing)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("depth.trust_list_write_failed", error=str(exc))
 
 
 class DepthEstimator:
@@ -52,8 +84,15 @@ class DepthEstimator:
         with self._lock:
             if self._model is not None:
                 return
+            # Pre-trust every torch.hub repo MiDaS pulls in
+            # (transitively, through its own torch.hub.load calls).
+            # The `trust_repo=True` flag on our outer call covers
+            # intel-isl/MiDaS but NOT its deps; without this fix
+            # we got an interactive y/N prompt from a background
+            # thread, which silently EOF'd and tanked depth on
+            # every tick.
+            _pre_trust_hub_repos(torch)
             log.info("depth.loading_midas")
-            # MiDaS via torch.hub — small variant for speed.
             try:
                 model = torch.hub.load(
                     "intel-isl/MiDaS", "MiDaS_small",

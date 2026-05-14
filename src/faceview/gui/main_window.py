@@ -218,6 +218,12 @@ class MainWindow(QMainWindow):
         m_window = self.menuBar().addMenu("&Window")
         self.layout_mgr.install_menu(m_window)
 
+        m_help = self.menuBar().addMenu("&Help")
+        a_shortcuts = QAction("Keyboard shortcuts…", self)
+        a_shortcuts.setShortcut(QKeySequence("Ctrl+/"))
+        a_shortcuts.triggered.connect(self._open_shortcuts_dialog)
+        m_help.addAction(a_shortcuts)
+
         m_monitor = self.menuBar().addMenu("&Monitor")
         for kind, label, shortcut in (
             ("audio",      "Audio waveform / VAD…", "Ctrl+1"),
@@ -289,6 +295,14 @@ class MainWindow(QMainWindow):
         self.room_map_window.show()
         self.room_map_window.raise_()
         self.room_map_window.activateWindow()
+
+    def _open_shortcuts_dialog(self) -> None:
+        from faceview.gui.shortcuts_dialog import ShortcutsDialog
+        if not hasattr(self, "_shortcuts_dialog") or self._shortcuts_dialog is None:
+            self._shortcuts_dialog = ShortcutsDialog(self)
+        self._shortcuts_dialog.show()
+        self._shortcuts_dialog.raise_()
+        self._shortcuts_dialog.activateWindow()
 
     def _open_persona_picker(self) -> None:
         from faceview.gui.persona_picker import PersonaPicker

@@ -156,6 +156,25 @@ class AnthropicEngine:
                 name = blk.get("name", "")
                 log.info("anthropic.tool_use", tool=name,
                          input=blk.get("input") or {})
+                # PR2 — per-tool consent. Blocked tools return a
+                # short refusal so the model can relay it.
+                try:
+                    from faceview.core.consent import ConsentStore
+                    if not ConsentStore.shared().is_allowed(
+                        name, engine="anthropic",
+                    ):
+                        content = [{"type": "text",
+                                    "text": ConsentStore.shared(
+                                    ).refuse_message(name)}]
+                        log.info("anthropic.tool_blocked", tool=name)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tu_id,
+                            "content": content,
+                        })
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
                 if name == "look_at_camera" and grabber is not None:
                     inp = blk.get("input") or {}
                     content = run_look_anthropic(

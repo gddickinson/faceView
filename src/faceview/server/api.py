@@ -3,14 +3,20 @@
 Bound to 127.0.0.1 only — this is a local control plane for a Claude Code
 session running on the same machine, not a public API. Endpoints intentionally
 mirror the :class:`Service` ops 1:1 so the MCP server can stay just as thin.
+
+Optional token auth (S7): set ``FACEVIEW_API_TOKEN`` and every request
+must carry ``X-API-Token: <token>`` (or ``Authorization: Bearer <token>``).
+Unset → no auth, same as before. Local-only by default so this is
+defence-in-depth for shared-host scenarios.
 """
 
 from __future__ import annotations
 
+import os
 import threading
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from faceview.config import settings
@@ -74,8 +80,55 @@ class LifecycleRequest(BaseModel):
     on: bool
 
 
+class WebhookRegisterRequest(BaseModel):
+    url: str
+    events: list[str] = []
+
+
+class ConsentToolRequest(BaseModel):
+    tool: str
+    decision: str  # "allow" | "block" | "prompt"
+
+
+class ConsentTrustRequest(BaseModel):
+    on: bool
+
+
+def _expected_token() -> str | None:
+    """Read FACEVIEW_API_TOKEN at request time so toggling it doesn't
+    need a restart. Empty / unset → no auth."""
+    raw = os.environ.get("FACEVIEW_API_TOKEN") or ""
+    raw = raw.strip()
+    return raw or None
+
+
+# Endpoints that bypass auth (so SDKs can probe + shutdown stays
+# reachable from the GUI process even if it forgets the token).
+_AUTH_BYPASS = {"/healthz"}
+
+
 def build_app(service: Service) -> FastAPI:
     app = FastAPI(title="faceView Control API", version="0.1.0")
+
+    @app.middleware("http")
+    async def _auth_middleware(request: Request, call_next):
+        expected = _expected_token()
+        if expected is None:
+            # Auth not configured — open as before.
+            return await call_next(request)
+        if request.url.path in _AUTH_BYPASS:
+            return await call_next(request)
+        # Accept either header form.
+        header = (request.headers.get("x-api-token")
+                  or request.headers.get("authorization") or "")
+        if header.lower().startswith("bearer "):
+            header = header[7:]
+        if header.strip() != expected:
+            return _json_response(
+                {"ok": False, "error": "missing or invalid API token"},
+                status=401,
+            )
+        return await call_next(request)
 
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
@@ -179,10 +232,79 @@ def build_app(service: Service) -> FastAPI:
     def set_slider(req: SliderRequest) -> dict[str, Any]:
         return service.set_slider(req.key, req.value)
 
+    @app.get("/chat/export")
+    def chat_export(n: int = 10_000) -> dict[str, Any]:
+        return service.export_chat(n=n)
+
+    # ── webhooks (I3) ────────────────────────────────────────
+
+    @app.get("/webhooks")
+    def webhooks_list() -> dict[str, Any]:
+        from faceview.core.webhooks import WebhookManager
+        subs = WebhookManager.shared().list_subs()
+        return {"ok": True, "subs": [
+            {"id": s.id, "url": s.url, "events": s.events,
+             "created_at": s.created_at}
+            for s in subs
+        ]}
+
+    @app.post("/webhooks")
+    def webhooks_register(req: WebhookRegisterRequest) -> dict[str, Any]:
+        from faceview.core.webhooks import WebhookManager
+        try:
+            sub = WebhookManager.shared().register(req.url, req.events)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"ok": True, "id": sub.id, "url": sub.url,
+                "events": sub.events}
+
+    @app.delete("/webhooks/{sub_id}")
+    def webhooks_unregister(sub_id: str) -> dict[str, Any]:
+        from faceview.core.webhooks import WebhookManager
+        ok = WebhookManager.shared().unregister(sub_id)
+        if not ok:
+            raise HTTPException(status_code=404,
+                                 detail=f"no webhook with id {sub_id}")
+        return {"ok": True, "removed": sub_id}
+
+    # ── consent (PR2) ────────────────────────────────────────
+
+    @app.get("/consent")
+    def consent_get() -> dict[str, Any]:
+        from faceview.core.consent import ConsentStore
+        c = ConsentStore.shared()
+        return {
+            "ok": True,
+            "trust_remote": c.trust_remote(),
+            "tools": dict(c._tool_decisions),
+        }
+
+    @app.post("/consent/tool")
+    def consent_set_tool(req: ConsentToolRequest) -> dict[str, Any]:
+        from faceview.core.consent import ConsentStore
+        if req.decision not in ("allow", "block", "prompt"):
+            raise HTTPException(status_code=400,
+                                 detail="decision must be allow/block/prompt")
+        ConsentStore.shared().set_tool_decision(req.tool, req.decision)
+        return {"ok": True}
+
+    @app.post("/consent/trust_remote")
+    def consent_trust_remote(req: ConsentTrustRequest) -> dict[str, Any]:
+        from faceview.core.consent import ConsentStore
+        ConsentStore.shared().set_trust_remote(bool(req.on))
+        return {"ok": True, "trust_remote": req.on}
+
     # OpenAI-compat /v1/chat/completions + /v1/models.
     app.include_router(_openai_router(service))
 
     return app
+
+
+def _json_response(body: dict[str, Any], status: int = 200):
+    """Tiny helper since the middleware returns before FastAPI's
+    auto-serialisation kicks in."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(content=body, status_code=status)
 
 
 def start_api_server(window) -> threading.Thread:

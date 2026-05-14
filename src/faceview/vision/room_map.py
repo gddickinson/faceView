@@ -112,6 +112,10 @@ class RoomMapWorker:
         self._last_objects: list = []
         # Smoothed (x, z) per label.
         self._smoothed: dict[str, RoomMapItem] = {}
+        # Depth-failure backoff — after this many consecutive failures
+        # we stop trying so the log isn't flooded. Reset on success.
+        self._depth_failures: int = 0
+        self._depth_disabled: bool = False
         # Subscribe immediately so we have state ready when activated.
         bus = get_bus()
         bus.subscribe(EventType.OBJECTS, self._on_objects)
@@ -197,14 +201,28 @@ class RoomMapWorker:
                     ),
                 )
             return
+        if self._depth_disabled:
+            return
         try:
             from faceview.vision.depth import DepthEstimator
             depth = DepthEstimator.shared().depth_map(frame)
         except Exception as exc:  # noqa: BLE001
-            log.warning("room_map.depth_failed", error=str(exc))
+            self._depth_failures += 1
+            log.warning("room_map.depth_failed",
+                        error=str(exc),
+                        failures=self._depth_failures)
+            if self._depth_failures >= 5:
+                self._depth_disabled = True
+                log.warning(
+                    "room_map.depth_disabled",
+                    reason="too many depth failures; restart faceView "
+                           "after fixing the depth model to re-enable",
+                )
             return
         if depth is None or depth.size == 0:
             return
+        # Reset the failure counter on success.
+        self._depth_failures = 0
         # MiDaS: higher value = nearer. We invert to "distance proxy":
         # objects at the max-depth pixel become near 0; far objects
         # → near 1. Stays relative-units until P16 calibration.

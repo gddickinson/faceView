@@ -632,6 +632,12 @@ See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for the
 most common issues and fixes — camera/mic permissions, broken VLMs,
 demo-mode fallback, port conflicts, persona swap freezes, etc.
 
+### Driving from Claude Code
+
+See [`docs/MCP_RECIPES.md`](docs/MCP_RECIPES.md) for end-to-end
+recipes — opening the room map, watching a code review, two-bot
+critique loops, per-region OCR, persistent cross-persona naming.
+
 ### Choosing the right models
 
 See [`docs/MODELS.md`](docs/MODELS.md) for recommended Anthropic

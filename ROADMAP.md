@@ -85,7 +85,7 @@ Track legend:
 | S3 | S | Conversation persistence (sqlite or JSON) | Save chat history per-day; load on startup; expose `clear_history` and `export_history`. |
 | A3 | A | Subtle head motion during speech | Small yaw/pitch nod tied to phoneme stress + word boundaries. |
 | A4 | A | Eye-contact / target gaze | Avatar can be told "look at point" or "look at user"; saccades respect. |
-| R3 | R | Pre-commit hooks (ruff + mypy) | Configure once; speeds future PRs. |
+| R3 | R | Pre-commit hooks (ruff + mypy) | Configure once; speeds future PRs. **done** — `[tool.ruff]` + `[tool.pyright]` in pyproject + `.pre-commit-config.yaml`. |
 | R4 | R | macOS install troubleshooting in README | Camera/mic permission prompts, conda env steps, common faster-whisper download issues. |
 | R5 | R | Decompose `gui/main_window.py` (978 lines) into controllers | Lifecycle controllers (camera / audio / tts / avatar / test-mode), echo-gate, push-to-speak, monitor windows. Target ≤ 300 lines per file. |
 | R6 | R | Type-check CI (pyright in pre-commit) | `pyproject.toml` already has pyright dep; turn it on in CI and fix existing failures. |
@@ -102,9 +102,9 @@ Track legend:
 | U3 | U | Conversation search | Ctrl+F over the chat history with highlight + next/prev. **done** — overlay find bar with wrap-around, pre-fill from selection. |
 | U4 | U | Keyboard shortcuts inventory | Cmd+Enter to send, push-to-talk global hotkey, persona-switch (Cmd+1..8), camera/mic/TTS toggles. Document the list in a `Help → Shortcuts` dialog. |
 | U5 | U | Live "Claude is working" indicator | While a tool is mid-flight, surface `vision.tool.* in progress (n s)` in the status bar + a translucent overlay on the chat panel. |
-| S7 | S | API token authentication | Opt-in `FACEVIEW_API_TOKEN`; any local process can hit the HTTP API today. |
+| S7 | S | API token authentication | Opt-in `FACEVIEW_API_TOKEN`; any local process can hit the HTTP API today. **done** — middleware in `server/api.py` with `/healthz` bypass; `Authorization: Bearer` or `X-API-Token`. |
 | I1 | I | OpenAI-compat shim on `/v1/chat/completions` | Lets external tools (Cursor, OpenAI SDK callers) treat faceView as a local LLM endpoint that has webcam tools built in. |
-| I2 | I | Published MCP recipes for Claude Code | Tutorials + sample MCP-driven workflows: "Claude Code sees my error message via webcam", "Claude Code captures screen region and reads code". The plumbing exists, the docs don't. |
+| I2 | I | Published MCP recipes for Claude Code | Tutorials + sample MCP-driven workflows: "Claude Code sees my error message via webcam", "Claude Code captures screen region and reads code". The plumbing exists, the docs don't. **done** — `docs/MCP_RECIPES.md` with 7 recipes. |
 | D1 | R | Troubleshooting page | Camera permission, mic permission, missing API key, ollama down, stale VLM, missing extras. Add to `docs/TROUBLESHOOTING.md` + linked from README. |
 | D2 | R | Model-choice guide for Ollama | Recommended chat + VLM combos with first-token latencies measured on M-series. Reduces the trial-and-error of picking models. |
 
@@ -125,7 +125,7 @@ Track legend:
 | X2 | X | Streaming TTS (Kokoro / Piper) | Replace pyttsx3 demo; keep pyttsx3 as fallback. **done** — Kokoro is the default engine |
 | X3 | X | Web UI mode (server + browser frontend) | Headless faceView, browser renders via WS. |
 | P6 | P | Multi-face identity tracking | Today `IdentityRecognizer` returns the largest face's label only. Publish a list of `(bbox, name, sim)` per face so the LLM can answer "who is on the left?". |
-| P7 | P | Rolling video frame buffer | Keep the last N seconds of frames in a ring buffer so tools (action recognition, "what just happened?") can read short clips, not just stills. |
+| P7 | P | Rolling video frame buffer | Keep the last N seconds of frames in a ring buffer so tools (action recognition, "what just happened?") can read short clips, not just stills. **done** — `vision/frame_buffer.py` singleton; bounded by seconds × frames × bytes. |
 | P8 | P | Real action recognition | Small video classifier (MoViNet-stream / VideoMAE-small) on the frame buffer. Returns "typing", "drinking", "waving" etc. |
 | P9 | P | Layout-aware OCR + document understanding | Replace EasyOCR with PaddleOCR / Surya; preserve column order, table layout. Adds a `summarise_document` tool that runs the result through the chat LLM. |
 | P10 | P | Screen-region capture as a vision source | New `vision/screen.py` worker — capture a chosen monitor or rectangle and publish as a second FRAME stream (`SCREEN_FRAME`). Lets the LLM see code, slides, browser tabs. |
@@ -136,20 +136,20 @@ Track legend:
 | **P15** | **P** | **Room-map UI — `gui/room_map_panel.py` + View menu** | Standalone window showing a top-down plan view: camera at origin, field-of-view cone, persistent dots for each detected/tracked object labelled with class + distance, motion trails per object, the user's face direction (head-pose yaw) as a heading arrow. Accessed from **View → Room map…** with shortcut `Ctrl+Shift+Z`. Subscribes to `ROOM_MAP` for updates. Distance reported in "rel units" by default; switches to metres once P16 calibration is done. **done** |
 | **P16** | **P** | **Camera intrinsics calibration** | One-number scale calibration: pick an object on the live map, type its real distance in metres; we compute `scale = metres / rel_units` and persist to `.faceview/camera_calibration.json`. RoomMap published in metres thereafter. Surfaced as "Calibrate camera…" in the Map window. **done** |
 | **P17** | **P** | **LLM tool: `describe_room_layout()`** | New tool routed through both engines. Reads `RoomMapStore`, sorts items by distance, classifies direction (directly ahead / to the right / behind / etc.), formats as "Room layout: cup is 0.8 m ahead; laptop is 1.5 m to the right; …". No new VLM call. **done** |
-| C7 | C | Cross-persona factual transfer | Facts about the user (their name, what they do) live above the persona layer; only stylistic memories are persona-scoped. |
+| C7 | C | Cross-persona factual transfer | Facts about the user (their name, what they do) live above the persona layer; only stylistic memories are persona-scoped. **done** — `_shared.json` bag in `.faceview/memory/`; `share_fact()` writes to both. |
 | C8 | C | Persona emotional feedback loop | User's emotion (deepface) influences the persona's emotional ledger over time — a kind person notices when the user is sad. |
-| C9 | C | Memory consolidation / forgetting curve | Background sweep that downgrades stale episodic memories, promotes frequently-rehearsed ones to semantic facts. |
-| C10 | C | Conversation export | Save a single chat (with memory + perception traces) to JSON / PDF. Companion to incognito mode. |
-| A47 | A | Audio-driven lip-sync | Decode visemes from the generated TTS waveform rather than from the text phonemes — more accurate timing for emphasised syllables. |
+| C9 | C | Memory consolidation / forgetting curve | Background sweep that downgrades stale episodic memories, promotes frequently-rehearsed ones to semantic facts. **done** — `CognitionStore.run_forgetting_pass()` drops old+unrehearsed+low-sig, promotes recalled≥5 into `self/recalled_*` semantic facts. |
+| C10 | C | Conversation export | Save a single chat (with memory + perception traces) to JSON / PDF. Companion to incognito mode. **done** — `GET /chat/export` returns chat + cognition snapshot as JSON. |
+| A47 | A | Audio-driven lip-sync | Decode visemes from the generated TTS waveform rather than from the text phonemes — more accurate timing for emphasised syllables. **done** — Kokoro emits AUDIO_AMPLITUDE envelope; `AvatarController.audio_jaw_bias()` exposes a smoothed jaw-open bias that sim_camera workers consume via `set_audio_jaw_bias`. |
 | A48 | A | Shared canvas as a second avatar output | Avatar can draw, annotate a screenshot, or render markdown into a side surface — multimodal output, not just speech. |
 | U6 | U | Dark mode + theme system | Honour macOS appearance + an explicit override. Per-pill colour tokens. |
 | U7 | U | Status bar dashboard | Live perception preview + last-turn latency + per-tool spend; one-line densification of what's now spread across the Perception panel + LLM pill. |
 | U8 | U | Accessibility labels (VoiceOver) | All dock widgets + pills get descriptive labels; ensure keyboard navigation reaches every control. |
 | U9 | U | Mobile/tablet companion (read-only) | Phone shows the chat + perception narrative streamed over the existing HTTP API. No new servers — just a SwiftUI / React Native client. |
-| I3 | I | Webhook subscriptions for bus events | Third-party tools register a URL; faceView POSTs PRESENCE/EMOTION/GESTURE/etc payloads on change. Enables Home Assistant / Stream Deck integrations. |
+| I3 | I | Webhook subscriptions for bus events | Third-party tools register a URL; faceView POSTs PRESENCE/EMOTION/GESTURE/etc payloads on change. Enables Home Assistant / Stream Deck integrations. **done** — `core/webhooks.py` + `POST/GET/DELETE /webhooks`; high-volume events excluded by default. |
 | I4 | I | Plugin system for third-party tools | Drop-in `.faceview/plugins/*.py` declares a tool name, schema, executor; auto-registered into both engine tool catalogues. |
 | PR1 | PR | Encrypted face templates at rest | `.faceview/people/*.npz` encrypted with a Keychain-stored key. Same for the legacy `owner.npy`. |
-| PR2 | PR | Per-tool consent dial | Default-on for cheap tools, default-off for ones that send pixels off-device (Anthropic vision content blocks). Surface a one-click "trust this tool" toggle. |
+| PR2 | PR | Per-tool consent dial | Default-on for cheap tools, default-off for ones that send pixels off-device (Anthropic vision content blocks). Surface a one-click "trust this tool" toggle. **done** — `core/consent.py` ConsentStore + `/consent/*` HTTP; engines check before dispatch and the LLM relays a refusal message when blocked. |
 | PR3 | PR | Content filter on user input | Block obvious prompt-injection / jailbreak patterns before they reach the LLM. Off by default; on for "shared device" mode. |
 | X4 | X | Whisper-large STT option | Pluggable STT backend so non-English / accented users get higher-quality transcription. Cost: another big model. |
 | X5 | X | Cross-platform (Linux + Windows) | Mostly works on Linux already (camera + Qt); needs CI matrix + AVFoundation-equivalent backends for capture worker. |

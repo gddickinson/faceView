@@ -49,3 +49,20 @@ src/faceview/assets/anatomy_meshes/
 # ICT-FaceKit npz — 23 MB, generated from a local clone via
 # `python -m tools.build_ict_blendshapes /path/to/ICT-FaceKit/`.
 src/faceview/assets/data/ict/
+
+# Per-user runtime state — memory, telemetry, downloaded TTS models,
+# learned faces, calibration, plugins. None of this belongs in
+# version control.
+.faceview/
+
+# Scratch output from earlier anatomy / effect / skeleton work
+# sessions; preserved as untracked but never to be committed.
+docs/painting/
+docs/effect_relabel/
+docs/extreme_pose_relabel/
+docs/skeleton_relabel/
+src/faceview/assets/skeleton/
+src/faceview/assets/body_part_labels_*.npz.bak
+
+# Local Claude / agent state
+.claude/scheduled_tasks.lock

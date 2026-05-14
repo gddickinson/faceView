@@ -392,6 +392,42 @@ class Service:
             })
         return out
 
+    def export_chat(self, n: int = 10_000) -> dict[str, Any]:
+        """C10 — export the chat log + cognition snapshot as JSON.
+
+        Captures everything an external tool needs to preserve a
+        session: the chat panel transcript (up to ``n`` lines), the
+        current cognition narrative + structured episodic / semantic
+        / emotional layers, the active persona + engine, and a UTC
+        timestamp. Caller can save the resulting dict directly."""
+        client = getattr(self.window, "llm_client", None)
+        store = getattr(client, "memory", None) if client is not None else None
+        engine = (client.current_engine() if (
+            client is not None and hasattr(client, "current_engine")
+        ) else None)
+        chat = self.list_chat_log(n=n)
+        memory: dict[str, Any] = {}
+        if store is not None:
+            try:
+                memory = {
+                    "summary": store.summary(),
+                    "narrate": store.narrate_for_prompt(),
+                    "episodic": list(store.episodic),
+                    "per_person": dict(store.per_person),
+                    "semantic": dict(store.semantic),
+                    "emotional": store.current_emotions(),
+                }
+            except Exception as exc:  # noqa: BLE001
+                memory = {"error": str(exc)}
+        return {
+            "ok": True,
+            "exported_at": time.time(),
+            "persona": (store.persona if store is not None else None),
+            "engine": engine,
+            "chat": chat,
+            "memory": memory,
+        }
+
     def monitor_snapshot(self, *, chat_n: int = 20, events_n: int = 30) -> dict[str, Any]:
         """One-shot view for the /monitor endpoint — engines, workers,
         recent chat, recent events. All fields are best-effort: missing

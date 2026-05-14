@@ -123,6 +123,12 @@ class CognitionStore:
     """Per-persona persistent cognition: episodic + semantic + emotional
     + character + relationship progression."""
 
+    # Shared cross-persona facts about the user (C7). Lives at
+    # ~/.faceview/memory/_shared.json so every persona reads it when
+    # narrating identity context — your name should follow you when
+    # you swap from Claude to Iris to Theo.
+    SHARED_FILE = "_shared.json"
+
     SCHEMA_VERSION = 3
 
     # Class-level "global" incognito flag — applies to every loaded
@@ -179,6 +185,52 @@ class CognitionStore:
         d.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", persona) or "default"
         return d / f"{safe}.json"
+
+    # ── shared cross-persona facts (C7) ────────────────────────
+
+    @classmethod
+    def _shared_path(cls) -> Path:
+        d = data_dir() / "memory"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / cls.SHARED_FILE
+
+    @classmethod
+    def shared_facts(cls) -> dict[str, Any]:
+        """Read the shared cross-persona fact bag. Keys are the same
+        as ``semantic`` subjects (``player``, ``history``) but only
+        the ones flagged ``shared=True`` show up here."""
+        p = cls._shared_path()
+        if not p.exists():
+            return {}
+        try:
+            return json.loads(p.read_text())
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+
+    @classmethod
+    def _write_shared_facts(cls, facts: dict[str, Any]) -> None:
+        p = cls._shared_path()
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(facts, indent=2))
+        tmp.replace(p)
+
+    def share_fact(self, subject: str, key: str, value: Any,
+                    *, confidence: float = 0.9) -> None:
+        """Set a fact AND replicate it to the shared bag so every
+        persona sees it. Used by record_chat_turn for player.name
+        (your name) so swapping persona doesn't lose it."""
+        self.set_fact(subject, key, value, confidence=confidence)
+        try:
+            facts = type(self).shared_facts()
+            bucket = facts.setdefault(subject, {})
+            bucket[key] = {
+                "value": value,
+                "confidence": float(confidence),
+                "updated": _time.time(),
+            }
+            type(self)._write_shared_facts(facts)
+        except OSError:
+            pass
 
     @classmethod
     def load(cls, persona: str) -> "CognitionStore":
@@ -314,6 +366,67 @@ class CognitionStore:
                 self.per_person[name] = bucket[:EPISODIC_TRIM_TO]
                 self._last_consolidate = now
 
+    # ── memory consolidation / forgetting curve (C9) ─────────────
+
+    def run_forgetting_pass(self) -> int:
+        """Background sweep that drops low-retention episodic
+        entries even when we're well under the hard cap.
+
+        Heuristic:
+          * Old (>180 days), unrehearsed (recalled=0), and low-
+            significance (≤2) entries are dropped.
+          * Frequently-rehearsed memories (recalled ≥ 5) are
+            promoted into semantic facts under ``self/recalled_*``
+            so they survive consolidation.
+
+        Returns the number of entries dropped. Designed to be
+        called on a slow timer (every few minutes) from a
+        supervisor / app-level scheduler — NOT from inside
+        record_chat_turn (which should stay fast).
+        """
+        now = _time.time()
+        before = len(self.episodic)
+        kept: list[dict] = []
+        for mem in self.episodic:
+            age_d = (now - mem.get("ts", now)) / SECONDS_PER_DAY
+            sig = int(mem.get("significance", 3))
+            recalled = int(mem.get("recalled", 0))
+            # Promote well-rehearsed memories.
+            if recalled >= 5:
+                key = f"recalled_{int(mem.get('ts', 0))}"
+                self.set_fact(
+                    "self", key,
+                    str(mem.get("text", ""))[:180],
+                    confidence=min(0.95, 0.6 + 0.05 * recalled),
+                )
+            # Drop forgettable ones.
+            if (age_d > 180 and recalled == 0 and sig <= 2):
+                continue
+            kept.append(mem)
+        # Same sweep across per-person buckets.
+        for name, bucket in list(self.per_person.items()):
+            new_bucket: list[dict] = []
+            for mem in bucket:
+                age_d = (now - mem.get("ts", now)) / SECONDS_PER_DAY
+                sig = int(mem.get("significance", 3))
+                recalled = int(mem.get("recalled", 0))
+                if recalled >= 5:
+                    key = f"recalled_{name}_{int(mem.get('ts', 0))}"
+                    self.set_fact(
+                        "self", key,
+                        str(mem.get("text", ""))[:180],
+                        confidence=min(0.95, 0.6 + 0.05 * recalled),
+                    )
+                if (age_d > 180 and recalled == 0 and sig <= 2):
+                    continue
+                new_bucket.append(mem)
+            self.per_person[name] = new_bucket
+        self.episodic = kept
+        dropped = before - len(kept)
+        if dropped:
+            self._dirty = True
+        return dropped
+
     def recall(self, context: str, *, limit: int = 5) -> list[dict]:
         """Score memories by recency × significance × emotion × relevance × rehearsal."""
         if not self.episodic:
@@ -426,7 +539,9 @@ class CognitionStore:
         m = re.search(r"my name is ([A-Z][a-zA-Z'\-]{1,40})",
                       user_text, re.IGNORECASE)
         if m:
-            self.set_fact("player", "name", m.group(1).strip(), confidence=1.0)
+            # C7 — names propagate across personas via the shared bag.
+            self.share_fact("player", "name", m.group(1).strip(),
+                             confidence=1.0)
         if _PREFERENCE_RE.search(user_text):
             self.set_fact("player",
                           f"pref_{int(_time.time())}",
@@ -556,6 +671,19 @@ class CognitionStore:
         label, intensity = self.dominant_emotion()
         if intensity > 0:
             sections.append(f"[Mood] {label} ({int(intensity*100)}%).")
+
+        # C7 — fold any shared cross-persona facts into the local
+        # view so a persona that doesn't have its own copy of the
+        # user's name still sees it.
+        try:
+            shared = type(self).shared_facts() or {}
+            for subject, bucket in shared.items():
+                local = self.semantic.setdefault(subject, {})
+                for k, v in bucket.items():
+                    if k not in local:
+                        local[k] = v
+        except Exception:  # noqa: BLE001
+            pass
 
         # Facts about player + history
         player_facts = self.all_facts("player")

@@ -18,9 +18,12 @@ directly; the controller drives behaviour, not the menu state.
 from __future__ import annotations
 
 import os
+import threading
+import time
 from typing import TYPE_CHECKING, Optional
 
-from faceview.core.events import EventType
+from faceview.core.event_bus import get_bus
+from faceview.core.events import AudioAmplitude, EventType
 from faceview.gui.controllers.base import BaseController
 
 if TYPE_CHECKING:
@@ -35,6 +38,16 @@ class AvatarController(BaseController):
         self._avatar_worker: Optional["SimCameraWorker"] = None
         self._mirror_state = None
         self._current_persona = self._default_persona()
+        # A47 — audio-driven lip-sync bias. Updated by AUDIO_AMPLITUDE
+        # events while TTS is playing; the avatar's render loop reads
+        # this via :meth:`audio_jaw_bias` and folds it into jaw_open
+        # so the mouth shape tracks the actual TTS waveform amplitude
+        # rather than only the text-predicted phoneme stream.
+        self._audio_amp: float = 0.0
+        self._audio_amp_ts: float = 0.0
+        get_bus().subscribe(
+            EventType.AUDIO_AMPLITUDE, self._on_audio_amplitude,
+        )
 
     # ── public API: avatar lifecycle ──────────────────────────────
 
@@ -167,6 +180,35 @@ class AvatarController(BaseController):
             get_service().bind_camera_worker(self._avatar_worker)
         except Exception:  # noqa: BLE001
             pass
+
+    # ── A47 audio-driven lip-sync bias ───────────────────────────
+
+    def _on_audio_amplitude(self, payload) -> None:
+        if not isinstance(payload, AudioAmplitude):
+            return
+        # Light smoothing so a sub-30 ms drop to zero doesn't snap
+        # the mouth shut between syllables.
+        self._audio_amp = (
+            0.6 * self._audio_amp + 0.4 * float(payload.amplitude)
+        )
+        self._audio_amp_ts = time.time()
+        # If the avatar worker exposes a jaw-bias hook, push it.
+        w = self._avatar_worker
+        if w is None:
+            return
+        bias_setter = getattr(w, "set_audio_jaw_bias", None)
+        if callable(bias_setter):
+            try:
+                bias_setter(self.audio_jaw_bias())
+            except Exception:  # noqa: BLE001
+                pass
+
+    def audio_jaw_bias(self) -> float:
+        """Return the current jaw-open bias in [0, 1] — 0 once the
+        amplitude signal goes stale (>500 ms without an event)."""
+        if time.time() - self._audio_amp_ts > 0.5:
+            return 0.0
+        return float(max(0.0, min(1.0, self._audio_amp)))
 
     @staticmethod
     def _default_persona() -> str:
