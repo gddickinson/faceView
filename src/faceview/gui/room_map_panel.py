@@ -22,8 +22,14 @@ from PySide6.QtGui import (
     QBrush, QColor, QFont, QPainter, QPen, QPolygonF,
 )
 from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -238,6 +244,13 @@ class RoomMapWindow(QWidget):
         f.setPointSize(13)
         header.setFont(f)
         header_row.addWidget(header, 1)
+        cal_btn = QPushButton("Calibrate camera…", self)
+        cal_btn.setToolTip(
+            "Convert distances from relative units to metres by "
+            "telling me how far one detected object actually is."
+        )
+        cal_btn.clicked.connect(self._open_calibration_dialog)
+        header_row.addWidget(cal_btn)
         clear_btn = QPushButton("Clear trails", self)
         clear_btn.clicked.connect(self._clear_trails)
         header_row.addWidget(clear_btn)
@@ -259,6 +272,17 @@ class RoomMapWindow(QWidget):
         self.canvas._trails.clear()
         self.canvas.update()
 
+    def _open_calibration_dialog(self) -> None:
+        if not self.canvas._items:
+            QMessageBox.information(
+                self, "Calibrate",
+                "No objects on the map yet — let it observe the room "
+                "for a few seconds first.",
+            )
+            return
+        dlg = _CalibrationDialog(self.canvas._items, self)
+        dlg.exec()
+
     # ── lifecycle: gate the worker on show/hide ──────────────────
 
     def showEvent(self, ev) -> None:  # noqa: N802 — Qt
@@ -272,3 +296,109 @@ class RoomMapWindow(QWidget):
         if worker is not None:
             worker.set_active(False)
         super().closeEvent(ev)
+
+
+class _CalibrationDialog(QDialog):
+    """P16 — one-shot scale calibration.
+
+    Pick an item that's on the map right now, type its real-world
+    distance in metres, hit Calibrate. We compute
+    ``scale = metres / current_relative_distance`` and persist it so
+    every future RoomMap publish reports metres."""
+
+    def __init__(self, items, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Calibrate camera scale")
+        self.setMinimumWidth(360)
+        self._items = list(items)
+
+        form = QFormLayout()
+
+        self._picker = QComboBox(self)
+        for it in self._items:
+            dist = math.sqrt(it.x ** 2 + it.z ** 2)
+            self._picker.addItem(
+                f"{it.label} (currently {dist:.2f} rel units)", it,
+            )
+        form.addRow("Object on the map:", self._picker)
+
+        self._real_dist = QDoubleSpinBox(self)
+        self._real_dist.setRange(0.05, 10.0)
+        self._real_dist.setSingleStep(0.05)
+        self._real_dist.setSuffix(" m")
+        self._real_dist.setValue(1.00)
+        form.addRow("Real distance:", self._real_dist)
+
+        hint = QLabel(
+            "Pick any object that's currently in the map; measure its "
+            "actual distance from the camera; enter it here. The "
+            "ratio becomes the metric scale and is persisted to "
+            "<code>.faceview/camera_calibration.json</code>."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#9aa3b2;font-size:11px;")
+
+        from faceview.vision.room_map import CalibrationStore
+        current = CalibrationStore.shared().scale
+        cur_lbl = QLabel(
+            f"Current scale: <b>{current:.4f}</b> m per rel-unit"
+            if current
+            else "<i>not yet calibrated — distances shown in relative units</i>",
+            self,
+        )
+
+        buttons = QDialogButtonBox(self)
+        cal = QPushButton("Calibrate", self)
+        cal.setDefault(True)
+        cal.clicked.connect(self._apply)
+        buttons.addButton(cal, QDialogButtonBox.ButtonRole.AcceptRole)
+        if current:
+            reset = QPushButton("Reset to relative units", self)
+            reset.clicked.connect(self._reset)
+            buttons.addButton(
+                reset, QDialogButtonBox.ButtonRole.DestructiveRole
+            )
+        cancel = QPushButton("Cancel", self)
+        cancel.clicked.connect(self.reject)
+        buttons.addButton(cancel, QDialogButtonBox.ButtonRole.RejectRole)
+
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(cur_lbl)
+        root.addWidget(hint)
+        root.addWidget(buttons)
+
+    def _apply(self) -> None:
+        item = self._picker.currentData()
+        if item is None:
+            return
+        current_rel = math.sqrt(item.x ** 2 + item.z ** 2)
+        if current_rel < 1e-6:
+            QMessageBox.warning(
+                self, "Calibrate",
+                "That object is reported as zero distance — pick a "
+                "different one or wait for a fresh reading.",
+            )
+            return
+        from faceview.vision.room_map import CalibrationStore
+        scale = float(self._real_dist.value()) / current_rel
+        ok = CalibrationStore.shared().set_scale(scale)
+        if not ok:
+            QMessageBox.warning(self, "Calibrate",
+                                "Couldn't persist the scale factor.")
+            return
+        QMessageBox.information(
+            self, "Calibrated",
+            f"Scale set to {scale:.4f} m per rel-unit. "
+            "The room map will switch to metres on the next refresh.",
+        )
+        self.accept()
+
+    def _reset(self) -> None:
+        from faceview.vision.room_map import CalibrationStore
+        CalibrationStore.shared().clear()
+        QMessageBox.information(
+            self, "Calibrate",
+            "Calibration cleared. Room map will show relative units.",
+        )
+        self.accept()

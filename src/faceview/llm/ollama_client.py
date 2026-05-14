@@ -134,7 +134,7 @@ class OllamaEngine:
             run_read_text, run_track_object, run_check_visible,
             run_describe_color, run_describe_pose, run_face_attributes,
             run_scan_qr, run_estimate_depth, run_gaze_target,
-            run_segment_object,
+            run_segment_object, run_describe_room_layout,
             vision_tool_enabled,
         )
 
@@ -292,6 +292,8 @@ class OllamaEngine:
                     result = run_segment_object(
                         grabber, label=str(args.get("label") or ""),
                     )
+                elif name == "describe_room_layout":
+                    result = run_describe_room_layout()
                 else:
                     result = f"Unknown tool: {name}"
                     log.warning("ollama.unknown_tool", tool=name)

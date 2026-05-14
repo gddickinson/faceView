@@ -88,7 +88,7 @@ class AnthropicEngine:
             run_read_text, run_track_object, run_check_visible,
             run_describe_color, run_describe_pose, run_face_attributes,
             run_scan_qr, run_estimate_depth, run_gaze_target,
-            run_segment_object,
+            run_segment_object, run_describe_room_layout,
         )
         use_tools = vision_tool_enabled()
         tools_arg: list[dict] = (
@@ -216,6 +216,9 @@ class AnthropicEngine:
                     msg = run_segment_object(
                         grabber, label=str(inp.get("label") or ""),
                     )
+                    content = [{"type": "text", "text": msg}]
+                elif name == "describe_room_layout":
+                    msg = run_describe_room_layout()
                     content = [{"type": "text", "text": msg}]
                 else:
                     content = [{"type": "text",

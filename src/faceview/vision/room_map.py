@@ -25,14 +25,17 @@ the panel can render them as metres.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
+from faceview.config import settings
 from faceview.core.event_bus import get_bus
 from faceview.core.events import (
     EventType, ObjectsSeen, RoomMap, RoomMapItem,
@@ -242,16 +245,207 @@ class RoomMapWorker:
                 old.z = _ema(old.z, fresh.z)
                 old.confidence = fresh.confidence
                 old.last_seen_ts = now
-        # Publish.
+        # Apply metric calibration if available — publish in metres
+        # when a scale factor is set, otherwise keep "relative".
+        scale = CalibrationStore.shared().scale
+        if scale and scale > 0:
+            items_out = [
+                RoomMapItem(
+                    label=it.label, x=it.x * scale, y=it.y * scale,
+                    z=it.z * scale, confidence=it.confidence,
+                    last_seen_ts=it.last_seen_ts,
+                )
+                for it in self._smoothed.values()
+            ]
+            units = "metres"
+        else:
+            items_out = list(self._smoothed.values())
+            units = "relative"
         get_bus().publish(
             EventType.ROOM_MAP,
             RoomMap(
-                items=list(self._smoothed.values()),
+                items=items_out,
                 frame_w=w, frame_h=h, hfov_deg=self.hfov_deg,
-                units="relative",
+                units=units,
             ),
         )
 
 
 def _ema(prev: float, fresh: float) -> float:
     return _EMA_ALPHA * fresh + (1.0 - _EMA_ALPHA) * prev
+
+
+# ── Calibration store (P16 — metric scale factor) ────────────────
+
+
+class CalibrationStore:
+    """One-number calibration: ``scale`` converts relative units to
+    metres. Loaded from ``~/.faceview/camera_calibration.json`` on
+    boot; persisted on every change.
+
+    The room-map worker multiplies every (x, y, z) by ``scale`` and
+    sets ``RoomMap.units = "metres"`` when calibrated. When the
+    file is absent we keep ``units="relative"`` — same behaviour as
+    before P16.
+    """
+
+    _instance: "CalibrationStore | None" = None
+    _instance_lock = threading.Lock()
+
+    @classmethod
+    def shared(cls) -> "CalibrationStore":
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = CalibrationStore()
+        return cls._instance
+
+    @classmethod
+    def reset_for_tests(cls) -> None:
+        with cls._instance_lock:
+            cls._instance = None
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.scale: Optional[float] = None
+        self._load()
+
+    def _path(self) -> Path:
+        return settings.data_dir / "camera_calibration.json"
+
+    def _load(self) -> None:
+        p = self._path()
+        if not p.exists():
+            return
+        try:
+            data = json.loads(p.read_text())
+            s = float(data.get("scale") or 0.0)
+            if s > 0:
+                with self._lock:
+                    self.scale = s
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            log.warning("calibration.load_failed", error=str(exc))
+
+    def set_scale(self, scale: float) -> bool:
+        """Persist a new scale. ``scale <= 0`` is rejected."""
+        if not scale or scale <= 0:
+            return False
+        with self._lock:
+            self.scale = float(scale)
+        try:
+            p = self._path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps({
+                "scale": float(scale),
+                "saved_at": time.time(),
+            }, indent=2))
+            tmp.replace(p)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("calibration.save_failed", error=str(exc))
+            return False
+        return True
+
+    def clear(self) -> bool:
+        """Drop calibration — room map reverts to relative units."""
+        with self._lock:
+            self.scale = None
+        try:
+            p = self._path()
+            if p.exists():
+                p.unlink()
+        except OSError as exc:
+            log.warning("calibration.clear_failed", error=str(exc))
+            return False
+        return True
+
+
+# ── RoomMapStore (read-side singleton for the LLM tool) ───────────
+
+
+class RoomMapStore:
+    """Caches the latest :data:`EventType.ROOM_MAP` payload.
+
+    The :class:`RoomMapWorker` is write-side and stops publishing
+    when the panel is hidden. The store is the read-side: any caller
+    (the ``describe_room_layout`` LLM tool, future MCP endpoints,
+    the panel itself) reads from here. Survives the worker going
+    idle — last-known positions linger until they age out."""
+
+    _instance: "RoomMapStore | None" = None
+    _instance_lock = threading.Lock()
+
+    @classmethod
+    def shared(cls) -> "RoomMapStore":
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = RoomMapStore()
+        return cls._instance
+
+    @classmethod
+    def reset_for_tests(cls) -> None:
+        with cls._instance_lock:
+            cls._instance = None
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._latest: Optional[RoomMap] = None
+        get_bus().subscribe(EventType.ROOM_MAP, self._on_map)
+
+    def _on_map(self, m) -> None:
+        if not isinstance(m, RoomMap):
+            return
+        with self._lock:
+            self._latest = m
+
+    def latest(self) -> Optional[RoomMap]:
+        with self._lock:
+            return self._latest
+
+
+# ── describe_room_layout (used by the LLM tool) ───────────────────
+
+
+def _zone_for(x: float, z: float) -> str:
+    """Coarse direction label relative to the camera."""
+    if abs(z) < 0.05 and abs(x) < 0.05:
+        return "right at the camera"
+    if z <= 0:
+        return "behind the camera"
+    angle = math.degrees(math.atan2(x, z))
+    if abs(angle) < 15:
+        return "directly ahead"
+    if angle >= 15 and angle < 45:
+        return "ahead and slightly to the right"
+    if angle >= 45 and angle < 75:
+        return "to the right"
+    if angle >= 75:
+        return "far right"
+    if angle <= -15 and angle > -45:
+        return "ahead and slightly to the left"
+    if angle <= -45 and angle > -75:
+        return "to the left"
+    return "far left"
+
+
+def describe_room_layout() -> str:
+    """Build a one-paragraph natural-language description of the
+    latest room map. Used by the LLM tool of the same name."""
+    snap = RoomMapStore.shared().latest()
+    if snap is None or not snap.items:
+        return ("I don't have a room map yet — open the Room map "
+                "window (View → Room map…) to start mapping objects.")
+    # Sort items by distance so the description starts close-in.
+    items = sorted(
+        snap.items,
+        key=lambda it: math.sqrt(it.x ** 2 + it.z ** 2),
+    )
+    unit = "m" if snap.units == "metres" else "units"
+    bits: list[str] = []
+    for it in items[:6]:
+        dist = math.sqrt(it.x ** 2 + it.z ** 2)
+        zone = _zone_for(it.x, it.z)
+        bits.append(f"{it.label} is {dist:.1f} {unit} {zone}")
+    summary = "; ".join(bits)
+    if len(items) > 6:
+        summary += f" — plus {len(items) - 6} other items"
+    return f"Room layout (camera-relative): {summary}."

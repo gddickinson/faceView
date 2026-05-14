@@ -466,6 +466,18 @@ SEGMENT_OBJECT_TOOL_ANTHROPIC: dict = {
         "required": ["label"],
     },
 }
+DESCRIBE_ROOM_LAYOUT_TOOL_ANTHROPIC: dict = {
+    "name": "describe_room_layout",
+    "description": ("Return a natural-language description of where "
+                    "objects are positioned in the room, derived from "
+                    "the top-down room map (built from MiDaS depth + "
+                    "object detections). Use when the user asks about "
+                    "spatial arrangement — 'what's near me?', "
+                    "'where's the cup?', 'describe the room'. The "
+                    "Room map window must be open at least once "
+                    "since boot for the map to have data."),
+    "input_schema": {"type": "object", "properties": {}},
+}
 
 
 def _to_ollama(schema: dict) -> dict:
@@ -489,6 +501,7 @@ SCAN_QR_TOOL_OLLAMA = _to_ollama(SCAN_QR_TOOL_ANTHROPIC)
 ESTIMATE_DEPTH_TOOL_OLLAMA = _to_ollama(ESTIMATE_DEPTH_TOOL_ANTHROPIC)
 GAZE_TARGET_TOOL_OLLAMA = _to_ollama(GAZE_TARGET_TOOL_ANTHROPIC)
 SEGMENT_OBJECT_TOOL_OLLAMA = _to_ollama(SEGMENT_OBJECT_TOOL_ANTHROPIC)
+DESCRIBE_ROOM_LAYOUT_TOOL_OLLAMA = _to_ollama(DESCRIBE_ROOM_LAYOUT_TOOL_ANTHROPIC)
 
 
 # ── Tier 2 + 3 executors ─────────────────────────────────────────────────
@@ -532,6 +545,12 @@ def run_gaze_target() -> str:
 def run_segment_object(grabber: FrameGrabber, label: str) -> str:
     from faceview.vision.segment import segment_object
     return segment_object(_frame(grabber), label)
+
+
+def run_describe_room_layout() -> str:
+    """Tool executor — read RoomMapStore + format as prose."""
+    from faceview.vision.room_map import describe_room_layout
+    return describe_room_layout()
 
 
 # Cache of model name → health status so we only probe each candidate
@@ -843,6 +862,7 @@ TIER23_TOOLS_ANTHROPIC = [
     FACE_ATTRS_TOOL_ANTHROPIC, SCAN_QR_TOOL_ANTHROPIC,
     ESTIMATE_DEPTH_TOOL_ANTHROPIC, GAZE_TARGET_TOOL_ANTHROPIC,
     SEGMENT_OBJECT_TOOL_ANTHROPIC,
+    DESCRIBE_ROOM_LAYOUT_TOOL_ANTHROPIC,
 ]
 
 TIER1_TOOLS_OLLAMA = [
@@ -855,6 +875,7 @@ TIER23_TOOLS_OLLAMA = [
     FACE_ATTRS_TOOL_OLLAMA, SCAN_QR_TOOL_OLLAMA,
     ESTIMATE_DEPTH_TOOL_OLLAMA, GAZE_TARGET_TOOL_OLLAMA,
     SEGMENT_OBJECT_TOOL_OLLAMA,
+    DESCRIBE_ROOM_LAYOUT_TOOL_OLLAMA,
 ]
 
 

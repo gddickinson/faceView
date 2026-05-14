@@ -21,13 +21,16 @@ import re
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QKeyEvent, QTextDocument
+from PySide6.QtGui import (
+    QFont, QKeyEvent, QKeySequence, QShortcut, QTextCursor, QTextDocument,
+)
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -105,11 +108,25 @@ class ChatPanel(QWidget):
         header.setFont(f)
         root.addWidget(header)
 
+        # Find bar — shown via Ctrl+F (see _wire_shortcuts).
+        self.find_bar = _ChatFindBar(self)
+        self.find_bar.hide()
+        self.find_bar.find_next.connect(
+            lambda q: self._do_find(q, backward=False),
+        )
+        self.find_bar.find_prev.connect(
+            lambda q: self._do_find(q, backward=True),
+        )
+        self.find_bar.dismissed.connect(self._dismiss_find)
+        root.addWidget(self.find_bar)
+
         self.history = QTextEdit(self)
         self.history.setReadOnly(True)
         self.history.setObjectName("chat_history")
         self.history.setPlaceholderText("No messages yet — say hi.")
         root.addWidget(self.history, 1)
+
+        self._wire_shortcuts()
 
         row = QHBoxLayout()
         self.input = _ChatInput(self)
@@ -141,6 +158,67 @@ class ChatPanel(QWidget):
         bus.subscribe(EventType.LLM_ERROR, self._on_llm_error)
         bus.subscribe(EventType.CHAT_USER_MESSAGE,
                       self._on_user_msg_published)
+
+    def _wire_shortcuts(self) -> None:
+        # Ctrl+F (Cmd+F on macOS) opens the find bar focussed on its
+        # input. Esc inside the bar dismisses. Enter/Shift-Enter while
+        # the bar has focus drives find-next / find-prev.
+        find_sc = QShortcut(QKeySequence.StandardKey.Find, self)
+        find_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        find_sc.activated.connect(self._show_find)
+        # Find-next on F3 / Cmd+G is a nice bonus.
+        next_sc = QShortcut(QKeySequence.StandardKey.FindNext, self)
+        next_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        next_sc.activated.connect(
+            lambda: self._do_find(self.find_bar.query(), backward=False)
+        )
+        prev_sc = QShortcut(QKeySequence.StandardKey.FindPrevious, self)
+        prev_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        prev_sc.activated.connect(
+            lambda: self._do_find(self.find_bar.query(), backward=True)
+        )
+
+    # ── find / search ────────────────────────────────────────────────
+
+    def _show_find(self) -> None:
+        # Pre-fill from the user's current selection so highlighting a
+        # word and hitting Cmd+F searches for it.
+        cursor = self.history.textCursor()
+        if cursor.hasSelection():
+            self.find_bar.set_query(cursor.selectedText())
+        self.find_bar.show()
+        self.find_bar.focus_input()
+
+    def _dismiss_find(self) -> None:
+        # Clear any leftover highlight + return focus to the input.
+        self.find_bar.hide()
+        cursor = self.history.textCursor()
+        cursor.clearSelection()
+        self.history.setTextCursor(cursor)
+        self.input.setFocus()
+
+    def _do_find(self, query: str, *, backward: bool) -> None:
+        if not query:
+            self.find_bar.set_status("")
+            return
+        flags = QTextDocument.FindFlag(0)
+        if backward:
+            flags |= QTextDocument.FindFlag.FindBackward
+        # QTextEdit.find advances from the current cursor — exactly
+        # the behaviour Ctrl+F users expect.
+        ok = self.history.find(query, flags)
+        if not ok:
+            # Wrap: try from the top (or bottom for backwards).
+            cursor = self.history.textCursor()
+            if backward:
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+            else:
+                cursor.movePosition(QTextCursor.MoveOperation.Start)
+            self.history.setTextCursor(cursor)
+            ok = self.history.find(query, flags)
+        self.find_bar.set_status(
+            "" if ok else f'no match for "{query}"'
+        )
 
     # ── rendering ────────────────────────────────────────────────────
 
@@ -293,3 +371,85 @@ class _ChatInput(QLineEdit):
             self.submit.emit()
             return
         super().keyPressEvent(ev)
+
+
+class _ChatFindBar(QWidget):
+    """Find-in-chat overlay shown via Ctrl/Cmd+F.
+
+    Emits :pysignal:`find_next` / :pysignal:`find_prev` with the
+    current query; :pysignal:`dismissed` when the user presses Esc
+    or clicks the close button."""
+
+    find_next = Signal(str)
+    find_prev = Signal(str)
+    dismissed = Signal()
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(2, 2, 2, 2)
+        row.setSpacing(4)
+
+        self._input = QLineEdit(self)
+        self._input.setPlaceholderText("Find in chat…  (Enter, Shift-Enter)")
+        self._input.returnPressed.connect(self._on_return)
+        self._input.installEventFilter(self)
+        row.addWidget(self._input, 1)
+
+        prev_btn = QToolButton(self)
+        prev_btn.setText("↑")
+        prev_btn.setToolTip("Previous match (Shift-Enter)")
+        prev_btn.clicked.connect(
+            lambda: self.find_prev.emit(self.query())
+        )
+        row.addWidget(prev_btn)
+
+        next_btn = QToolButton(self)
+        next_btn.setText("↓")
+        next_btn.setToolTip("Next match (Enter)")
+        next_btn.clicked.connect(
+            lambda: self.find_next.emit(self.query())
+        )
+        row.addWidget(next_btn)
+
+        close_btn = QToolButton(self)
+        close_btn.setText("✕")
+        close_btn.setToolTip("Close (Esc)")
+        close_btn.clicked.connect(self.dismissed.emit)
+        row.addWidget(close_btn)
+
+        self._status = QLabel("", self)
+        self._status.setStyleSheet("color:#c0392b;font-size:11px;")
+        row.addWidget(self._status)
+
+    # ── public ───────────────────────────────────────────────
+
+    def query(self) -> str:
+        return self._input.text().strip()
+
+    def set_query(self, text: str) -> None:
+        self._input.setText(text or "")
+
+    def set_status(self, text: str) -> None:
+        self._status.setText(text)
+
+    def focus_input(self) -> None:
+        self._input.setFocus()
+        self._input.selectAll()
+
+    # ── events ───────────────────────────────────────────────
+
+    def eventFilter(self, obj, ev):  # noqa: N802 — Qt API
+        if obj is self._input and ev.type() == ev.Type.KeyPress:
+            if ev.key() == Qt.Key.Key_Escape:
+                self.dismissed.emit()
+                return True
+        return super().eventFilter(obj, ev)
+
+    def _on_return(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        mods = QApplication.keyboardModifiers()
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            self.find_prev.emit(self.query())
+        else:
+            self.find_next.emit(self.query())

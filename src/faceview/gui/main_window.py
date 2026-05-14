@@ -87,10 +87,12 @@ class MainWindow(QMainWindow):
 
         # Room-map worker — runs at ~1 Hz only while the map window is
         # open. Lives here (not on a controller) since it has a single
-        # owner and a single consumer.
-        from faceview.vision.room_map import RoomMapWorker
+        # owner and a single consumer. Also wake the read-side store
+        # so the describe_room_layout tool sees ROOM_MAP events.
+        from faceview.vision.room_map import RoomMapStore, RoomMapWorker
         self.room_map_worker = RoomMapWorker()
         self.room_map_worker.start()
+        RoomMapStore.shared()
         self.room_map_window = None
 
         self._build_layout()
