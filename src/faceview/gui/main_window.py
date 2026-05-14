@@ -179,6 +179,14 @@ class MainWindow(QMainWindow):
         )
         m_tools.addAction(a_mirror)
 
+        a_incog = QAction("Incognito mode (don't remember this chat)", self)
+        a_incog.setShortcut(QKeySequence("Ctrl+Shift+N"))
+        a_incog.setCheckable(True)
+        a_incog.setChecked(False)
+        a_incog.toggled.connect(self.set_incognito)
+        m_tools.addAction(a_incog)
+        self._incognito_action = a_incog
+
         m_window = self.menuBar().addMenu("&Window")
         self.layout_mgr.install_menu(m_window)
 
@@ -342,6 +350,23 @@ class MainWindow(QMainWindow):
 
     def open_monitor(self, kind: str) -> None:
         self.monitor_ctrl.open(kind)
+
+    # Incognito mode (C6) — class-level flag on CognitionStore.
+    def incognito_running(self) -> bool:
+        from faceview.llm.cognition import CognitionStore
+        return CognitionStore.is_incognito()
+
+    def set_incognito(self, on: bool) -> None:
+        from faceview.llm.cognition import CognitionStore
+        CognitionStore.set_incognito(bool(on))
+        try:
+            self._incognito_action.setChecked(bool(on))
+        except Exception:  # noqa: BLE001
+            pass
+        self.statusBar().showMessage(
+            "🕶 Incognito on — this chat won't be remembered"
+            if on else "Incognito off — memory writes resumed"
+        )
 
     # ── status pill (lives here because multiple controllers + the
     # config dialog hit it) ───────────────────────────────────────

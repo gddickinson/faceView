@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 import time as _time
 from pathlib import Path
 from typing import Any, Optional
@@ -123,6 +124,25 @@ class CognitionStore:
     + character + relationship progression."""
 
     SCHEMA_VERSION = 3
+
+    # Class-level "global" incognito flag — applies to every loaded
+    # store. Toggle via :meth:`set_incognito` so callers don't need a
+    # store handle. While True, ``record_chat_turn`` is a no-op:
+    # nothing is added to episodic / per_person / semantic and the
+    # relationship score doesn't tick up. Reads (``recall``,
+    # ``narrate_for_prompt``) keep working from existing memory.
+    _incognito_lock = threading.Lock()
+    _incognito = False
+
+    @classmethod
+    def set_incognito(cls, on: bool) -> None:
+        with cls._incognito_lock:
+            cls._incognito = bool(on)
+
+    @classmethod
+    def is_incognito(cls) -> bool:
+        with cls._incognito_lock:
+            return cls._incognito
 
     def __init__(self, persona: str) -> None:
         self.persona = persona
@@ -380,6 +400,12 @@ class CognitionStore:
     def record_chat_turn(self, user_text: str, assistant_text: str) -> None:
         if not user_text and not assistant_text:
             return
+        # Incognito (C6) — drop the entire turn on the floor. No
+        # episodic write, no fact extraction, no relationship bump.
+        # Existing memory stays loaded so the LLM still sounds like
+        # itself; only the current turn vanishes.
+        if CognitionStore.is_incognito():
+            return
         sig = _score_significance(user_text, assistant_text)
         felt = _felt_emotion(f"{user_text}\n{assistant_text}")
         text = f"User: {user_text.strip()[:240]}"
@@ -628,3 +654,62 @@ class CognitionStore:
         self.relationship_score = 0
         self.first_seen = _time.strftime("%Y-%m-%d")
         self._dirty = True
+
+    # ── memory editing (C5) ─────────────────────────────────────
+
+    def forget_recent(self, n: int = 1) -> int:
+        """Remove the N most-recent episodic entries.
+
+        Searches the shared list + every per-person bucket and pops
+        the latest by timestamp. Returns the number actually removed.
+        Used by the ``forget_memory`` tool when no query is given."""
+        candidates: list[tuple[float, list, int]] = []
+        for i, m in enumerate(self.episodic):
+            candidates.append((float(m.get("ts", 0)), self.episodic, i))
+        for bucket in self.per_person.values():
+            for i, m in enumerate(bucket):
+                candidates.append((float(m.get("ts", 0)), bucket, i))
+        if not candidates:
+            return 0
+        candidates.sort(key=lambda c: -c[0])
+        removed = 0
+        # Track indices we've popped per list so subsequent pops on
+        # the same list adjust correctly.
+        for _ts, bucket, idx in candidates[:max(0, int(n))]:
+            try:
+                bucket.pop(idx)
+                removed += 1
+            except IndexError:
+                pass
+        if removed:
+            self._dirty = True
+        return removed
+
+    def forget_matching(self, query: str, *, limit: int = 1) -> int:
+        """Remove up to ``limit`` episodes whose text contains
+        ``query`` (case-insensitive). Returns the count removed."""
+        q = (query or "").strip().lower()
+        if not q:
+            return 0
+        targets: list[tuple[list, int]] = []
+        for i, m in enumerate(self.episodic):
+            if q in str(m.get("text", "")).lower():
+                targets.append((self.episodic, i))
+        for bucket in self.per_person.values():
+            for i, m in enumerate(bucket):
+                if q in str(m.get("text", "")).lower():
+                    targets.append((bucket, i))
+        if not targets:
+            return 0
+        # Highest indices first so subsequent pops don't shift earlier ones.
+        targets.sort(key=lambda t: -t[1])
+        removed = 0
+        for bucket, idx in targets[:max(0, int(limit))]:
+            try:
+                bucket.pop(idx)
+                removed += 1
+            except IndexError:
+                pass
+        if removed:
+            self._dirty = True
+        return removed

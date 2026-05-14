@@ -11,6 +11,7 @@ synchronous, so a thread is the right shape.
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
@@ -89,6 +90,7 @@ class AnthropicEngine:
             run_describe_color, run_describe_pose, run_face_attributes,
             run_scan_qr, run_estimate_depth, run_gaze_target,
             run_segment_object, run_describe_room_layout,
+            run_forget_memory,
         )
         use_tools = vision_tool_enabled()
         tools_arg: list[dict] = (
@@ -220,6 +222,14 @@ class AnthropicEngine:
                 elif name == "describe_room_layout":
                     msg = run_describe_room_layout()
                     content = [{"type": "text", "text": msg}]
+                elif name == "forget_memory":
+                    inp = blk.get("input") or {}
+                    msg = run_forget_memory(
+                        self.memory,
+                        query=str(inp.get("query") or ""),
+                        limit=int(inp.get("limit") or 1),
+                    )
+                    content = [{"type": "text", "text": msg}]
                 else:
                     content = [{"type": "text",
                                 "text": f"Unknown tool: {name}"}]
@@ -284,6 +294,13 @@ class ClaudeClient:
             )
             self._memory_provider = None
         self.memory = store
+        # Stash on the conversation so engines can reach it without
+        # the engine knowing about ClaudeClient (used by the Ollama
+        # forget_memory dispatch path).
+        try:
+            setattr(self.conversation, "_bound_memory", store)
+        except Exception:  # noqa: BLE001
+            pass
         if store is not None:
             self._memory_provider = store.narrate_for_prompt
             self.conversation.add_system_extras_provider(
@@ -414,6 +431,21 @@ class ClaudeClient:
                 return
             user_text = item
             try:
+                # L10 — fold older turns into a summary if we're
+                # approaching the model's context window. No-op until
+                # the budget is actually hit.
+                try:
+                    budget_raw = os.environ.get(
+                        "FACEVIEW_CONTEXT_TOKEN_BUDGET",
+                    )
+                    budget = int(budget_raw) if budget_raw else 100_000
+                except Exception:  # noqa: BLE001
+                    budget = 100_000
+                try:
+                    self.conversation.maybe_compact(budget_tokens=budget)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("conversation.compact_failed",
+                                error=str(exc))
                 self.conversation.add_user(user_text)
                 # Thread the user message down to cognition so its
                 # narrate_for_prompt can retrieve semantically similar

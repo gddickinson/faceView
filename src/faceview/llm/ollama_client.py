@@ -135,6 +135,7 @@ class OllamaEngine:
             run_describe_color, run_describe_pose, run_face_attributes,
             run_scan_qr, run_estimate_depth, run_gaze_target,
             run_segment_object, run_describe_room_layout,
+            run_forget_memory,
             vision_tool_enabled,
         )
 
@@ -294,6 +295,27 @@ class OllamaEngine:
                     )
                 elif name == "describe_room_layout":
                     result = run_describe_room_layout()
+                elif name == "forget_memory":
+                    # ClaudeClient instance owns .memory but engines
+                    # don't see it directly — reach via the
+                    # conversation's bound memory if available.
+                    mem = getattr(conv, "_bound_memory", None)
+                    if mem is None:
+                        # Fallback — look up via the providers list.
+                        for p in (
+                            getattr(conv, "_extras_providers", []) or []
+                        ):
+                            inst = getattr(p, "__self__", None)
+                            if inst is not None and hasattr(
+                                inst, "forget_recent",
+                            ):
+                                mem = inst
+                                break
+                    result = run_forget_memory(
+                        mem,
+                        query=str(args.get("query") or ""),
+                        limit=int(args.get("limit") or 1),
+                    )
                 else:
                     result = f"Unknown tool: {name}"
                     log.warning("ollama.unknown_tool", tool=name)

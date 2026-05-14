@@ -478,6 +478,33 @@ DESCRIBE_ROOM_LAYOUT_TOOL_ANTHROPIC: dict = {
                     "since boot for the map to have data."),
     "input_schema": {"type": "object", "properties": {}},
 }
+FORGET_MEMORY_TOOL_ANTHROPIC: dict = {
+    "name": "forget_memory",
+    "description": (
+        "Redact a stored episodic memory. Call this when the user "
+        "asks you to forget something — 'forget I said that', "
+        "'don't remember the part about X', 'wipe that one'. With "
+        "no arguments, removes the single most-recent stored turn. "
+        "With ``query``, removes up to ``limit`` memories whose "
+        "stored text contains that substring. Affects this "
+        "persona's memory file only; cannot un-do."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Optional substring to match against "
+                               "stored memory text (case-insensitive).",
+            },
+            "limit": {
+                "type": "number",
+                "description": "Max number of memories to remove "
+                               "(default 1).",
+            },
+        },
+    },
+}
 
 
 def _to_ollama(schema: dict) -> dict:
@@ -502,6 +529,7 @@ ESTIMATE_DEPTH_TOOL_OLLAMA = _to_ollama(ESTIMATE_DEPTH_TOOL_ANTHROPIC)
 GAZE_TARGET_TOOL_OLLAMA = _to_ollama(GAZE_TARGET_TOOL_ANTHROPIC)
 SEGMENT_OBJECT_TOOL_OLLAMA = _to_ollama(SEGMENT_OBJECT_TOOL_ANTHROPIC)
 DESCRIBE_ROOM_LAYOUT_TOOL_OLLAMA = _to_ollama(DESCRIBE_ROOM_LAYOUT_TOOL_ANTHROPIC)
+FORGET_MEMORY_TOOL_OLLAMA = _to_ollama(FORGET_MEMORY_TOOL_ANTHROPIC)
 
 
 # ── Tier 2 + 3 executors ─────────────────────────────────────────────────
@@ -551,6 +579,31 @@ def run_describe_room_layout() -> str:
     """Tool executor — read RoomMapStore + format as prose."""
     from faceview.vision.room_map import describe_room_layout
     return describe_room_layout()
+
+
+def run_forget_memory(
+    memory_store, query: str = "", limit: int = 1,
+) -> str:
+    """Tool executor — remove episodic entries from CognitionStore."""
+    if memory_store is None:
+        return ("Memory isn't bound to this conversation, so there's "
+                "nothing for me to forget.")
+    try:
+        if query.strip():
+            removed = memory_store.forget_matching(
+                query.strip(), limit=max(1, int(limit or 1)),
+            )
+            target = f"matching '{query.strip()}'"
+        else:
+            removed = memory_store.forget_recent(n=max(1, int(limit or 1)))
+            target = "the most recent" if (limit or 1) == 1 \
+                else f"the {int(limit)} most recent"
+    except Exception as exc:  # noqa: BLE001
+        log.warning("vision.tool.forget_failed", error=str(exc))
+        return f"Couldn't forget that: {exc}"
+    if removed == 0:
+        return f"I didn't find any memory {target} to forget."
+    return f"Forgotten — removed {removed} memory entries {target}."
 
 
 # Cache of model name → health status so we only probe each candidate
@@ -863,6 +916,7 @@ TIER23_TOOLS_ANTHROPIC = [
     ESTIMATE_DEPTH_TOOL_ANTHROPIC, GAZE_TARGET_TOOL_ANTHROPIC,
     SEGMENT_OBJECT_TOOL_ANTHROPIC,
     DESCRIBE_ROOM_LAYOUT_TOOL_ANTHROPIC,
+    FORGET_MEMORY_TOOL_ANTHROPIC,
 ]
 
 TIER1_TOOLS_OLLAMA = [
@@ -876,6 +930,7 @@ TIER23_TOOLS_OLLAMA = [
     ESTIMATE_DEPTH_TOOL_OLLAMA, GAZE_TARGET_TOOL_OLLAMA,
     SEGMENT_OBJECT_TOOL_OLLAMA,
     DESCRIBE_ROOM_LAYOUT_TOOL_OLLAMA,
+    FORGET_MEMORY_TOOL_OLLAMA,
 ]
 
 
