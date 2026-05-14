@@ -134,6 +134,8 @@ faceView/
 │   │   │                        memory-context provider
 │   │   ├── ollama_client.py     Local Ollama backend (auto-fallback) +
 │   │   │                        tool-use loop + pick_vision_model()
+│   │   ├── embeddings.py        EmbeddingService (lazy sentence-transformers)
+│   │   │                        for retrieval-augmented cognition
 │   │   ├── vision_tool.py       look_at_camera tool — FrameGrabber +
 │   │   │                        Anthropic image content + Ollama VLM bridge
 │   │   ├── character.py         Character dataclass + characters.json registry

@@ -135,6 +135,11 @@ class CognitionStore:
         self.emotional: dict[str, dict[str, Any]] = {}
         self._dirty = False
         self._last_consolidate = 0.0
+        # Set by ClaudeClient before each engine.stream_reply call so
+        # narrate_for_prompt can do embedding-based retrieval against
+        # the current user message. None → fall back to recency +
+        # significance ranking.
+        self._query_context: Optional[str] = None
 
     # ── persistence ─────────────────────────────────────────────
 
@@ -225,8 +230,9 @@ class CognitionStore:
 
     def record_episode(self, type_: str, text: str, *,
                        significance: int = 3,
-                       emotion: str = "neutral") -> None:
-        self.episodic.append({
+                       emotion: str = "neutral",
+                       embedding: Optional[list[float]] = None) -> None:
+        entry: dict[str, Any] = {
             "ts": _time.time(),
             "type": type_,
             "text": text,
@@ -234,7 +240,10 @@ class CognitionStore:
             "emotion": emotion,
             "session_id": self.session_count,
             "recalled": 0,
-        })
+        }
+        if embedding is not None:
+            entry["embedding"] = embedding
+        self.episodic.append(entry)
         self._dirty = True
         self._maybe_consolidate()
 
@@ -345,7 +354,17 @@ class CognitionStore:
         text = f"User: {user_text.strip()[:240]}"
         if assistant_text:
             text += f" — You: {assistant_text.strip()[:240]}"
-        self.record_episode("chat", text, significance=sig, emotion=felt)
+        # Embed the turn for later retrieval. We embed the user's side
+        # (what they said) since retrieval queries are also user
+        # messages — same distribution. None on missing dep / empty.
+        embedding: Optional[list[float]] = None
+        try:
+            from faceview.llm.embeddings import EmbeddingService
+            embedding = EmbeddingService.shared().embed(user_text)
+        except Exception:  # noqa: BLE001 — never block memory write
+            embedding = None
+        self.record_episode("chat", text, significance=sig,
+                            emotion=felt, embedding=embedding)
         # Extract facts.
         m = re.search(r"my name is ([A-Z][a-zA-Z'\-]{1,40})",
                       user_text, re.IGNORECASE)
@@ -382,9 +401,51 @@ class CognitionStore:
             "unlocks": lvl.get("unlocks", ""),
         }
 
+    # ── retrieval-augmented recall ──────────────────────────────
+
+    def set_query_context(self, text: Optional[str]) -> None:
+        """Set by ClaudeClient before each engine call so
+        :meth:`narrate_for_prompt` can do retrieval against the
+        actual user message. Pass ``None`` to clear."""
+        self._query_context = text
+
+    def recall_by_embedding(
+        self, query: str, *, limit: int = 3,
+        min_similarity: float = 0.25,
+    ) -> list[dict]:
+        """Top-K episodic memories by cosine similarity to ``query``.
+
+        Empty when no episodes have embeddings or the query can't be
+        embedded (no sentence-transformers). Used to augment, not
+        replace, the keyword-based :meth:`recall`."""
+        if not query or not self.episodic:
+            return []
+        try:
+            from faceview.llm.embeddings import EmbeddingService, cosine
+            q_vec = EmbeddingService.shared().embed(query)
+        except Exception:  # noqa: BLE001
+            return []
+        if q_vec is None:
+            return []
+        scored: list[tuple[float, dict]] = []
+        for mem in self.episodic:
+            emb = mem.get("embedding")
+            if not emb:
+                continue
+            sim = cosine(q_vec, emb)
+            if sim >= min_similarity:
+                scored.append((sim, mem))
+        scored.sort(key=lambda x: -x[0])
+        out = [m for _s, m in scored[:limit]]
+        for mem in out:
+            mem["recalled"] = mem.get("recalled", 0) + 1
+        if out:
+            self._dirty = True
+        return out
+
     # ── narration for LLM system prompt ─────────────────────────
 
-    def narrate_for_prompt(self, *, recall_context: str = "recent",
+    def narrate_for_prompt(self, *, recall_context: Optional[str] = None,
                            recall_n: int = 5) -> str:
         sections: list[str] = []
 
@@ -422,8 +483,33 @@ class CognitionStore:
             sections.append("[Shared history] "
                             + "; ".join(str(h)[:100] for h in recent) + ".")
 
-        # Episodic recall — recent + relevant
-        mems = self.recall(recall_context, limit=recall_n)
+        # Retrieval-augmented: if a query context is set (the live
+        # user message) and we have embeddings, surface semantically
+        # similar past episodes BEFORE the keyword-based recall block.
+        # They're tagged separately so the LLM (and a reader of the
+        # system prompt) can tell them apart.
+        query = self._query_context
+        rel_mems = (self.recall_by_embedding(query, limit=3)
+                    if query else [])
+        if rel_mems:
+            seen_ts = {m.get("ts") for m in rel_mems}
+            lines = []
+            for m in rel_mems:
+                emo = m.get("emotion", "neutral")
+                tag = f" (felt: {emo})" if emo != "neutral" else ""
+                lines.append(f"- {m.get('text','')}{tag}")
+            sections.append(
+                "[Relevant past memories — semantically similar to "
+                "what they just said]\n" + "\n".join(lines)
+            )
+        else:
+            seen_ts = set()
+
+        # Episodic recall — recent + relevant (keyword-scored).
+        effective_ctx = recall_context or query or "recent"
+        mems = self.recall(effective_ctx, limit=recall_n)
+        # De-duplicate against the embedding-retrieved block above.
+        mems = [m for m in mems if m.get("ts") not in seen_ts]
         if mems:
             lines = []
             for m in mems:

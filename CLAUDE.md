@@ -68,6 +68,22 @@ pytest                                    # tests
   for the `read_text` tool (default `en`).
 - `FACEVIEW_CLIP_THRESHOLD=<0.10–0.40>` — cosine threshold for the
   `check_visible` tool (default 0.22).
+
+## Optional retrieval-augmented memory (C4)
+
+To unlock semantic recall over past chat turns, install
+``sentence-transformers``:
+
+```bash
+pip install sentence-transformers
+```
+
+`CognitionStore.record_chat_turn` then embeds each turn into the
+episodic memory (small ~3 KB per entry); on every subsequent turn,
+`narrate_for_prompt` prepends a "[Relevant past memories …]" block
+of the top-3 episodes by cosine similarity to the live user message.
+Without the package installed, the cognition layer falls back to
+its keyword-based recall (zero behaviour change).
 - `FACEVIEW_GESTURES=0` / `FACEVIEW_OBJECTS=0` — disable the hand-
   gesture recogniser / object detector. Models auto-download to
   `~/.faceview/models/` on first start; either flag skips that

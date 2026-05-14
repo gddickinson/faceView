@@ -373,10 +373,28 @@ class ClaudeClient:
             user_text = item
             try:
                 self.conversation.add_user(user_text)
+                # Thread the user message down to cognition so its
+                # narrate_for_prompt can retrieve semantically similar
+                # past episodes for this turn only. Cleared in the
+                # finally so the next inference (e.g. a tool-loop
+                # continuation) doesn't reuse stale context.
+                mem = self.memory
+                if mem is not None and hasattr(mem, "set_query_context"):
+                    try:
+                        mem.set_query_context(user_text)
+                    except Exception:  # noqa: BLE001
+                        pass
                 chunks: list[str] = []
-                for tok in self.engine.stream_reply(self.conversation, user_text):
-                    chunks.append(str(tok))
-                    self.bus.publish(EventType.LLM_TOKEN, str(tok))
+                try:
+                    for tok in self.engine.stream_reply(self.conversation, user_text):
+                        chunks.append(str(tok))
+                        self.bus.publish(EventType.LLM_TOKEN, str(tok))
+                finally:
+                    if mem is not None and hasattr(mem, "set_query_context"):
+                        try:
+                            mem.set_query_context(None)
+                        except Exception:  # noqa: BLE001
+                            pass
                 final = "".join(chunks)
                 self.conversation.add_assistant(final)
                 self._record_turn(user_text, final)
