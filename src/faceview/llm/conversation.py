@@ -16,29 +16,45 @@ class Conversation:
     def __init__(self, system: str | None = None) -> None:
         self.system = system or DEFAULT_SYSTEM
         self._messages: list[ChatMessage] = []
-        # Optional callable that returns extra system context to prepend
-        # to ``system`` at inference time. Used by the memory subsystem
-        # so persistent context is recomputed on every turn rather than
-        # baked in once.
-        self._system_extras_provider = None
+        # Callables that return extra system context to prepend to
+        # ``system`` at inference time. The cognition layer registers
+        # the persistent-context provider; the perception layer
+        # registers a live-status provider; both are concatenated in
+        # registration order in :meth:`effective_system`.
+        self._extras_providers: list = []
 
     def set_system_extras_provider(self, provider) -> None:
-        """Attach a ``() -> str`` callable. Returned text is prepended to
-        ``system`` whenever :meth:`effective_system` is called."""
-        self._system_extras_provider = provider
+        """Replace ALL extras providers with this single one (legacy API).
+
+        Pass ``None`` to clear. Use :meth:`add_system_extras_provider`
+        when you want to *compose* multiple providers (e.g. cognition +
+        live perception)."""
+        self._extras_providers = [provider] if provider is not None else []
+
+    def add_system_extras_provider(self, provider) -> None:
+        """Append an additional ``() -> str`` provider. The texts are
+        joined with blank lines in the order they were added."""
+        if provider is not None:
+            self._extras_providers.append(provider)
+
+    def remove_system_extras_provider(self, provider) -> None:
+        try:
+            self._extras_providers.remove(provider)
+        except ValueError:
+            pass
 
     def effective_system(self) -> str:
         """System prompt seen by the engine on this turn."""
-        provider = self._system_extras_provider
-        if provider is None:
-            return self.system
-        try:
-            extras = provider() or ""
-        except Exception:  # noqa: BLE001
-            extras = ""
-        if not extras:
-            return self.system
-        return f"{extras}\n\n{self.system}"
+        parts: list[str] = []
+        for provider in self._extras_providers:
+            try:
+                extra = provider() or ""
+            except Exception:  # noqa: BLE001 — providers must not crash inference
+                extra = ""
+            if extra:
+                parts.append(extra)
+        parts.append(self.system)
+        return "\n\n".join(parts)
 
     def append(self, msg: ChatMessage) -> None:
         self._messages.append(msg)

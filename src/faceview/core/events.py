@@ -42,6 +42,13 @@ class EventType(Enum):
     EMOTION = auto()
     MOUTH_ACTIVITY = auto()
     HEAD_POSE = auto()       # yaw/pitch/roll from face-mesh landmarks
+    GAZE = auto()            # iris-derived gaze direction + attention
+    FACE_DISTANCE = auto()   # face bbox area / frame area → close|near|far
+    BLINK = auto()           # eye aspect ratio + rolling blink rate
+    GESTURE = auto()         # MP Gesture Recognizer label (thumbs_up, …)
+    SCENE = auto()           # frame brightness + motion level
+    SCENE_CAPTION = auto()   # ambient VLM caption (moondream, ~15 s cadence)
+    OBJECTS = auto()         # MP Object Detector results
 
     # Lifecycle / generic
     SCREENSHOT_TAKEN = auto()
@@ -137,4 +144,75 @@ class ErrorEvent:
     source: str
     message: str
     detail: Optional[str] = None
+    ts: float = field(default_factory=time)
+
+
+# ── Perception signals (read by PerceptionStore) ─────────────────────────
+
+
+@dataclass
+class Gaze:
+    """Where the eyes are pointing, derived from refined face-mesh iris."""
+    direction: str               # camera | left | right | up | down | away
+    yaw: float                   # -1..1 horizontal iris offset
+    pitch: float                 # -1..1 vertical iris offset
+    attention: float             # 0..1, 1 = looking straight at the camera
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class FaceDistance:
+    """How close the user is to the camera (bbox area relative to frame)."""
+    label: str                   # close | near | normal | far
+    bbox_ratio: float            # 0..1, fraction of frame the face fills
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class Blink:
+    """Eye-aspect-ratio state + a rolling blink rate."""
+    eye_open: float              # 0..~0.35; <0.18 ≈ closed
+    state: str                   # open | closed | drowsy
+    rate_per_min: float          # blinks per minute, rolling 30 s window
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class Gesture:
+    """Hand-gesture classification from MP Gesture Recognizer."""
+    label: str                   # thumbs_up | thumbs_down | open_palm | ...
+    hand: str                    # left | right | both | none
+    confidence: float
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class SceneInfo:
+    """Coarse scene descriptors that aren't tied to the user's face."""
+    brightness: float            # 0..1, mean luminance of a downscaled frame
+    brightness_label: str        # dark | dim | lit | bright
+    motion: float                # 0..1, normalised inter-frame difference
+    motion_label: str            # still | moving | active
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class DetectedObject:
+    label: str
+    score: float
+    bbox: tuple[int, int, int, int]  # x, y, w, h (pixels)
+
+
+@dataclass
+class ObjectsSeen:
+    detections: list[DetectedObject] = field(default_factory=list)
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class SceneCaption:
+    """Ambient VLM caption — one short sentence describing the scene."""
+    text: str
+    model: str = ""              # which VLM produced it (e.g. "moondream")
+    latency_s: float = 0.0       # round-trip seconds (logged + shown)
     ts: float = field(default_factory=time)

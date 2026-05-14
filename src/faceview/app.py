@@ -57,6 +57,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     from faceview.llm.claude_client import ClaudeClient
     client = ClaudeClient()
     window.llm_client = client
+    # Live perception (presence/emotion/gaze/gestures/scene/...) — gets
+    # prepended to the system prompt on every turn so chat bots have
+    # ambient awareness of what the camera sees. Added BEFORE
+    # bind_memory so the persona swap path doesn't disturb it.
+    try:
+        from faceview.vision.perception import PerceptionStore
+        store = PerceptionStore.shared()
+        client.conversation.add_system_extras_provider(store.narrate_now)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("perception.attach_failed", error=str(exc))
     # Load persistent memory for the current persona so chats build up
     # context across sessions (and across LLM engines).
     window._bind_memory_for_current_persona()

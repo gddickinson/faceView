@@ -69,19 +69,159 @@ class AnthropicEngine:
 
     def stream_reply(self, conv: Conversation, user_text: str):
         client = self._ensure_client()
-        messages = conv.for_anthropic()
         # Re-read from settings on each call so the config dialog can
         # switch models live without restarting the client.
         from faceview.config import settings as _s
         active_model = _s.anthropic_model or self.model
-        with client.messages.stream(
-            model=active_model,
-            max_tokens=1024,
-            system=conv.effective_system(),
-            messages=messages,
-        ) as stream:
-            for text in stream.text_stream:
-                yield text
+
+        # Optional vision tools — Claude can call any of these to
+        # gather extra information about the camera scene. See
+        # llm/vision_tool.py for the full catalogue.
+        from faceview.llm.vision_tool import (
+            FrameGrabber, vision_tool_enabled,
+            TIER1_TOOLS_ANTHROPIC, TIER23_TOOLS_ANTHROPIC,
+            run_look_anthropic, run_remember_person,
+            run_read_text, run_track_object, run_check_visible,
+            run_describe_color, run_describe_pose, run_face_attributes,
+            run_scan_qr, run_estimate_depth, run_gaze_target,
+            run_segment_object,
+        )
+        use_tools = vision_tool_enabled()
+        tools_arg: list[dict] = (
+            list(TIER1_TOOLS_ANTHROPIC) + list(TIER23_TOOLS_ANTHROPIC)
+            if use_tools else []
+        )
+        grabber = FrameGrabber.shared() if use_tools else None
+
+        # We mutate a local messages list so any tool-use round-trip
+        # lives only in this turn; Conversation only sees the final
+        # text reply via add_assistant() in the consumer.
+        messages: list = list(conv.for_anthropic())
+        system = conv.effective_system()
+
+        log.info("anthropic.send", model=active_model,
+                 messages=len(messages), tools=len(tools_arg),
+                 system_preview=system[:400])
+        # Cap on tool loops so a misbehaving model can't burn the API.
+        for _step in range(4):
+            kwargs: dict = {
+                "model": active_model,
+                "max_tokens": 1024,
+                "system": system,
+                "messages": messages,
+            }
+            if tools_arg:
+                kwargs["tools"] = tools_arg
+            with client.messages.stream(**kwargs) as stream:
+                for text in stream.text_stream:
+                    yield text
+                final = stream.get_final_message()
+            log.info("anthropic.stream_done", step=_step,
+                     stop_reason=str(final.stop_reason))
+            if final.stop_reason != "tool_use":
+                return
+            # Append the assistant turn (text + tool_use blocks) and
+            # the user-side tool_result messages, then re-stream.
+            assistant_blocks: list = []
+            tool_results: list = []
+            for block in final.content:
+                blk = block.model_dump() if hasattr(block, "model_dump") \
+                    else dict(block)
+                assistant_blocks.append(blk)
+                if blk.get("type") != "tool_use":
+                    continue
+                tu_id = blk.get("id", "")
+                name = blk.get("name", "")
+                log.info("anthropic.tool_use", tool=name,
+                         input=blk.get("input") or {})
+                if name == "look_at_camera" and grabber is not None:
+                    inp = blk.get("input") or {}
+                    content = run_look_anthropic(
+                        grabber,
+                        question=str(inp.get("question") or ""),
+                        region=str(inp.get("region") or "full"),
+                    )
+                elif name == "remember_person" and grabber is not None:
+                    arg_name = (blk.get("input") or {}).get("name", "")
+                    msg = run_remember_person(grabber, arg_name)
+                    content = [{"type": "text", "text": msg}]
+                    log.info("anthropic.tool_result",
+                             tool=name, msg=msg[:120])
+                elif name == "read_text" and grabber is not None:
+                    inp = blk.get("input") or {}
+                    msg = run_read_text(
+                        grabber, region=str(inp.get("region") or "full"),
+                    )
+                    content = [{"type": "text", "text": msg}]
+                    log.info("anthropic.tool_result",
+                             tool=name, msg=msg[:120])
+                elif name == "track_object":
+                    inp = blk.get("input") or {}
+                    msg = run_track_object(
+                        label=str(inp.get("label") or ""),
+                        duration_s=float(inp.get("duration_s") or 10),
+                    )
+                    content = [{"type": "text", "text": msg}]
+                    log.info("anthropic.tool_result",
+                             tool=name, msg=msg[:120])
+                elif name == "check_visible" and grabber is not None:
+                    inp = blk.get("input") or {}
+                    msg = run_check_visible(
+                        grabber,
+                        query=str(inp.get("query") or ""),
+                        region=str(inp.get("region") or "full"),
+                    )
+                    content = [{"type": "text", "text": msg}]
+                    log.info("anthropic.tool_result",
+                             tool=name, msg=msg[:120])
+                elif name == "describe_color" and grabber is not None:
+                    inp = blk.get("input") or {}
+                    msg = run_describe_color(
+                        grabber,
+                        region=str(inp.get("region") or "full"),
+                    )
+                    content = [{"type": "text", "text": msg}]
+                elif name == "describe_pose" and grabber is not None:
+                    msg = run_describe_pose(grabber)
+                    content = [{"type": "text", "text": msg}]
+                elif name == "face_attributes" and grabber is not None:
+                    msg = run_face_attributes(grabber)
+                    content = [{"type": "text", "text": msg}]
+                elif name == "scan_qr" and grabber is not None:
+                    msg = run_scan_qr(grabber)
+                    content = [{"type": "text", "text": msg}]
+                elif name == "estimate_depth" and grabber is not None:
+                    inp = blk.get("input") or {}
+                    msg = run_estimate_depth(
+                        grabber,
+                        region=str(inp.get("region") or "full"),
+                    )
+                    content = [{"type": "text", "text": msg}]
+                elif name == "gaze_target":
+                    msg = run_gaze_target()
+                    content = [{"type": "text", "text": msg}]
+                elif name == "segment_object" and grabber is not None:
+                    inp = blk.get("input") or {}
+                    msg = run_segment_object(
+                        grabber, label=str(inp.get("label") or ""),
+                    )
+                    content = [{"type": "text", "text": msg}]
+                else:
+                    content = [{"type": "text",
+                                "text": f"Unknown tool: {name}"}]
+                    log.warning("anthropic.unknown_tool", tool=name)
+                if log.isEnabledFor:
+                    log.info("anthropic.tool_dispatched", tool=name)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu_id,
+                    "content": content,
+                })
+            messages.append({"role": "assistant",
+                             "content": assistant_blocks})
+            messages.append({"role": "user", "content": tool_results})
+        # Hit the cap without resolving — bail out gracefully.
+        yield "\n(I tried to use a tool too many times. Stopping.)"
 
 
 # ── Client facade ────────────────────────────────────────────────────────
@@ -100,8 +240,11 @@ class ClaudeClient:
         self._engine_name = "custom" if engine is not None else ""
         # Memory store (persistent per-persona). Bound after construction
         # via :meth:`bind_memory`. Until then, the system prompt is just
-        # the default — no persistent context.
+        # the default + whatever live providers (perception) are added.
         self.memory = None
+        # We track our own memory provider so swapping persona doesn't
+        # clobber unrelated extras providers (e.g. PerceptionStore).
+        self._memory_provider = None
         if engine is not None:
             self.engine = engine
         else:
@@ -115,14 +258,22 @@ class ClaudeClient:
 
     def bind_memory(self, store) -> None:
         """Attach a :class:`MemoryStore`. Its narrate_for_prompt() output
-        will be prepended to the system prompt on every turn, regardless
-        of which engine (Anthropic / Ollama / Demo) is active."""
+        will be appended to the system extras on every turn, regardless
+        of which engine (Anthropic / Ollama / Demo) is active.
+
+        Other extras providers (e.g. live perception added in app.py
+        before bind_memory is called) are preserved across persona
+        swaps — we only swap our own memory slot."""
+        if self._memory_provider is not None:
+            self.conversation.remove_system_extras_provider(
+                self._memory_provider
+            )
+            self._memory_provider = None
         self.memory = store
-        if store is None:
-            self.conversation.set_system_extras_provider(None)
-        else:
-            self.conversation.set_system_extras_provider(
-                store.narrate_for_prompt,
+        if store is not None:
+            self._memory_provider = store.narrate_for_prompt
+            self.conversation.add_system_extras_provider(
+                self._memory_provider
             )
 
     # ── live engine selection ────────────────────────────────────────

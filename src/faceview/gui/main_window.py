@@ -32,6 +32,7 @@ from faceview.gui.avatar_window import AvatarWindow
 from faceview.gui.camera_panel import CameraPanel
 from faceview.gui.chat_panel import ChatPanel
 from faceview.gui.layout import LayoutManager
+from faceview.gui.perception_panel import PerceptionPanel
 from faceview.gui.screenshotter import Screenshotter
 from faceview.gui.status_panel import StatusPanel
 from faceview.gui.transcript_panel import TranscriptPanel
@@ -60,6 +61,8 @@ class MainWindow(QMainWindow):
         self.chat = ChatPanel(self)
         self.status_panel = StatusPanel(self)
         self.transcript = TranscriptPanel(self)
+        # Debug view: live perception snapshot the LLM sees on every turn.
+        self.perception_panel = PerceptionPanel(self)
 
         # Companion window for Claude's avatar.
         self.avatar_window: Optional[AvatarWindow] = None
@@ -76,6 +79,10 @@ class MainWindow(QMainWindow):
         self._mouth = None
         self._emotion = None
         self._identity = None
+        self._scene = None
+        self._scene_captioner = None
+        self._gestures = None
+        self._objects = None
         self._tts = None
         self._stt = None
         self._vad = None
@@ -270,6 +277,15 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 pass
             self._camera_worker = None
+            # Tear down the ambient captioner too — it has nothing to
+            # caption without the camera and a still-running thread
+            # would keep poking Ollama unnecessarily.
+            if self._scene_captioner is not None:
+                try:
+                    self._scene_captioner.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._scene_captioner = None
             self.statusBar().showMessage("Camera stopped")
 
     def _start_vision_analysers(self) -> None:
@@ -310,6 +326,47 @@ class MainWindow(QMainWindow):
             except Exception as exc:  # noqa: BLE001
                 log.warning("identity.start_failed", error=str(exc))
                 self._identity = None
+        # Cheap whole-frame scene descriptors (brightness, motion).
+        if self._scene is None:
+            try:
+                from faceview.vision.scene import SceneAnalyzer
+                self._scene = SceneAnalyzer()
+                self._scene.start()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("scene.start_failed", error=str(exc))
+                self._scene = None
+        # MediaPipe Gesture Recognizer (downloads model on first run).
+        if self._gestures is None:
+            try:
+                from faceview.vision.gestures import GestureRecognizer
+                rec = GestureRecognizer()
+                if rec.start():
+                    self._gestures = rec
+            except Exception as exc:  # noqa: BLE001
+                log.warning("gestures.start_failed", error=str(exc))
+                self._gestures = None
+        # MediaPipe Object Detector (EfficientDet-Lite0).
+        if self._objects is None:
+            try:
+                from faceview.vision.objects import ObjectDetector
+                det = ObjectDetector()
+                if det.start():
+                    self._objects = det
+            except Exception as exc:  # noqa: BLE001
+                log.warning("objects.start_failed", error=str(exc))
+                self._objects = None
+        # Ambient VLM scene captioner (moondream, ~15 s cadence). Runs
+        # in its own thread; skips work when no face is in frame and
+        # when the scene hasn't moved.
+        if self._scene_captioner is None:
+            try:
+                from faceview.vision.scene_caption import SceneCaptioner
+                cap = SceneCaptioner()
+                if cap.start():
+                    self._scene_captioner = cap
+            except Exception as exc:  # noqa: BLE001
+                log.warning("scene_caption.start_failed", error=str(exc))
+                self._scene_captioner = None
 
     # ── lifecycle: microphone ──────────────────────────────────────
 

@@ -24,7 +24,9 @@ from typing import Optional
 
 from faceview.core.errors import MissingDependency
 from faceview.core.event_bus import get_bus
-from faceview.core.events import EventType, HeadPose, MouthActivity
+from faceview.core.events import (
+    Blink, EventType, FaceDistance, Gaze, HeadPose, MouthActivity,
+)
 from faceview.core.logger import get_logger
 
 
@@ -47,6 +49,9 @@ class MouthAnalyzer:
         self._lock = threading.Lock()
         self._last_emit = 0.0
         self._jaw_window: deque[float] = deque(maxlen=8)
+        # Rolling blink-rate window: timestamps of detected blink-closures.
+        self._blink_times: deque[float] = deque()
+        self._was_eye_closed = False
 
     def start(self) -> None:
         try:
@@ -164,3 +169,126 @@ class MouthAnalyzer:
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("mouth.head_pose_error", error=str(exc))
+
+        # ── face distance, gaze, blink ──────────────────────────────────
+        # We reuse the face mesh already running above so these signals
+        # come for free. All published at the same ~10 Hz cadence as the
+        # mouth/head emits — PerceptionStore samples whichever is most
+        # recent.
+        try:
+            self._emit_distance(lms)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("mouth.distance_error", error=str(exc))
+        try:
+            self._emit_gaze(lms)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("mouth.gaze_error", error=str(exc))
+        try:
+            self._emit_blink(lms)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("mouth.blink_error", error=str(exc))
+
+    # ── derived signals ──────────────────────────────────────────────────
+
+    def _emit_distance(self, lms) -> None:
+        """Coarse face distance from inter-eye width in normalised coords."""
+        left_eye = lms[33]
+        right_eye = lms[263]
+        eye_w = abs(right_eye.x - left_eye.x)
+        # Approximate bbox area share: square of eye width × a constant.
+        # Calibrated by eye on a 1280×720 webcam at typical distances.
+        bbox_ratio = max(0.0, min(1.0, (eye_w * 3.2) ** 2))
+        if eye_w > 0.16:
+            label = "close"
+        elif eye_w > 0.10:
+            label = "near"
+        elif eye_w > 0.06:
+            label = "normal"
+        else:
+            label = "far"
+        get_bus().publish(
+            EventType.FACE_DISTANCE,
+            FaceDistance(label=label, bbox_ratio=bbox_ratio),
+        )
+
+    def _emit_gaze(self, lms) -> None:
+        """Iris-relative gaze direction (requires ``refine_landmarks=True``)."""
+        # Iris landmarks: left iris 468–472, right iris 473–477 (refined mesh).
+        if len(lms) < 478:
+            return
+        l_iris = lms[468]
+        r_iris = lms[473]
+        # Eye corners
+        l_outer = lms[33]
+        l_inner = lms[133]
+        r_inner = lms[362]
+        r_outer = lms[263]
+        # Eye vertical bounds
+        l_top = lms[159]
+        l_bot = lms[145]
+        r_top = lms[386]
+        r_bot = lms[374]
+
+        def _norm_offset(iris, inner, outer, top, bot) -> tuple[float, float]:
+            ex = (inner.x + outer.x) * 0.5
+            ey = (top.y + bot.y) * 0.5
+            w = max(1e-3, abs(outer.x - inner.x))
+            h = max(1e-3, abs(bot.y - top.y))
+            return (iris.x - ex) / w, (iris.y - ey) / h
+
+        lx, ly = _norm_offset(l_iris, l_inner, l_outer, l_top, l_bot)
+        rx, ry = _norm_offset(r_iris, r_inner, r_outer, r_top, r_bot)
+        yaw = max(-1.0, min(1.0, (lx + rx) * 1.6))
+        pitch = max(-1.0, min(1.0, (ly + ry) * 1.6))
+        # Attention: 1 when iris is centred in both eyes.
+        attention = max(0.0, 1.0 - (abs(yaw) + abs(pitch)) * 0.6)
+        attention = max(0.0, min(1.0, attention))
+        if attention > 0.65:
+            direction = "camera"
+        elif yaw > 0.35:
+            direction = "right"
+        elif yaw < -0.35:
+            direction = "left"
+        elif pitch > 0.35:
+            direction = "down"
+        elif pitch < -0.35:
+            direction = "up"
+        else:
+            direction = "away"
+        get_bus().publish(
+            EventType.GAZE,
+            Gaze(direction=direction, yaw=yaw, pitch=pitch,
+                 attention=attention),
+        )
+
+    def _emit_blink(self, lms) -> None:
+        """Eye-aspect-ratio (Soukupová & Čech) + rolling blink rate."""
+        def _ear(top1, top2, bot1, bot2, outer, inner) -> float:
+            vert = (abs(top1.y - bot1.y) + abs(top2.y - bot2.y)) * 0.5
+            horiz = max(1e-4, abs(outer.x - inner.x))
+            return vert / horiz
+
+        left = _ear(lms[159], lms[158], lms[145], lms[153], lms[33], lms[133])
+        right = _ear(lms[386], lms[385], lms[374], lms[380], lms[263], lms[362])
+        ear = (left + right) * 0.5
+        # EAR ~0.30 open, ~0.10 closed. State threshold below.
+        state = "open"
+        closed = ear < 0.18
+        if closed:
+            state = "closed"
+        elif ear < 0.22:
+            state = "drowsy"
+
+        now = time.time()
+        if closed and not self._was_eye_closed:
+            self._blink_times.append(now)
+        self._was_eye_closed = closed
+        # Trim to last 30 s.
+        while self._blink_times and now - self._blink_times[0] > 30.0:
+            self._blink_times.popleft()
+        rate_per_min = (len(self._blink_times) / 30.0) * 60.0
+
+        get_bus().publish(
+            EventType.BLINK,
+            Blink(eye_open=ear, state=state, rate_per_min=rate_per_min),
+        )

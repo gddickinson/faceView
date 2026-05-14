@@ -64,9 +64,30 @@ faceView/
 │   ├── vision/
 │   │   ├── camera.py            cv2 AVFoundation capture worker (joined teardown)
 │   │   ├── presence.py          MediaPipe face detection
-│   │   ├── identity.py          InsightFace ArcFace owner-vs-stranger
+│   │   ├── identity.py          InsightFace ArcFace, matches against
+│   │   │                        every name in PeopleStore
+│   │   ├── people.py            PeopleStore — name→embedding template
+│   │   │                        disk store + match() / remember() API
 │   │   ├── emotion.py           DeepFace 7-class emotion
-│   │   ├── mouth.py             Mouth-activity + viseme + head-pose from face mesh
+│   │   ├── mouth.py             Mouth-activity + viseme + head-pose + gaze +
+│   │   │                        face-distance + blink (one face mesh, many outputs)
+│   │   ├── scene.py             Whole-frame brightness + motion at ~5 Hz
+│   │   ├── gestures.py          MP Gesture Recognizer (thumbs_up / open_palm / …)
+│   │   ├── objects.py           MP Object Detector (EfficientDet-Lite0, ~80 COCO)
+│   │   ├── perception.py        PerceptionStore aggregator + narrate_now() for
+│   │   │                        LLM system-prompt injection (always-on ambient)
+│   │   ├── scene_caption.py     Ambient VLM captioner (moondream by default,
+│   │   │                        ~15 s cadence, gated on presence + motion)
+│   │   ├── ocr.py               EasyOCR singleton for read_text tool
+│   │   ├── tracker.py           IoU-based object tracker (track_object tool)
+│   │   ├── clip_query.py        OpenCLIP open-vocab visibility (check_visible)
+│   │   ├── color.py             Dominant-colour analysis (describe_color)
+│   │   ├── pose.py              MediaPipe Pose posture analysis (describe_pose)
+│   │   ├── face_attr.py         InsightFace age+gender reuse (face_attributes)
+│   │   ├── qr.py                cv2 QR code scanner (scan_qr)
+│   │   ├── depth.py             MiDaS-small depth estimation (estimate_depth)
+│   │   ├── gaze_target.py       Heuristic gaze-target reader (gaze_target)
+│   │   ├── segment.py           GrabCut foreground mask (segment_object)
 │   │   ├── mirror.py            MirrorState — user → avatar real-time mimic
 │   │   ├── sim_face.py          Procedural face renderer (FaceParams)
 │   │   ├── sim_camera.py        SimCameraWorker — synthetic frames; AVATAR_FRAME
@@ -101,7 +122,10 @@ faceView/
 │   │   │                        live select_engine + bind_memory hooks
 │   │   ├── conversation.py      Conversation + effective_system() with
 │   │   │                        memory-context provider
-│   │   ├── ollama_client.py     Local Ollama backend (auto-fallback)
+│   │   ├── ollama_client.py     Local Ollama backend (auto-fallback) +
+│   │   │                        tool-use loop + pick_vision_model()
+│   │   ├── vision_tool.py       look_at_camera tool — FrameGrabber +
+│   │   │                        Anthropic image content + Ollama VLM bridge
 │   │   ├── character.py         Character dataclass + characters.json registry
 │   │   ├── cognition.py         CognitionStore (episodic + semantic +
 │   │   │                        emotional + relationship); JSON-persisted
@@ -161,15 +185,19 @@ every push, archiving the screenshot as a build artefact.
 | Symbol | File | Notes |
 |---|---|---|
 | `EventBus` | `core/event_bus.py` | Singleton `QObject` with Qt signals; thread-safe via `Qt.QueuedConnection` |
-| `EventType` | `core/events.py` | `AUDIO_CHUNK`, `VAD_SPEECH_START/END`, `TRANSCRIPT_PARTIAL/FINAL`, `CHAT_USER_MESSAGE`, `LLM_TOKEN`, `LLM_REPLY`, `LLM_ERROR`, `CHAT_LOG`, `TTS_SPEAK/STARTED/FINISHED`, `FRAME`, `AVATAR_FRAME`, `PRESENCE`, `IDENTITY`, `EMOTION`, `MOUTH_ACTIVITY`, `HEAD_POSE`, `STATUS`, `ERROR`. |
+| `EventType` | `core/events.py` | `AUDIO_CHUNK`, `VAD_SPEECH_START/END`, `TRANSCRIPT_PARTIAL/FINAL`, `CHAT_USER_MESSAGE`, `LLM_TOKEN`, `LLM_REPLY`, `LLM_ERROR`, `CHAT_LOG`, `TTS_SPEAK/STARTED/FINISHED`, `FRAME`, `AVATAR_FRAME`, `PRESENCE`, `IDENTITY`, `EMOTION`, `MOUTH_ACTIVITY`, `HEAD_POSE`, `GAZE`, `FACE_DISTANCE`, `BLINK`, `GESTURE`, `SCENE`, `OBJECTS`, `STATUS`, `ERROR`. |
+| `PerceptionStore` | `vision/perception.py` | Singleton bus subscriber caching every structured vision signal. `narrate_now()` → one-paragraph live status that's prepended to the LLM system prompt every turn (added in `app.py` via `Conversation.add_system_extras_provider`). `snapshot_dict()` powers the Perception debug panel. |
+| `FrameGrabber` | `llm/vision_tool.py` | Singleton subscribed to `FRAME` + `AVATAR_FRAME`. `latest_jpeg_b64()` → base-64 JPEG of the most-recent frame (preferring real camera over avatar render). Used by both Anthropic (returns image content block in tool_result) and Ollama (POST'd to /api/generate against a local VLM) backends of the `look_at_camera` tool. Also feeds raw BGR into the `remember_person` tool's PeopleStore.remember call. |
+| `PeopleStore` | `vision/people.py` | Process-wide singleton mapping display-name → InsightFace embedding, persisted to `~/.faceview/people/<slug>.npz`. `IdentityRecognizer.start()` injects its `embed()` function so the LLM `remember_person` tool can save a face without owning a second InsightFace model. The legacy `owner_data/owner.npy` is loaded as a synthetic `"owner"` entry. |
+| `PerceptionPanel` | `gui/perception_panel.py` | Debug dock that shows the narrated paragraph the LLM sees plus a structured grid of every signal — fresh signals in green, stale in grey, missing in dim. Refreshes at 4 Hz from `PerceptionStore`. |
 | `MainWindow` | `gui/main_window.py` | Owns worker lifecycles (camera, mic, TTS, avatar, test mode, mirror); routes persona swap → cognition rebind → TTS voice swap. |
 | `LayoutManager` | `gui/layout.py` | Wraps the four panels in `QDockWidget`s; persists Save/Reset state via `QSettings`. |
 | `ChatPanel` | `gui/chat_panel.py` | Streaming chat + "🎤 Hold to talk" push-to-speak button (interrupts TTS). |
 | `AvatarWindow` | `gui/avatar_window.py` | Standalone face window subscribing to `AVATAR_FRAME` + `EMOTION` + `LLM_REPLY`. |
 | `Character` | `llm/character.py` | Stable identity: name, backstory, Big Five traits, conversation style, catchphrases, goals, voice, relationship levels. |
 | `CognitionStore` | `llm/cognition.py` | Persisted per-persona. Layers: episodic (significance + emotion + rehearsal recall), semantic (facts/beliefs by subject with confidence), emotional (current emotions with ~6h half-life decay), relationship score → level. Builds `narrate_for_prompt()` for system-prompt injection on every turn. |
-| `ClaudeClient` | `llm/claude_client.py` | Engine-agnostic facade (`anthropic` / `ollama` / `demo`). `select_engine(name, model)` swaps live; `bind_memory(store)` plugs the cognition narrative into `Conversation.effective_system()`. |
-| `Conversation` | `llm/conversation.py` | Message history + `effective_system()` that prepends a system-extras provider (the cognition narrative). |
+| `ClaudeClient` | `llm/claude_client.py` | Engine-agnostic facade (`anthropic` / `ollama` / `demo`). `select_engine(name, model)` swaps live; `bind_memory(store)` adds the cognition narrative as an extras provider (without disturbing the perception provider). Anthropic + Ollama engines run a `look_at_camera` tool-use loop — see `vision_tool.py`. |
+| `Conversation` | `llm/conversation.py` | Message history + `effective_system()` that prepends *all* registered system-extras providers (live perception + cognition narrative) before the base prompt. `add_system_extras_provider()` appends; `set_system_extras_provider()` replaces. |
 | `TestConversation` | `llm/test_conversation.py` | Two-bot orchestrator. `mode="llm"` when both engines supplied — each bot uses its character's `narrate_identity()` as system prompt and its own `Conversation`. |
 | `TtsWorker` | `speech/tts.py` | Picks Kokoro if installed + assets present, else pyttsx3. `interrupt()` kills the active utterance; `set_voice(name)` swaps voice live. |
 | `KokoroEngine` | `speech/tts_kokoro.py` | Kokoro-onnx synth → temp WAV → `afplay` (avoids `sounddevice.play` clashing with the mic InputStream). Tracks subprocess for interruption. |

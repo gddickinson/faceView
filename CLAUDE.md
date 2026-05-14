@@ -51,6 +51,27 @@ pytest                                    # tests
 - `FACEVIEW_KINK_FIX=below_chin|legacy` — body-mesh strip cut.
 - `FACEVIEW_DEBUG_PARTS=1` — log per-part displacement during
   cervical cascade for debugging.
+- `FACEVIEW_VISION_TOOL=0` — disable the `look_at_camera` tool that
+  lets the chat bots request a webcam snapshot on demand.
+- `FACEVIEW_OLLAMA_VISION_MODEL=<name>` — pin the local VLM Ollama
+  uses to caption snapshots (e.g. `moondream`, `llava`). Auto-picked
+  from installed models when unset.
+- `FACEVIEW_OLLAMA_DEEP_VISION_MODEL=<name>` — pin the heavier VLM
+  used for on-demand `look_at_camera` calls. Defaults to the most
+  capable installed model (llama3.2-vision → llava:13b → … →
+  moondream).
+- `FACEVIEW_AMBIENT_VLM=0` — disable the periodic background scene
+  captioner. `FACEVIEW_AMBIENT_VLM_INTERVAL=<seconds>` tunes the
+  cadence (default 15). `FACEVIEW_AMBIENT_VLM_MODEL=<name>` pins the
+  captioner's model (default picks moondream / llava:7b / llava).
+- `FACEVIEW_OCR_LANGS=en,fr,…` — comma-separated EasyOCR languages
+  for the `read_text` tool (default `en`).
+- `FACEVIEW_CLIP_THRESHOLD=<0.10–0.40>` — cosine threshold for the
+  `check_visible` tool (default 0.22).
+- `FACEVIEW_GESTURES=0` / `FACEVIEW_OBJECTS=0` — disable the hand-
+  gesture recogniser / object detector. Models auto-download to
+  `~/.faceview/models/` on first start; either flag skips that
+  worker entirely if you want minimal CPU use.
 
 ## Updating session log
 Update `SESSION_Log.md` whenever you finish a meaningful chunk of work.
