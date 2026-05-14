@@ -122,7 +122,7 @@ class CognitionStore:
     """Per-persona persistent cognition: episodic + semantic + emotional
     + character + relationship progression."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, persona: str) -> None:
         self.persona = persona
@@ -131,6 +131,12 @@ class CognitionStore:
         self.session_count: int = 0
         self.relationship_score: int = 0
         self.episodic: list[dict[str, Any]] = []
+        # Per-person episodic branches — see C3 on the roadmap. Keyed
+        # by the display name from PeopleStore. Writes are routed to
+        # the matching bucket when the live identity from
+        # PerceptionStore is non-"stranger"; otherwise writes go to
+        # the shared `episodic` list as before.
+        self.per_person: dict[str, list[dict[str, Any]]] = {}
         self.semantic: dict[str, dict[str, dict]] = {}
         self.emotional: dict[str, dict[str, Any]] = {}
         self._dirty = False
@@ -140,6 +146,10 @@ class CognitionStore:
         # the current user message. None → fall back to recency +
         # significance ranking.
         self._query_context: Optional[str] = None
+        # Optional override: if explicitly set via set_current_speaker
+        # we use it; otherwise we look up the live identity from
+        # PerceptionStore on demand.
+        self._speaker_override: Optional[str] = None
 
     # ── persistence ─────────────────────────────────────────────
 
@@ -173,10 +183,13 @@ class CognitionStore:
         return store
 
     def _load_v2(self, data: dict) -> None:
+        """v2 + v3 share most fields. v3 adds ``per_person``; on a v2
+        file that key is missing and defaults to {}."""
         self.first_seen = data.get("first_seen")
         self.session_count = int(data.get("session_count") or 0)
         self.relationship_score = int(data.get("relationship_score") or 0)
         self.episodic = data.get("episodic") or []
+        self.per_person = data.get("per_person") or {}
         self.semantic = data.get("semantic") or {}
         self.emotional = data.get("emotional") or {}
 
@@ -217,6 +230,7 @@ class CognitionStore:
             "session_count": self.session_count,
             "relationship_score": self.relationship_score,
             "episodic": self.episodic,
+            "per_person": self.per_person,
             "semantic": self.semantic,
             "emotional": self.emotional,
             "saved_at": _time.time(),
@@ -231,7 +245,12 @@ class CognitionStore:
     def record_episode(self, type_: str, text: str, *,
                        significance: int = 3,
                        emotion: str = "neutral",
-                       embedding: Optional[list[float]] = None) -> None:
+                       embedding: Optional[list[float]] = None,
+                       speaker: Optional[str] = None) -> None:
+        """Append an episode. When ``speaker`` (or the live identity
+        from PerceptionStore) names a known person, the entry is
+        filed under :attr:`per_person`; otherwise it goes to the
+        shared :attr:`episodic` list."""
         entry: dict[str, Any] = {
             "ts": _time.time(),
             "type": type_,
@@ -243,13 +262,16 @@ class CognitionStore:
         }
         if embedding is not None:
             entry["embedding"] = embedding
-        self.episodic.append(entry)
+        who = speaker or self.current_speaker()
+        if who and who.lower() != "stranger":
+            entry["speaker"] = who
+            self.per_person.setdefault(who, []).append(entry)
+        else:
+            self.episodic.append(entry)
         self._dirty = True
         self._maybe_consolidate()
 
     def _maybe_consolidate(self) -> None:
-        if len(self.episodic) <= EPISODIC_HARD_CAP:
-            return
         now = _time.time()
         if now - self._last_consolidate < 60.0:
             return
@@ -259,9 +281,18 @@ class CognitionStore:
             return (m.get("significance", 3) * 2
                     + m.get("recalled", 0) * 0.5
                     - age_m)
-        self.episodic.sort(key=_score, reverse=True)
-        self.episodic = self.episodic[:EPISODIC_TRIM_TO]
-        self._last_consolidate = now
+        if len(self.episodic) > EPISODIC_HARD_CAP:
+            self.episodic.sort(key=_score, reverse=True)
+            self.episodic = self.episodic[:EPISODIC_TRIM_TO]
+            self._last_consolidate = now
+        # Also trim each per-person bucket — fewer entries each but
+        # the same per-bucket caps so a single chatty person can't
+        # blow up the file.
+        for name, bucket in list(self.per_person.items()):
+            if len(bucket) > EPISODIC_HARD_CAP:
+                bucket.sort(key=_score, reverse=True)
+                self.per_person[name] = bucket[:EPISODIC_TRIM_TO]
+                self._last_consolidate = now
 
     def recall(self, context: str, *, limit: int = 5) -> list[dict]:
         """Score memories by recency × significance × emotion × relevance × rehearsal."""
@@ -401,6 +432,40 @@ class CognitionStore:
             "unlocks": lvl.get("unlocks", ""),
         }
 
+    # ── current-speaker awareness (C3) ───────────────────────────
+
+    def set_current_speaker(self, name: Optional[str]) -> None:
+        """Explicit override for who we're talking to. ``None`` falls
+        back to whatever PerceptionStore reports."""
+        self._speaker_override = name
+
+    def current_speaker(self) -> Optional[str]:
+        """Best guess of the currently-visible person's name.
+
+        Order: explicit override → live PerceptionStore identity (if
+        fresh and not ``stranger``) → ``None``."""
+        if self._speaker_override is not None:
+            return self._speaker_override
+        try:
+            from faceview.vision.perception import PerceptionStore
+            snap = PerceptionStore.shared().snapshot_dict()
+            ident = snap.get("identity")
+            if ident and ident.get("fresh"):
+                label = ident.get("label") or ""
+                if label and label.lower() != "stranger":
+                    return label
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    def _episodes_for(self, speaker: Optional[str]) -> list[dict]:
+        """All episodes visible to a given speaker — their own bucket
+        plus the shared global episodes. Order isn't sorted; callers
+        score themselves."""
+        if speaker is None:
+            return list(self.episodic)
+        return list(self.per_person.get(speaker, [])) + list(self.episodic)
+
     # ── retrieval-augmented recall ──────────────────────────────
 
     def set_query_context(self, text: Optional[str]) -> None:
@@ -415,10 +480,13 @@ class CognitionStore:
     ) -> list[dict]:
         """Top-K episodic memories by cosine similarity to ``query``.
 
-        Empty when no episodes have embeddings or the query can't be
-        embedded (no sentence-transformers). Used to augment, not
-        replace, the keyword-based :meth:`recall`."""
-        if not query or not self.episodic:
+        Searches across the shared episodic list plus the current
+        speaker's per-person bucket (if any) so the conversation has
+        access to "things we've discussed before". Empty when no
+        episodes have embeddings or the query can't be embedded."""
+        speaker = self.current_speaker()
+        pool = self._episodes_for(speaker)
+        if not query or not pool:
             return []
         try:
             from faceview.llm.embeddings import EmbeddingService, cosine
@@ -428,7 +496,7 @@ class CognitionStore:
         if q_vec is None:
             return []
         scored: list[tuple[float, dict]] = []
-        for mem in self.episodic:
+        for mem in pool:
             emb = mem.get("embedding")
             if not emb:
                 continue
@@ -483,6 +551,21 @@ class CognitionStore:
             sections.append("[Shared history] "
                             + "; ".join(str(h)[:100] for h in recent) + ".")
 
+        # Per-person ledger — when we recognise who we're talking to,
+        # show the last few exchanges WITH THAT PERSON specifically.
+        # This is the C3 unlock: George's "did you finish that bug
+        # yet" comes back to George, not to Alice's session next time.
+        speaker = self.current_speaker()
+        if speaker:
+            bucket = self.per_person.get(speaker) or []
+            recent = bucket[-3:]
+            if recent:
+                bits = [f"- {m.get('text','')}" for m in recent]
+                sections.append(
+                    f"[Conversation history with {speaker}]\n"
+                    + "\n".join(bits)
+                )
+
         # Retrieval-augmented: if a query context is set (the live
         # user message) and we have embeddings, surface semantically
         # similar past episodes BEFORE the keyword-based recall block.
@@ -531,6 +614,7 @@ class CognitionStore:
             "user_name": self.get_fact("player", "name"),
             "relationship": self.relationship(),
             "episodic": len(self.episodic),
+            "per_person": {n: len(b) for n, b in self.per_person.items()},
             "semantic_subjects": list(self.semantic.keys()),
             "current_emotion": self.dominant_emotion(),
             "path": str(self.path_for(self.persona)),
@@ -538,6 +622,7 @@ class CognitionStore:
 
     def clear(self) -> None:
         self.episodic = []
+        self.per_person = {}
         self.semantic = {}
         self.emotional = {}
         self.relationship_score = 0
