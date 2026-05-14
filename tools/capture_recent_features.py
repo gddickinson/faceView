@@ -212,6 +212,42 @@ def scene_main_with_perception(window: MainWindow) -> Path:
     return window.shotter.capture_window(window, "recent_main_window.png")
 
 
+def scene_dark_theme(window: MainWindow) -> Path:
+    """Same hero shot but with dark theme active (U6)."""
+    from faceview.gui.theme import apply_theme
+    apply_theme("dark")
+    window.chat._blocks = []
+    window.chat._live_block = None
+    window.chat.seed_demo_conversation()
+    window.transcript.seed_demo()
+    _seed_perception(strong=True)
+    _seed_room_map()
+    _wait(300)
+    path = window.shotter.capture_window(window, "recent_dark_theme.png")
+    # Restore system theme so the next scenes look normal.
+    apply_theme("system")
+    return path
+
+
+def scene_telemetry_with_pixels(window: MainWindow) -> Path:
+    """Status panel showing telemetry + the red recording indicator
+    flashing during a real Anthropic round-trip (simulated)."""
+    _seed_perception(strong=True)
+    bus = get_bus()
+    bus.publish(EventType.TURN_RECORDED, TurnRecord(
+        engine="anthropic", model="claude-sonnet-4-6",
+        duration_s=1.42, prompt_tokens=312, completion_tokens=187,
+        usd_cost=0.00375,
+    ))
+    bus.publish(EventType.PIXELS_LEAVING, PixelTransmission(
+        active=True, destination="anthropic", tool="look_at_camera",
+    ))
+    _wait(200)
+    return window.shotter.capture(
+        window.status_panel, "recent_status_telemetry.png",
+    )
+
+
 # ── streaming chat GIF ──────────────────────────────────────────
 
 
@@ -292,6 +328,7 @@ def main() -> int:
 
     for fn in (
         scene_main_with_perception,
+        scene_dark_theme,
         scene_perception,
         scene_status_telemetry,
         scene_chat_markdown,

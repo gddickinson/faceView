@@ -85,6 +85,30 @@ GUI from outside.
 - **Markdown + Ctrl+F in chat** — code fences, tables, bold/italic
   all render properly. Cmd/Ctrl+F opens an in-panel find bar with
   wrap-around and prefill-from-selection.
+- **Screen capture as a second vision source** — View → Screen
+  capture (`Ctrl+Shift+W`). The LLM gets a parallel `look_at_screen`
+  tool so you can ask about your code, slides, browser, or docs
+  on a different monitor.
+- **Incognito mode + memory editing** — Tools → Incognito
+  (`Ctrl+Shift+N`) drops the current chat on the floor; nothing
+  writes to the cognition store. A `forget_memory` LLM tool can
+  redact specific past memories by substring or recency.
+- **Auto-compaction on context overflow** — older turns get folded
+  into a summary block when the conversation approaches the
+  configured token budget. The model keeps long-arc memory without
+  blowing the context window.
+- **User → persona emotional feedback** — when the camera sees you
+  consistently sad/happy/scared, the persona's emotional ledger
+  shifts to match (kind persona notices when you're down).
+- **Dark / light / system theme** — Tools → Theme with persistent
+  per-user choice.
+- **Plugin system** — drop `~/.faceview/plugins/*.py` declaring
+  one or more LLM-callable tools via
+  `faceview.llm.plugins.register_tool(name, description, schema, executor)`
+  — auto-discovered at boot, auto-added to both engine catalogues.
+- **Worker supervisor** — every background thread is registered
+  and watched; deaths surface to the status bar (and, opt-in,
+  auto-restart up to 3 times).
 
 <p align="center">
   <img src="docs/images/recent_main_window.png" alt="faceView main window with perception panel" width="100%">
@@ -224,6 +248,138 @@ The status panel shows the last turn live, colour-coded by spend:
 
 The **Vision** pill flashes during off-device API calls; the
 **Turn** pill shows last-turn `latency · tokens · cost`.
+
+---
+
+## Screen capture — `look_at_screen`
+
+A second vision source, fully parallel to the webcam pipeline. View
+→ **Screen capture** (`Ctrl+Shift+W`) toggles a small background
+worker that grabs the chosen monitor at ~10 fps and publishes
+`SCREEN_FRAME` events. The LLM gets a new tool, `look_at_screen`,
+that mirrors `look_at_camera` but reads from this stream:
+
+```text
+You:    "Read me the function signature on my screen."
+Claude: → look_at_screen(question="what's the function signature here?")
+Claude: "It's `def parse(payload: bytes, *, strict: bool = False) -> ParseResult`."
+```
+
+Built on `mss` (cross-platform, ~70 KB pure-Python). The status-bar
+Vision pill flashes orange while capture is on — same privacy
+indicator the on-demand VLM uses.
+
+**macOS note**: needs Screen Recording permission granted to the
+terminal / IDE that forked faceView. See
+`docs/TROUBLESHOOTING.md`.
+
+---
+
+## Privacy — incognito + forget
+
+Two tightly-paired controls:
+
+- **Incognito mode** (`Ctrl+Shift+N`) — drops the current chat on
+  the floor. While on, `record_chat_turn` is a no-op: nothing
+  writes to episodic, per-person, semantic, or relationship state.
+  Existing memory keeps powering the system prompt so the LLM
+  still sounds like itself — only the current conversation
+  doesn't get learned from.
+- **`forget_memory` tool** — the LLM can call it when you ask
+  *"forget I said that"* or *"don't remember the bit about
+  X"*. With no args it removes the most-recent stored turn;
+  with `query="..."` it removes up to `limit` memories whose
+  stored text contains that substring (case-insensitive). Both
+  the shared episodic list and per-person buckets are searched.
+
+The status-bar **Vision** pill remains the always-visible cue for
+when pixels are leaving the host. Together they make privacy
+hygiene legible.
+
+---
+
+## Themes (dark / light / system)
+
+Tools → **Theme** flips a hand-tuned Fusion palette between Dark,
+Light, and System. The choice is persisted via QSettings under
+`faceview/theme/mode` so the next launch picks it up before any
+widget paints.
+
+<p align="center">
+  <img src="docs/images/recent_dark_theme.png" alt="faceView in dark mode" width="100%">
+</p>
+
+The pills + chat-block colours intentionally keep their brand hex
+codes; only the structural Qt-widget palette swaps.
+
+---
+
+## Plugin system
+
+Drop a Python file under `~/.faceview/plugins/` declaring one or
+more LLM tools and they appear in both Anthropic + Ollama
+catalogues on the next launch — no engine changes.
+
+```python
+# ~/.faceview/plugins/coffee.py
+from faceview.llm.plugins import register_tool
+
+def _brew(args: dict) -> str:
+    method = args.get("method", "pourover").lower()
+    rules = {
+        "pourover": "Bloom 30 s with 2× coffee weight, then pour to "
+                    "16× over 2:30; aim for 4:00 total.",
+        "aeropress": "1:15 inverted, 1 minute steep, plunge over "
+                     "35 s.",
+    }
+    return rules.get(method, "I don't know that method, sorry!")
+
+register_tool(
+    name="brew_recipe",
+    description="Return a quick recipe for the named brewing method.",
+    schema={
+        "type": "object",
+        "properties": {"method": {"type": "string"}},
+    },
+    executor=_brew,
+)
+```
+
+The LLM sees `brew_recipe` alongside the built-in tools and can
+call it whenever the user asks about coffee. No plugin marketplace,
+no sandboxing — plugins run with full Python privileges, so only
+load ones you trust.
+
+---
+
+## Multi-face identity (P6)
+
+When two people sit in front of the camera, `IdentityRecognizer`
+embeds and matches both. The legacy `IDENTITY` event still reports
+the largest face (so the status pill stays as it was); a new
+`IDENTITIES_MULTI` event carries a list of `(label, similarity,
+bbox, is_owner)` per face. Future panels + LLM tools can answer
+*"who's on the left?"* directly.
+
+---
+
+## User → persona emotional feedback (C8)
+
+The persona's emotional ledger used to evolve only from its own
+replies. With **EmotionFeedback** running, a sustained user
+emotion (≥20 s rolling window, dominant ≥ 50 %, mean confidence
+≥ 0.55) nudges the persona:
+
+| User shows | Persona bump |
+|---|---|
+| happy | joy (0.30) |
+| sad | tenderness (0.40) |
+| fear | tenderness (0.30) |
+| surprise | surprise (0.25) |
+| angry / disgust | *(no bump — staying calm is the right move)* |
+
+Cooldown of 60 s per persona-emotion so a long sad-face doesn't
+keep ratcheting the bump.
 
 ---
 
