@@ -189,6 +189,8 @@ faceView/
     │                            lifecycle / memory
     ├── run_headless.py          Offscreen launch + smoke screenshot
     ├── capture_gui_screenshots.py  Drives GUI states for README
+    ├── capture_recent_features.py  Captures perception/room-map/telemetry/
+    │                            find/calibration screenshots + chat-streaming GIF
     ├── animate_*.py             GIF + grid renderers (talking, anatomy, …)
     ├── build_ict_blendshapes.py Compile USC ICT-FaceKit → 23 MB npz
     ├── enroll_owner.py          One-time face-enrollment routine

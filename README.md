@@ -55,6 +55,47 @@ GUI from outside.
   controls the GUI, `tools/faceview_monitor.py` reads state. Both talk
   to a 127.0.0.1 FastAPI control plane; an MCP server adapter exposes
   the same surface as native Claude Code tools.
+- **Ambient perception → system prompt** — every turn the LLM sees a
+  live status block built from the camera (face count, recognised
+  identity, emotion, gaze, head pose, distance, blink rate, gesture,
+  scene brightness/motion, detected objects, and a short VLM caption
+  refreshed every 15 s). The chat bot speaks with context, not blind.
+- **12 LLM-callable image-analysis tools** — `look_at_camera`,
+  `remember_person`, `read_text`, `track_object`, `check_visible`
+  (open-vocabulary CLIP), `describe_color`, `describe_pose`,
+  `face_attributes`, `scan_qr`, `estimate_depth`, `gaze_target`,
+  `segment_object`, plus `describe_room_layout`. The model picks
+  what it needs; faceView routes through the right local stack.
+- **Top-down room map** — View → Room map… (`Ctrl+Shift+Z`). MiDaS
+  monocular depth + EfficientDet detections projected to a plan
+  view: FOV cone, dots per object with distance, motion trails,
+  head-pose heading arrow. Optional metric calibration converts
+  relative units to metres.
+- **Per-person memory** — PeopleStore + multi-person identity. When
+  Claude recognises you the cognition layer routes the turn into
+  *your* memory bucket. Different friend, different thread.
+- **Live cost + latency telemetry** — per-turn token counts (real
+  from Anthropic + Ollama, estimated for demo), USD cost, wall-time,
+  persisted to `~/.faceview/telemetry.jsonl` and shown live in a
+  status pill colour-coded by spend.
+- **OpenAI-compatible HTTP endpoint** — `/v1/chat/completions` +
+  `/v1/models` on port 8765, so any OpenAI-SDK caller can use
+  faceView as a drop-in local LLM that already knows what the
+  camera sees.
+- **Markdown + Ctrl+F in chat** — code fences, tables, bold/italic
+  all render properly. Cmd/Ctrl+F opens an in-panel find bar with
+  wrap-around and prefill-from-selection.
+
+<p align="center">
+  <img src="docs/images/recent_main_window.png" alt="faceView main window with perception panel" width="100%">
+</p>
+<p align="center">
+  <em>Main window with the live <strong>Perception</strong> panel on the
+  right showing what the LLM sees this turn — recognised face, emotion,
+  gaze, gesture, scene caption, objects, plus the persistent roster of
+  known people. The Status block's Vision pill flashes red whenever a
+  frame leaves the host; the Turn pill shows last-turn latency + cost.</em>
+</p>
 
 ---
 
@@ -87,6 +128,122 @@ the chat history all update in real time.
   <em>Playful Claude on the stylised cartoon face, Bayard the retired classical guitarist,
   and Soraya the ER nurse. Each has a distinct backstory, catchphrases, Big Five trait
   profile, and Kokoro voice.</em>
+</p>
+
+---
+
+## What the LLM is actually seeing (Perception panel)
+
+Every chat turn, the system prompt gets a live narration block built
+from a singleton `PerceptionStore` that subscribes to every vision
+signal on the bus. The **Perception** debug panel (tabbed behind the
+Transcript) shows the exact paragraph the model receives — colour-
+coded by signal freshness so you can spot which ones are stale.
+
+<p align="center">
+  <img src="docs/images/recent_perception_panel.png" alt="Perception panel" width="80%">
+</p>
+
+The narrative covers: presence + identity (with confidence), emotion
+(deepface), mouth state + viseme, head pose, **iris-derived gaze**
+direction, face distance, blink rate, hand gesture (MediaPipe), scene
+brightness + motion, MP-detected objects, and an ambient **VLM
+caption** (moondream by default, ~15 s cadence). The roster of
+remembered people is appended so the LLM never quizzes someone the
+system already knows.
+
+Twelve on-demand tools sit on top — every one routed through *both*
+Anthropic and Ollama engines so the model can fetch deeper info when
+the structured signals aren't enough:
+
+| Tool | Use it for |
+|---|---|
+| `look_at_camera(question?, region?)` | Full VLM caption — anything visual the structured signals don't cover. Anthropic uses its own vision; Ollama routes to moondream / llava / llama3.2-vision. |
+| `remember_person(name)` | Save the currently-visible face under a name. Next session it's recognised automatically. |
+| `read_text(region?)` | EasyOCR — read signs, slides, labels, screens. |
+| `track_object(label, duration_s?)` | IoU-track a named EfficientDet detection across frames so the LLM can ask "is it still there?". |
+| `check_visible(query)` | Open-vocabulary OpenCLIP — "is there a person wearing glasses?". |
+| `describe_color(region?)` | k-means dominant colour. |
+| `describe_pose()` | MediaPipe Pose — sitting / standing / leaning / arms crossed / hand raised. |
+| `face_attributes()` | InsightFace age + gender. |
+| `scan_qr()` | cv2 QR-code decoder. |
+| `estimate_depth(region?)` | MiDaS monocular depth → coarse near/far summary. |
+| `gaze_target()` | Combines iris + head-pose into "looking at: camera / screen / down / off-screen left…". |
+| `segment_object(label)` | cv2.GrabCut seeded by EfficientDet bbox — foreground mask + zone. |
+| `describe_room_layout()` | Reads the room-map store; one paragraph spatial summary. |
+
+The model picks what it needs each turn. The status bar's **Vision**
+pill flashes red whenever a frame is sent to a remote VLM
+(Anthropic), orange for a local one — privacy hygiene.
+
+---
+
+## Room map — top-down plan view
+
+View → **Room map…** (`Ctrl+Shift+Z`) opens a separate window with a
+plan-view of the camera scene. It runs MiDaS-small at ~1 Hz, samples
+the depth at every detected object's bbox centre, projects through
+estimated camera intrinsics into a camera-relative position, and
+EMA-smooths so the dots don't jitter.
+
+<p align="center">
+  <img src="docs/images/recent_room_map.png" alt="Room map window" width="70%">
+</p>
+
+The camera triangle is at bottom-centre, the dashed cone is the FOV.
+Each detection becomes a coloured dot with its class + distance.
+Motion trails build up over time. The green spike from the camera is
+the head-pose heading arrow — where the user is looking.
+
+A one-shot **calibration dialog** ("Calibrate camera…") converts
+relative units to metres: pick any object on the map, type its real
+distance, hit Calibrate. The scale is persisted to
+`.faceview/camera_calibration.json` and applied on the next tick.
+
+<p align="center">
+  <img src="docs/images/recent_calibration_dialog.png" alt="Calibration dialog" width="45%">
+</p>
+
+The LLM gets a `describe_room_layout()` tool that reads the same
+map — "the cup is 0.9 m ahead and slightly to the right; the laptop
+is 1.5 m to the left…".
+
+---
+
+## Live cost + latency telemetry
+
+Every chat turn records its real token counts (from the Anthropic
+SDK's `usage` or Ollama's final-chunk `eval_count`), wall-time, and
+USD cost (Anthropic only — local engines are $0). One JSONL line
+per turn lands in `~/.faceview/telemetry.jsonl` for later analysis.
+The status panel shows the last turn live, colour-coded by spend:
+
+<p align="center">
+  <img src="docs/images/recent_status_telemetry.png" alt="Status pills incl. Vision + Turn" width="80%">
+</p>
+
+The **Vision** pill flashes during off-device API calls; the
+**Turn** pill shows last-turn `latency · tokens · cost`.
+
+---
+
+## Markdown + find in chat
+
+Chat history renders markdown — code fences, tables, lists, emphasis
+— via Qt's built-in commonmark. Streaming stays responsive (plain-
+text during, markdown re-render on `LLM_REPLY`). Cmd/Ctrl+F opens an
+in-panel find bar with wrap-around, prev/next, and prefill from
+selection.
+
+<p align="center">
+  <img src="docs/images/recent_chat_streaming.gif" alt="Streaming markdown reply" width="38%">
+  &nbsp;&nbsp;
+  <img src="docs/images/recent_chat_find.png" alt="Find bar over chat" width="38%">
+</p>
+<p align="center">
+  <em>Left: Claude streaming a markdown reply, then the panel re-renders
+  the code fence on finalisation. Right: Cmd+F find bar with the matched
+  text highlighted; Enter / Shift-Enter walk the matches.</em>
 </p>
 
 ---
@@ -153,9 +310,18 @@ live avatar picks up the new traits on the next reply.
 Each persona has its own JSON file under `.faceview/memory/<persona>.json`
 holding three memory layers + a relationship score:
 
-- **Episodic** — `{ts, type, text, significance, emotion, recalled}` rows.
-  Recall is scored by recency × significance × emotion × context × rehearsal.
+- **Episodic** — `{ts, type, text, significance, emotion, recalled,
+  embedding?}` rows. Recall is scored by recency × significance ×
+  emotion × context × rehearsal. With `sentence-transformers`
+  installed, every turn is also embedded and retrieved by **cosine
+  similarity to the current user message** — so "did you finish that
+  bug yet?" surfaces last week's bug-talk turn automatically.
   Consolidates down to 400 entries by retention when the list exceeds 500.
+- **Per-person branches** — when PeopleStore recognises the visible
+  face (`George`, `Alice`, …) the turn writes into that person's own
+  bucket. Each interlocutor gets their own thread; `narrate_for_prompt`
+  prepends `[Conversation history with George]` so the LLM
+  doesn't mix up who said what.
 - **Semantic** — facts/beliefs keyed by subject (`player`, `history`,
   `self`) with confidence values. No decay.
 - **Emotional** — current emotions with exponential decay (~6h half-life).

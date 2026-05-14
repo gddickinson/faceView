@@ -228,6 +228,38 @@ suspects:
 
 ---
 
+## Room map distances look wrong
+
+The room map shows objects in **relative units** by default — they
+aren't metres until you calibrate. Open View → Room map…, click
+**Calibrate camera…**, pick any object you can see in the map, and
+type its real distance from the camera in metres. The scale is
+persisted to `.faceview/camera_calibration.json` and applied on the
+next tick.
+
+If after calibration distances still feel off, the most likely cause
+is the camera's horizontal field-of-view (HFOV). The default is 65°
+which matches typical webcams. Some have wider lenses; set
+`FACEVIEW_CAMERA_HFOV_DEG=82` (or whatever your camera's spec says)
+and restart.
+
+---
+
+## Telemetry pill shows $0 even with Anthropic
+
+USD cost only fires for Anthropic models. Local engines (Ollama,
+demo) always report $0; the latency + token count are still useful.
+If you're on Anthropic and seeing $0:
+
+- **Unknown model name.** The price table in `llm/telemetry.py` keys
+  off substrings like `"opus-4-7"`, `"sonnet-4-6"`. A bespoke model
+  alias won't match — set `FACEVIEW_MODEL` to a canonical model id
+  before launching.
+- **Pre-completion turn.** The pill updates after `LLM_REPLY` fires;
+  if the model errors out mid-stream there's nothing to record.
+
+---
+
 ## Where to get more help
 
 - **`SESSION_Log.md`** — chronological notes of design decisions
