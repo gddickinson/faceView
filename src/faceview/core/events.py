@@ -49,6 +49,7 @@ class EventType(Enum):
     SCENE = auto()           # frame brightness + motion level
     SCENE_CAPTION = auto()   # ambient VLM caption (moondream, ~15 s cadence)
     OBJECTS = auto()         # MP Object Detector results
+    PIXELS_LEAVING = auto()  # webcam frame being sent off-device (privacy)
 
     # Lifecycle / generic
     SCREENSHOT_TAKEN = auto()
@@ -215,4 +216,20 @@ class SceneCaption:
     text: str
     model: str = ""              # which VLM produced it (e.g. "moondream")
     latency_s: float = 0.0       # round-trip seconds (logged + shown)
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class PixelTransmission:
+    """Frame leaves the host. Privacy indicator.
+
+    ``active=True`` is published at the moment we hand a frame to
+    something that might transmit it; ``active=False`` when known
+    finished. Subscribers (status panel) flash a red dot while
+    active. The ``destination`` distinguishes Anthropic (real
+    off-machine) from a local Ollama VLM (stays on machine but
+    user still wants visibility into compute use)."""
+    active: bool
+    destination: str             # "anthropic" | "ollama:<model>" | ...
+    tool: str = ""               # which tool triggered the send
     ts: float = field(default_factory=time)

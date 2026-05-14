@@ -55,7 +55,7 @@ def test_pick_deep_vision_model_env_override(monkeypatch):
 
 def test_pick_deep_vision_model_prefers_capable(monkeypatch):
     """Even if moondream is installed, the deep picker prefers a
-    richer-captioning model."""
+    richer-captioning model — provided it's healthy."""
     import faceview.llm.vision_tool as vt
     monkeypatch.delenv("FACEVIEW_OLLAMA_DEEP_VISION_MODEL", raising=False)
     monkeypatch.setattr(
@@ -64,6 +64,9 @@ def test_pick_deep_vision_model_prefers_capable(monkeypatch):
             "qwen2.5:14b", "moondream:latest", "llama3.2-vision:latest",
         ],
     )
+    vt.reset_vlm_health_cache_for_tests()
+    monkeypatch.setattr(vt, "_vlm_is_healthy",
+                        lambda model, host, timeout=6.0: True)
     assert vt.pick_deep_vision_model() == "llama3.2-vision:latest"
 
 
@@ -74,7 +77,47 @@ def test_pick_deep_falls_back_to_moondream(monkeypatch):
         "faceview.llm.ollama_client.list_ollama_models",
         lambda *_a, **_k: ["qwen2.5:14b", "moondream:latest"],
     )
+    vt.reset_vlm_health_cache_for_tests()
+    monkeypatch.setattr(vt, "_vlm_is_healthy",
+                        lambda model, host, timeout=6.0: True)
     assert vt.pick_deep_vision_model() == "moondream:latest"
+
+
+def test_pick_deep_demotes_unhealthy_vlm(monkeypatch):
+    """The footgun from real-world testing: llama3.2-vision is
+    installed but Ollama reports HTTP 500 for it. The picker should
+    move on to the next healthy candidate instead of returning the
+    broken one."""
+    import faceview.llm.vision_tool as vt
+    monkeypatch.delenv("FACEVIEW_OLLAMA_DEEP_VISION_MODEL", raising=False)
+    monkeypatch.setattr(
+        "faceview.llm.ollama_client.list_ollama_models",
+        lambda *_a, **_k: ["qwen2.5:14b", "llama3.2-vision:latest",
+                            "moondream:latest"],
+    )
+    vt.reset_vlm_health_cache_for_tests()
+    # llama3.2-vision is "unhealthy" (the real bug), moondream is fine.
+    monkeypatch.setattr(
+        vt, "_vlm_is_healthy",
+        lambda model, host, timeout=6.0: "moondream" in model,
+    )
+    assert vt.pick_deep_vision_model() == "moondream:latest"
+
+
+def test_pick_deep_env_override_skips_health_check(monkeypatch):
+    """Explicit pin via env var should bypass health-check so the
+    user can debug a broken model intentionally."""
+    import faceview.llm.vision_tool as vt
+    vt.reset_vlm_health_cache_for_tests()
+    monkeypatch.setenv("FACEVIEW_OLLAMA_DEEP_VISION_MODEL",
+                       "broken-but-pinned")
+    # Even if the health probe would fail, the picker should still
+    # return the pinned model.
+    monkeypatch.setattr(
+        vt, "_vlm_is_healthy",
+        lambda *_a, **_k: False,
+    )
+    assert vt.pick_deep_vision_model() == "broken-but-pinned"
 
 
 def test_perception_narrate_includes_caption(fresh_bus, monkeypatch):

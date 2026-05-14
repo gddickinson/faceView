@@ -304,6 +304,12 @@ security add-generic-password -a "$USER" -s "ANTHROPIC_API_KEY" -w   # one-time
 alias faceview-run='ANTHROPIC_API_KEY="$(security find-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w)" /opt/anaconda3/envs/faceview/bin/faceview'
 ```
 
+### Something not working?
+
+See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for the
+most common issues and fixes — camera/mic permissions, broken VLMs,
+demo-mode fallback, port conflicts, persona swap freezes, etc.
+
 ---
 
 ## Architecture

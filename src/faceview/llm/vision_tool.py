@@ -534,14 +534,65 @@ def run_segment_object(grabber: FrameGrabber, label: str) -> str:
     return segment_object(_frame(grabber), label)
 
 
+# Cache of model name → health status so we only probe each candidate
+# once per process. Models that return HTTP 500 (typically "no longer
+# compatible with your version of Ollama") are demoted permanently.
+_VLM_HEALTH: dict[str, bool] = {}
+
+
+def _vlm_is_healthy(model: str, host: str, timeout: float = 6.0) -> bool:
+    """One-shot probe against ``/api/generate`` with a tiny dummy image.
+
+    Caches the result so subsequent calls in the same process are
+    free. A model that produces *any* successful response (200) is
+    considered healthy; anything else (500, timeout, refused) gets
+    demoted so the picker moves to the next candidate.
+    """
+    if model in _VLM_HEALTH:
+        return _VLM_HEALTH[model]
+    # 1×1 black PNG, base64-encoded.
+    tiny_png = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNg"
+        "YGD4DwABAQEAtAlnkAAAAABJRU5ErkJggg=="
+    )
+    body = json.dumps({
+        "model": model,
+        "prompt": ".",
+        "images": [tiny_png],
+        "stream": False,
+        "options": {"num_predict": 1},
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{host}/api/generate",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            ok = 200 <= resp.status < 300
+    except (urllib.error.URLError, ConnectionError, TimeoutError,
+            OSError) as exc:
+        log.warning("vision.tool.vlm_unhealthy", model=model, error=str(exc))
+        ok = False
+    _VLM_HEALTH[model] = ok
+    if ok:
+        log.info("vision.tool.vlm_healthy", model=model)
+    return ok
+
+
 def pick_deep_vision_model(host: str = "http://127.0.0.1:11434") -> Optional[str]:
     """Choose a vision model for *on-demand* look_at_camera calls.
 
     Preference order favours capability over speed (the inverse of the
     ambient captioner): llama3.2-vision → llava:13b → llava → moondream.
-    Override with ``FACEVIEW_OLLAMA_DEEP_VISION_MODEL``."""
+    Override with ``FACEVIEW_OLLAMA_DEEP_VISION_MODEL``. Health-checks
+    each candidate once per process so users don't hit stale-model
+    HTTP 500s (Ollama versions occasionally invalidate older weights)."""
     env = os.environ.get("FACEVIEW_OLLAMA_DEEP_VISION_MODEL")
     if env:
+        # Honour explicit pin even if unhealthy — surface the failure
+        # to the user via the tool's own error message rather than
+        # silently falling back.
         return env
     try:
         from faceview.llm.ollama_client import list_ollama_models
@@ -555,12 +606,34 @@ def pick_deep_vision_model(host: str = "http://127.0.0.1:11434") -> Optional[str
         "minicpm-v", "llava", "moondream",
     ):
         for m in models:
-            if needle in m.lower():
+            if needle not in m.lower():
+                continue
+            if _vlm_is_healthy(m, host):
                 return m
+            # Otherwise fall through to next candidate.
     return None
 
 
+def reset_vlm_health_cache_for_tests() -> None:
+    """Drop the health cache — for tests only."""
+    _VLM_HEALTH.clear()
+
+
 # ── executors ────────────────────────────────────────────────────────────
+
+
+def _signal_pixels(active: bool, destination: str, tool: str = "") -> None:
+    """Publish a PIXELS_LEAVING event so the status panel can flash."""
+    from faceview.core.event_bus import get_bus
+    from faceview.core.events import PixelTransmission
+    try:
+        get_bus().publish(
+            EventType.PIXELS_LEAVING,
+            PixelTransmission(active=active, destination=destination,
+                              tool=tool),
+        )
+    except Exception:  # noqa: BLE001 — bus issue must never break a tool
+        pass
 
 
 def run_look_anthropic(
@@ -586,6 +659,11 @@ def run_look_anthropic(
     if b64 is None:
         return [{"type": "text",
                  "text": "Couldn't encode the current frame."}]
+    # Pixels will leave the host on the next Anthropic API call (which
+    # the engine performs right after we return). Flash the indicator
+    # now — there's no clean "after" hook, so the status panel auto-
+    # clears after a few seconds.
+    _signal_pixels(True, destination="anthropic", tool="look_at_camera")
     log.info("vision.tool.look.anthropic",
              source=source, region=region, jpeg_bytes=len(b64),
              question=question[:60])
@@ -640,6 +718,8 @@ def run_look_ollama(
     log.info("vision.tool.look.ollama_start",
              model=vlm_model, jpeg_bytes=len(b64),
              region=region, question=question[:60])
+    _signal_pixels(True, destination=f"ollama:{vlm_model}",
+                   tool="look_at_camera")
     body = json.dumps({
         "model": vlm_model,
         "prompt": prompt,
@@ -658,12 +738,18 @@ def run_look_ollama(
         text = (data.get("response") or "").strip()
         if not text:
             log.warning("vision.tool.look.ollama_empty")
+            _signal_pixels(False, destination=f"ollama:{vlm_model}",
+                           tool="look_at_camera")
             return "(The vision model returned no description.)"
         log.info("vision.tool.look.ollama_done", chars=len(text))
+        _signal_pixels(False, destination=f"ollama:{vlm_model}",
+                       tool="look_at_camera")
         return text
     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError,
             ValueError) as exc:
         log.warning("vision.tool.ollama_failed", error=str(exc))
+        _signal_pixels(False, destination=f"ollama:{vlm_model}",
+                       tool="look_at_camera")
         return f"(Vision lookup failed: {exc})"
 
 

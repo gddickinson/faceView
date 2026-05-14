@@ -7,7 +7,7 @@ or seeded demo state for screenshots.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import (
     QFormLayout,
@@ -24,6 +24,7 @@ from faceview.core.events import (
     EventType,
     Identity,
     MouthActivity,
+    PixelTransmission,
     Presence,
 )
 
@@ -82,6 +83,11 @@ class StatusPanel(QWidget):
         self.mouth = _Pill("silent", "#666")
         self.audio = _Pill("idle", "#666")
         self.llm = _Pill(self._llm_initial_label(), "#3a8")
+        # Privacy indicator — flashes red while a frame is being sent
+        # to an off-device VLM (Anthropic) or any VLM at all. Hidden
+        # when nothing in flight.
+        self.recording = _Pill("", "#666")
+        self.recording.setVisible(False)
 
         form.addRow("Presence", self.presence)
         form.addRow("Identity", self.identity)
@@ -89,6 +95,13 @@ class StatusPanel(QWidget):
         form.addRow("Mouth", self.mouth)
         form.addRow("Audio", self.audio)
         form.addRow("LLM", self.llm)
+        form.addRow("Vision", self.recording)
+        # Auto-clear timer — if a PIXELS_LEAVING(active=True) isn't
+        # followed by an active=False within a few seconds, hide the
+        # indicator anyway so a stuck state doesn't lie to the user.
+        self._recording_timer = QTimer(self)
+        self._recording_timer.setSingleShot(True)
+        self._recording_timer.timeout.connect(self._hide_recording)
 
         root.addLayout(form)
 
@@ -114,6 +127,7 @@ class StatusPanel(QWidget):
         bus.subscribe(EventType.STATUS, self._on_status)
         bus.subscribe(EventType.VAD_SPEECH_START, lambda _p: self.audio.setText("speech") or self.audio.set_color("#22a"))
         bus.subscribe(EventType.VAD_SPEECH_END, lambda _p: self.audio.setText("idle") or self.audio.set_color("#666"))
+        bus.subscribe(EventType.PIXELS_LEAVING, self._on_pixels_leaving)
 
     @staticmethod
     def _llm_initial_label() -> str:
@@ -175,6 +189,31 @@ class StatusPanel(QWidget):
             "disgust": "#7d6608",
         }.get(e.label, "#666")
         self.emotion.set_color(color)
+
+    def _on_pixels_leaving(self, payload: PixelTransmission) -> None:
+        """Show / hide the recording indicator + manage auto-clear."""
+        if payload is None:
+            return
+        if payload.active:
+            dest = payload.destination or ""
+            # Red for anthropic (truly off-machine), orange for local
+            # VLM (stays on device but still pixels in flight).
+            if dest.startswith("anthropic"):
+                self.recording.setText(f"● sending to {dest}")
+                self.recording.set_color("#c0392b")
+            else:
+                short = dest.split(":", 1)[-1] if ":" in dest else dest
+                self.recording.setText(f"● local VLM: {short}")
+                self.recording.set_color("#e8a23a")
+            self.recording.setVisible(True)
+            self._recording_timer.start(6000)
+        else:
+            self._hide_recording()
+
+    def _hide_recording(self) -> None:
+        self.recording.setVisible(False)
+        self.recording.setText("")
+        self._recording_timer.stop()
 
     def _on_mouth(self, m: MouthActivity) -> None:
         if m.speaking:

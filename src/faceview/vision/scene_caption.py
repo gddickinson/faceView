@@ -196,6 +196,14 @@ class SceneCaptioner:
             "stream": False,
             "options": {"num_predict": 80},
         }).encode("utf-8")
+        # Privacy indicator: signal a local VLM call in progress.
+        from faceview.core.events import PixelTransmission
+        bus.publish(
+            EventType.PIXELS_LEAVING,
+            PixelTransmission(active=True,
+                              destination=f"ollama:{self.model}",
+                              tool="ambient_caption"),
+        )
         req = urllib.request.Request(
             f"{self.host}/api/generate",
             data=body,
@@ -209,8 +217,20 @@ class SceneCaptioner:
         except (urllib.error.URLError, ConnectionError, TimeoutError,
                 OSError, ValueError) as exc:
             log.warning("scene.caption.vlm_failed", error=str(exc))
+            bus.publish(
+                EventType.PIXELS_LEAVING,
+                PixelTransmission(active=False,
+                                  destination=f"ollama:{self.model}",
+                                  tool="ambient_caption"),
+            )
             return
         latency = time.time() - t0
+        bus.publish(
+            EventType.PIXELS_LEAVING,
+            PixelTransmission(active=False,
+                              destination=f"ollama:{self.model}",
+                              tool="ambient_caption"),
+        )
         self._last_attempt_ts = time.time()
         if not text:
             return
