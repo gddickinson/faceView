@@ -304,6 +304,37 @@ security add-generic-password -a "$USER" -s "ANTHROPIC_API_KEY" -w   # one-time
 alias faceview-run='ANTHROPIC_API_KEY="$(security find-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w)" /opt/anaconda3/envs/faceview/bin/faceview'
 ```
 
+### Something not working?
+
+See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for the
+most common issues and fixes — camera/mic permissions, broken VLMs,
+demo-mode fallback, port conflicts, persona swap freezes, etc.
+
+### Use faceView as a local OpenAI endpoint
+
+The HTTP server speaks OpenAI's `/v1/chat/completions` and `/v1/models`
+wire format, so any OpenAI-SDK-compatible tool (Cursor, langchain,
+the raw `openai` Python client, …) can point at faceView and get back
+replies from whatever engine you've selected — *plus* faceView's live
+perception block (what the camera sees, who's recognised, etc.)
+prepended to the system prompt.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8765/v1",
+    api_key="not-used",          # local-only, no auth
+)
+reply = client.chat.completions.create(
+    model="faceview",
+    messages=[{"role": "user", "content": "What can you see?"}],
+)
+print(reply.choices[0].message.content)
+```
+
+Streaming SSE is not yet supported (planned). Set `stream=False`.
+
 ---
 
 ## Architecture

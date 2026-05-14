@@ -1,5 +1,242 @@
 # faceView — Session Log
 
+## 2026-05-13 — Session: Three tiers of on-demand image-analysis tools
+
+User: *"Once they are done plan and implement all three tiers."* —
+referring to the cost-tiered menu of additional vision tools. Shipped
+eleven new tools total, all callable by both Anthropic and Ollama
+engines.
+
+**Tier 1** (cheap, fast — three new + describe_color completing the
+set):
+
+* `vision/tracker.py` ObjectTracker — IoU-based tracker seeded by
+  EfficientDet detections. No new model, piggy-backs on the existing
+  OBJECTS cadence. Surfaces active tracks in the perception block
+  ("tracking: cup (center, 6 s left)").
+* `vision/ocr.py` — EasyOCR singleton (lazy-loaded torch model).
+* `vision/clip_query.py` — OpenCLIP ViT-B/32 for open-vocabulary
+  visibility checks.
+* `vision/color.py` — pure-cv2 k-means dominant-colour extractor.
+
+**Tier 2** (heavier, useful):
+
+* `vision/pose.py` — MediaPipe Pose with posture heuristics (sitting
+  / standing / leaning / arms crossed / hand raised).
+* `vision/face_attr.py` — reuses InsightFace's already-loaded
+  `genderage` model for age + gender estimates (zero extra memory).
+* `vision/qr.py` — `cv2.QRCodeDetector` (no new dep).
+* `vision/depth.py` — MiDaS-small via `torch.hub`, lazy-loaded.
+  Returns coarse near/far summary.
+
+**Tier 3** (practical subset — skipping SAM and video models):
+
+* `vision/gaze_target.py` — heuristic that combines existing iris
+  direction + head pose into a semantic target label (camera, screen,
+  off-screen-left, …).
+* `vision/segment.py` — GrabCut seeded by EfficientDet bbox for a
+  quick foreground mask. No new model.
+
+**Tool wiring** — all 11 schemas (5 Tier-1 + 7 Tier-2/3 since
+`look_at_camera` and `remember_person` were already shipped) are
+exposed to both engines via `TIER1_TOOLS_*` / `TIER23_TOOLS_*` bundles
+in `vision_tool.py`. Both `claude_client.py` and `ollama_client.py`
+dispatch them in their tool-loop. The `_to_ollama` helper converts
+Anthropic-style schemas to Ollama-style with one call.
+
+**Files**: new `vision/ocr.py`, `vision/clip_query.py`,
+`vision/tracker.py`, `vision/color.py`, `vision/pose.py`,
+`vision/face_attr.py`, `vision/qr.py`, `vision/depth.py`,
+`vision/gaze_target.py`, `vision/segment.py`,
+`tests/test_tools_tier1.py`, `tests/test_tools_tier23.py`.
+Modified `vision/identity.py` (registers FaceAnalysis with
+face_attr), `vision/perception.py` (tracker narration),
+`llm/vision_tool.py`, `llm/claude_client.py`, `llm/ollama_client.py`,
+`INTERFACE.md`, `CLAUDE.md`.
+
+Tests: 22 new (tracker IoU + expiry, region cropping, color k-means,
+gaze_target, schema bundles, …) — full suite at **212 passing**.
+
+---
+
+## 2026-05-13 — Session: Two-tier vision (ambient VLM + on-demand deep look)
+
+User: *"Can you include both — so that there is a continuous monitoring
+for basic information and then more in-depth examination of images,
+or parts of images, when needed by the app or LLM?"*
+
+Tiered the image-understanding path:
+
+1. **`vision/scene_caption.py` SceneCaptioner** — background thread
+   that posts the latest webcam frame to a small/fast VLM
+   (``moondream`` by default) every ~15 s, publishes a SCENE_CAPTION
+   event with text + model + latency. Throttled: skips when no face
+   has been visible in the last 30 s, and when the scene has been
+   "still" (motion < 0.05) since the last caption. Disable with
+   ``FACEVIEW_AMBIENT_VLM=0``; tune via
+   ``FACEVIEW_AMBIENT_VLM_INTERVAL`` /
+   ``FACEVIEW_AMBIENT_VLM_MODEL``.
+
+2. **`PerceptionStore` consumes SCENE_CAPTION** — caption surfaces
+   in ``narrate_now()`` ("scene caption (8 s ago): 'A person waving
+   at the camera.'") with a longer freshness window (90 s) than the
+   tighter structured signals. Also shown in the Perception debug
+   panel with model + latency.
+
+3. **`look_at_camera` tool extended** with optional ``question`` and
+   ``region`` parameters:
+   - ``question`` becomes the VLM prompt on the Ollama path, and is
+     echoed as a focus hint on the Anthropic path (Claude's native
+     vision reads the attached image directly).
+   - ``region`` crops to one of 10 named zones (``full``, ``center``,
+     four edges, four corners) before encoding.
+
+4. **`pick_deep_vision_model()`** preference order reversed from the
+   ambient picker — capability over speed:
+   ``llama3.2-vision → llava:13b → llava → moondream``. Override
+   via ``FACEVIEW_OLLAMA_DEEP_VISION_MODEL``. Falls back through to
+   the ambient model if no deep model is installed.
+
+5. **MainWindow lifecycle** — starts the captioner alongside the
+   other vision workers; stops it cleanly when the camera is turned
+   off so we don't keep poking Ollama for a black room.
+
+**Files**: new `vision/scene_caption.py`, `tests/test_scene_caption.py`.
+Modified `core/events.py`, `vision/perception.py`, `llm/vision_tool.py`,
+`llm/claude_client.py`, `llm/ollama_client.py`, `gui/main_window.py`,
+`gui/perception_panel.py`, `CLAUDE.md`, `INTERFACE.md`,
+`SESSION_Log.md`.
+
+Tests: 8 new (region cropping, model preference, ambient toggle,
+caption-in-narration with 90 s freshness window) — full suite at 190
+passing.
+
+---
+
+## 2026-05-13 — Session: Multi-person recognition + LLM-driven enrollment
+
+User: *"The app should be able to recognise different people. Ask them
+their names if they don't know them and identify them next time it
+sees them."*
+
+Built on top of the new tool-use infrastructure from earlier in the
+day. Three pieces:
+
+1. **`vision/people.py` PeopleStore** — singleton, disk-persisted
+   ``name → embedding`` store under ``~/.faceview/people/<slug>.npz``.
+   Methods: ``list_people()``, ``match(emb) → (name, sim, is_known)``,
+   ``remember(name, frame)``, ``forget(name)``. Legacy
+   ``owner_data/owner.npy`` is loaded as a synthetic "owner" entry, so
+   the old enrollment flow keeps working.
+
+2. **`IdentityRecognizer` refactor** — drops the owner-only template
+   matcher and routes through PeopleStore. On boot it calls
+   ``PeopleStore.shared().set_embed_fn(self.embed)`` so the LLM tool
+   can convert frame → embedding without owning a second InsightFace
+   model.
+
+3. **`remember_person` tool, both engines** —
+   ``llm/vision_tool.py`` adds Anthropic + Ollama tool schemas plus a
+   single ``run_remember_person`` helper. AnthropicEngine + OllamaEngine
+   register the tool alongside ``look_at_camera``; the tool reads the
+   latest cached frame from FrameGrabber and calls PeopleStore.remember.
+
+4. **Perception nudge** — `PerceptionStore` now tracks
+   ``_stranger_since``: when a stranger has been steadily visible for
+   ≥ 2 s the narration tells the LLM *"an unfamiliar person has been
+   visible for 4 s — please ask politely, then call remember_person
+   with what they tell you"*. The known roster ("people on file: …")
+   is appended so the LLM doesn't quiz someone the system already
+   knows.
+
+**Files**: new `vision/people.py`, `tests/test_people.py`. Modified
+`vision/identity.py`, `vision/perception.py`, `llm/vision_tool.py`,
+`llm/claude_client.py`, `llm/ollama_client.py`, `INTERFACE.md`,
+`SESSION_Log.md`.
+
+Tests: 11 new (PeopleStore round-trip, threshold reject, embed-fn
+required, perception nudge after 2 s, etc.) — full suite at 182
+passing.
+
+---
+
+## 2026-05-13 — Session: Visual awareness for the chat bots
+
+User: *"Can you add a image to text llm feature to the app … they can
+'see' what is happening in the camera view"* — then *"plan how to add
+other ways of getting information in the images to the LLMs … gestures,
+any other useful and computationally inexpensive features."* Then
+*"build everything inexpensive"* + add a debug panel that shows what
+the LLM is seeing.
+
+Architected as two complementary channels:
+
+**Ambient perception (always on, prepended to every system prompt).**
+A new `vision/perception.py` PerceptionStore singleton subscribes to
+every structured vision signal on the bus and exposes `narrate_now()`
+— a one-paragraph live status (presence, identity, emotion, gaze,
+mouth, head, distance, blink, gesture, scene, objects). `app.py` adds
+this as an extras provider on the main `Conversation` so the chat bots
+have ambient situational awareness without paying a tool-call cost.
+
+`Conversation.add_system_extras_provider()` composes with the cognition
+narrative without clobbering it; `ClaudeClient.bind_memory` now tracks
+its own provider slot so swapping persona never disturbs perception.
+
+**On-demand `look_at_camera` tool (paid only when invoked).** A new
+`llm/vision_tool.py` exposes the tool to both engines:
+
+- *Anthropic*: tool-use loop in `AnthropicEngine.stream_reply` — when
+  `stop_reason == "tool_use"` we append the assistant blocks plus a
+  `tool_result` with the latest webcam still as a base-64 JPEG image
+  content block, then re-stream. Capped at 4 loops per turn.
+- *Ollama*: `OllamaEngine.stream_reply` now reads `message.tool_calls`
+  during streaming. When `look_at_camera` is invoked we POST the JPEG
+  to `/api/generate` against a local VLM (`moondream` / `llava` /
+  `llama3.2-vision`, auto-picked or pinned via
+  `FACEVIEW_OLLAMA_VISION_MODEL`) and feed the caption back as a
+  `role:"tool"` message, then re-stream. Capped at 3 loops.
+
+**New cheap perception modules.** All publish to the bus; PerceptionStore
+caches the latest of each:
+
+- `vision/scene.py` — mean luminance + frame-diff magnitude → SCENE
+  events (brightness label + motion label) at ~5 Hz.
+- `vision/gestures.py` — MediaPipe Tasks GestureRecognizer (small
+  prebuilt model, auto-downloaded to `~/.faceview/models/`). Emits
+  GESTURE events (thumbs_up / open_palm / pointing / victory / …).
+- `vision/objects.py` — MediaPipe ObjectDetector with
+  EfficientDet-Lite0 (~12 MB, ~10 ms/frame). Emits OBJECTS at ~3 Hz.
+- `vision/mouth.py` — extended to also publish GAZE (iris-derived
+  direction + attention), FACE_DISTANCE (from inter-eye width) and
+  BLINK (eye-aspect-ratio with rolling 30 s rate). Reuses the
+  already-running refined face mesh so the extra signals are free.
+
+**Debug panel.** `gui/perception_panel.py` PerceptionPanel — a new
+dock (tabbed behind the transcript) showing:
+
+1. The narrated paragraph that gets prepended to the system prompt
+   (so you can verify it matches reality).
+2. A grid of every signal, colour-coded by freshness (fresh = green,
+   stale = grey-italic, missing = dim).
+
+Wired through `LayoutManager` as a 5th panel.
+
+**Env-var switches added** (all default ON): `FACEVIEW_VISION_TOOL`,
+`FACEVIEW_GESTURES`, `FACEVIEW_OBJECTS`, plus
+`FACEVIEW_OLLAMA_VISION_MODEL` to pin the VLM choice.
+
+**Files**: new `llm/vision_tool.py`, `vision/perception.py`,
+`vision/scene.py`, `vision/gestures.py`, `vision/objects.py`,
+`gui/perception_panel.py`, `tests/test_perception.py`,
+`tests/test_vision_tool.py`. Modified `core/events.py`,
+`llm/conversation.py`, `llm/claude_client.py`, `llm/ollama_client.py`,
+`vision/mouth.py`, `gui/main_window.py`, `gui/layout.py`, `app.py`,
+`INTERFACE.md`, `CLAUDE.md`.
+
+---
+
+
 ## 2026-05-10 — Session: Diagnostic overlay in painting tool
 
 User: "Can you create painting images and modify the painting tool

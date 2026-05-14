@@ -122,7 +122,7 @@ class CognitionStore:
     """Per-persona persistent cognition: episodic + semantic + emotional
     + character + relationship progression."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, persona: str) -> None:
         self.persona = persona
@@ -131,10 +131,25 @@ class CognitionStore:
         self.session_count: int = 0
         self.relationship_score: int = 0
         self.episodic: list[dict[str, Any]] = []
+        # Per-person episodic branches — see C3 on the roadmap. Keyed
+        # by the display name from PeopleStore. Writes are routed to
+        # the matching bucket when the live identity from
+        # PerceptionStore is non-"stranger"; otherwise writes go to
+        # the shared `episodic` list as before.
+        self.per_person: dict[str, list[dict[str, Any]]] = {}
         self.semantic: dict[str, dict[str, dict]] = {}
         self.emotional: dict[str, dict[str, Any]] = {}
         self._dirty = False
         self._last_consolidate = 0.0
+        # Set by ClaudeClient before each engine.stream_reply call so
+        # narrate_for_prompt can do embedding-based retrieval against
+        # the current user message. None → fall back to recency +
+        # significance ranking.
+        self._query_context: Optional[str] = None
+        # Optional override: if explicitly set via set_current_speaker
+        # we use it; otherwise we look up the live identity from
+        # PerceptionStore on demand.
+        self._speaker_override: Optional[str] = None
 
     # ── persistence ─────────────────────────────────────────────
 
@@ -168,10 +183,13 @@ class CognitionStore:
         return store
 
     def _load_v2(self, data: dict) -> None:
+        """v2 + v3 share most fields. v3 adds ``per_person``; on a v2
+        file that key is missing and defaults to {}."""
         self.first_seen = data.get("first_seen")
         self.session_count = int(data.get("session_count") or 0)
         self.relationship_score = int(data.get("relationship_score") or 0)
         self.episodic = data.get("episodic") or []
+        self.per_person = data.get("per_person") or {}
         self.semantic = data.get("semantic") or {}
         self.emotional = data.get("emotional") or {}
 
@@ -212,6 +230,7 @@ class CognitionStore:
             "session_count": self.session_count,
             "relationship_score": self.relationship_score,
             "episodic": self.episodic,
+            "per_person": self.per_person,
             "semantic": self.semantic,
             "emotional": self.emotional,
             "saved_at": _time.time(),
@@ -225,8 +244,14 @@ class CognitionStore:
 
     def record_episode(self, type_: str, text: str, *,
                        significance: int = 3,
-                       emotion: str = "neutral") -> None:
-        self.episodic.append({
+                       emotion: str = "neutral",
+                       embedding: Optional[list[float]] = None,
+                       speaker: Optional[str] = None) -> None:
+        """Append an episode. When ``speaker`` (or the live identity
+        from PerceptionStore) names a known person, the entry is
+        filed under :attr:`per_person`; otherwise it goes to the
+        shared :attr:`episodic` list."""
+        entry: dict[str, Any] = {
             "ts": _time.time(),
             "type": type_,
             "text": text,
@@ -234,13 +259,19 @@ class CognitionStore:
             "emotion": emotion,
             "session_id": self.session_count,
             "recalled": 0,
-        })
+        }
+        if embedding is not None:
+            entry["embedding"] = embedding
+        who = speaker or self.current_speaker()
+        if who and who.lower() != "stranger":
+            entry["speaker"] = who
+            self.per_person.setdefault(who, []).append(entry)
+        else:
+            self.episodic.append(entry)
         self._dirty = True
         self._maybe_consolidate()
 
     def _maybe_consolidate(self) -> None:
-        if len(self.episodic) <= EPISODIC_HARD_CAP:
-            return
         now = _time.time()
         if now - self._last_consolidate < 60.0:
             return
@@ -250,9 +281,18 @@ class CognitionStore:
             return (m.get("significance", 3) * 2
                     + m.get("recalled", 0) * 0.5
                     - age_m)
-        self.episodic.sort(key=_score, reverse=True)
-        self.episodic = self.episodic[:EPISODIC_TRIM_TO]
-        self._last_consolidate = now
+        if len(self.episodic) > EPISODIC_HARD_CAP:
+            self.episodic.sort(key=_score, reverse=True)
+            self.episodic = self.episodic[:EPISODIC_TRIM_TO]
+            self._last_consolidate = now
+        # Also trim each per-person bucket — fewer entries each but
+        # the same per-bucket caps so a single chatty person can't
+        # blow up the file.
+        for name, bucket in list(self.per_person.items()):
+            if len(bucket) > EPISODIC_HARD_CAP:
+                bucket.sort(key=_score, reverse=True)
+                self.per_person[name] = bucket[:EPISODIC_TRIM_TO]
+                self._last_consolidate = now
 
     def recall(self, context: str, *, limit: int = 5) -> list[dict]:
         """Score memories by recency × significance × emotion × relevance × rehearsal."""
@@ -345,7 +385,17 @@ class CognitionStore:
         text = f"User: {user_text.strip()[:240]}"
         if assistant_text:
             text += f" — You: {assistant_text.strip()[:240]}"
-        self.record_episode("chat", text, significance=sig, emotion=felt)
+        # Embed the turn for later retrieval. We embed the user's side
+        # (what they said) since retrieval queries are also user
+        # messages — same distribution. None on missing dep / empty.
+        embedding: Optional[list[float]] = None
+        try:
+            from faceview.llm.embeddings import EmbeddingService
+            embedding = EmbeddingService.shared().embed(user_text)
+        except Exception:  # noqa: BLE001 — never block memory write
+            embedding = None
+        self.record_episode("chat", text, significance=sig,
+                            emotion=felt, embedding=embedding)
         # Extract facts.
         m = re.search(r"my name is ([A-Z][a-zA-Z'\-]{1,40})",
                       user_text, re.IGNORECASE)
@@ -382,9 +432,88 @@ class CognitionStore:
             "unlocks": lvl.get("unlocks", ""),
         }
 
+    # ── current-speaker awareness (C3) ───────────────────────────
+
+    def set_current_speaker(self, name: Optional[str]) -> None:
+        """Explicit override for who we're talking to. ``None`` falls
+        back to whatever PerceptionStore reports."""
+        self._speaker_override = name
+
+    def current_speaker(self) -> Optional[str]:
+        """Best guess of the currently-visible person's name.
+
+        Order: explicit override → live PerceptionStore identity (if
+        fresh and not ``stranger``) → ``None``."""
+        if self._speaker_override is not None:
+            return self._speaker_override
+        try:
+            from faceview.vision.perception import PerceptionStore
+            snap = PerceptionStore.shared().snapshot_dict()
+            ident = snap.get("identity")
+            if ident and ident.get("fresh"):
+                label = ident.get("label") or ""
+                if label and label.lower() != "stranger":
+                    return label
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    def _episodes_for(self, speaker: Optional[str]) -> list[dict]:
+        """All episodes visible to a given speaker — their own bucket
+        plus the shared global episodes. Order isn't sorted; callers
+        score themselves."""
+        if speaker is None:
+            return list(self.episodic)
+        return list(self.per_person.get(speaker, [])) + list(self.episodic)
+
+    # ── retrieval-augmented recall ──────────────────────────────
+
+    def set_query_context(self, text: Optional[str]) -> None:
+        """Set by ClaudeClient before each engine call so
+        :meth:`narrate_for_prompt` can do retrieval against the
+        actual user message. Pass ``None`` to clear."""
+        self._query_context = text
+
+    def recall_by_embedding(
+        self, query: str, *, limit: int = 3,
+        min_similarity: float = 0.25,
+    ) -> list[dict]:
+        """Top-K episodic memories by cosine similarity to ``query``.
+
+        Searches across the shared episodic list plus the current
+        speaker's per-person bucket (if any) so the conversation has
+        access to "things we've discussed before". Empty when no
+        episodes have embeddings or the query can't be embedded."""
+        speaker = self.current_speaker()
+        pool = self._episodes_for(speaker)
+        if not query or not pool:
+            return []
+        try:
+            from faceview.llm.embeddings import EmbeddingService, cosine
+            q_vec = EmbeddingService.shared().embed(query)
+        except Exception:  # noqa: BLE001
+            return []
+        if q_vec is None:
+            return []
+        scored: list[tuple[float, dict]] = []
+        for mem in pool:
+            emb = mem.get("embedding")
+            if not emb:
+                continue
+            sim = cosine(q_vec, emb)
+            if sim >= min_similarity:
+                scored.append((sim, mem))
+        scored.sort(key=lambda x: -x[0])
+        out = [m for _s, m in scored[:limit]]
+        for mem in out:
+            mem["recalled"] = mem.get("recalled", 0) + 1
+        if out:
+            self._dirty = True
+        return out
+
     # ── narration for LLM system prompt ─────────────────────────
 
-    def narrate_for_prompt(self, *, recall_context: str = "recent",
+    def narrate_for_prompt(self, *, recall_context: Optional[str] = None,
                            recall_n: int = 5) -> str:
         sections: list[str] = []
 
@@ -422,8 +551,48 @@ class CognitionStore:
             sections.append("[Shared history] "
                             + "; ".join(str(h)[:100] for h in recent) + ".")
 
-        # Episodic recall — recent + relevant
-        mems = self.recall(recall_context, limit=recall_n)
+        # Per-person ledger — when we recognise who we're talking to,
+        # show the last few exchanges WITH THAT PERSON specifically.
+        # This is the C3 unlock: George's "did you finish that bug
+        # yet" comes back to George, not to Alice's session next time.
+        speaker = self.current_speaker()
+        if speaker:
+            bucket = self.per_person.get(speaker) or []
+            recent = bucket[-3:]
+            if recent:
+                bits = [f"- {m.get('text','')}" for m in recent]
+                sections.append(
+                    f"[Conversation history with {speaker}]\n"
+                    + "\n".join(bits)
+                )
+
+        # Retrieval-augmented: if a query context is set (the live
+        # user message) and we have embeddings, surface semantically
+        # similar past episodes BEFORE the keyword-based recall block.
+        # They're tagged separately so the LLM (and a reader of the
+        # system prompt) can tell them apart.
+        query = self._query_context
+        rel_mems = (self.recall_by_embedding(query, limit=3)
+                    if query else [])
+        if rel_mems:
+            seen_ts = {m.get("ts") for m in rel_mems}
+            lines = []
+            for m in rel_mems:
+                emo = m.get("emotion", "neutral")
+                tag = f" (felt: {emo})" if emo != "neutral" else ""
+                lines.append(f"- {m.get('text','')}{tag}")
+            sections.append(
+                "[Relevant past memories — semantically similar to "
+                "what they just said]\n" + "\n".join(lines)
+            )
+        else:
+            seen_ts = set()
+
+        # Episodic recall — recent + relevant (keyword-scored).
+        effective_ctx = recall_context or query or "recent"
+        mems = self.recall(effective_ctx, limit=recall_n)
+        # De-duplicate against the embedding-retrieved block above.
+        mems = [m for m in mems if m.get("ts") not in seen_ts]
         if mems:
             lines = []
             for m in mems:
@@ -445,6 +614,7 @@ class CognitionStore:
             "user_name": self.get_fact("player", "name"),
             "relationship": self.relationship(),
             "episodic": len(self.episodic),
+            "per_person": {n: len(b) for n, b in self.per_person.items()},
             "semantic_subjects": list(self.semantic.keys()),
             "current_emotion": self.dominant_emotion(),
             "path": str(self.path_for(self.persona)),
@@ -452,6 +622,7 @@ class CognitionStore:
 
     def clear(self) -> None:
         self.episodic = []
+        self.per_person = {}
         self.semantic = {}
         self.emotional = {}
         self.relationship_score = 0

@@ -37,6 +37,7 @@ _PANELS: list[tuple[str, str, str]] = [
     ("chat",       "Chat",       "chat"),
     ("status",     "Status",     "status_panel"),
     ("transcript", "Transcript", "transcript"),
+    ("perception", "Perception", "perception_panel"),
 ]
 
 
@@ -79,9 +80,14 @@ class LayoutManager:
         )
         w.addDockWidget(right, self.docks["status"])
         w.addDockWidget(right, self.docks["transcript"])
+        w.addDockWidget(right, self.docks["perception"])
         w.splitDockWidget(
             self.docks["status"], self.docks["transcript"], Qt.Orientation.Vertical,
         )
+        # Tab the perception panel behind the transcript so it stays
+        # out of the way until the user clicks the tab.
+        w.tabifyDockWidget(self.docks["transcript"], self.docks["perception"])
+        self.docks["transcript"].raise_()
 
         # Give camera + chat the wider columns and status a small strip.
         w.resizeDocks(
