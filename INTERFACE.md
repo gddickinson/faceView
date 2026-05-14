@@ -145,6 +145,8 @@ faceView/
 │   ├── server/
 │   │   ├── service.py           Shared service (HTTP + MCP); _GuiBridge slots
 │   │   ├── api.py               FastAPI on 127.0.0.1 (control surface)
+│   │   ├── openai_compat.py     /v1/chat/completions + /v1/models shim —
+│   │   │                        faceView as a drop-in local OpenAI endpoint
 │   │   └── mcp_server.py        stdio MCP server adapter
 │   │
 │   ├── utils/

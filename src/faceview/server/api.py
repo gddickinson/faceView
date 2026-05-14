@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from faceview.config import settings
 from faceview.core.logger import get_logger
+from faceview.server.openai_compat import build_router as _openai_router
 from faceview.server.service import Service, init_service
 
 
@@ -177,6 +178,9 @@ def build_app(service: Service) -> FastAPI:
     @app.post("/effects/slider")
     def set_slider(req: SliderRequest) -> dict[str, Any]:
         return service.set_slider(req.key, req.value)
+
+    # OpenAI-compat /v1/chat/completions + /v1/models.
+    app.include_router(_openai_router(service))
 
     return app
 
