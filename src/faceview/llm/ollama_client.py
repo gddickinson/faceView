@@ -113,6 +113,9 @@ class OllamaEngine:
         self.model = model
         self.host = host
         self.timeout = timeout
+        # Token usage from the most recent /api/chat final chunk.
+        # Picked up by TelemetryRecorder. None before the first call.
+        self.last_usage: tuple[int, int] | None = None
 
     def stream_reply(self, conv, user_text: str) -> Iterator[str]:
         """Yield text chunks from Ollama's streaming /api/chat endpoint.
@@ -186,6 +189,7 @@ class OllamaEngine:
 
             text_buf: list[str] = []
             tool_calls: list[dict] = []
+            final_chunk: dict = {}
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     for line in resp:
@@ -204,11 +208,18 @@ class OllamaEngine:
                         if calls:
                             tool_calls.extend(calls)
                         if chunk.get("done"):
+                            final_chunk = chunk
                             break
             except (urllib.error.URLError, ConnectionError,
                     TimeoutError, OSError) as exc:
                 log.warning("ollama.stream_failed", error=str(exc))
                 return
+            # Persist token usage from the final chunk for telemetry.
+            try:
+                from faceview.llm.telemetry import extract_ollama_usage
+                self.last_usage = extract_ollama_usage(final_chunk)
+            except Exception:  # noqa: BLE001
+                self.last_usage = None
 
             if not tool_calls:
                 log.info("ollama.stream_done", step=_step,

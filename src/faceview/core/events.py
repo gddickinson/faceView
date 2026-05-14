@@ -50,6 +50,7 @@ class EventType(Enum):
     SCENE_CAPTION = auto()   # ambient VLM caption (moondream, ~15 s cadence)
     OBJECTS = auto()         # MP Object Detector results
     PIXELS_LEAVING = auto()  # webcam frame being sent off-device (privacy)
+    TURN_RECORDED = auto()   # one LLM turn's cost/latency telemetry
 
     # Lifecycle / generic
     SCREENSHOT_TAKEN = auto()
@@ -216,6 +217,18 @@ class SceneCaption:
     text: str
     model: str = ""              # which VLM produced it (e.g. "moondream")
     latency_s: float = 0.0       # round-trip seconds (logged + shown)
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class TurnRecord:
+    """Per-turn telemetry: latency + token usage + $ cost."""
+    engine: str                  # "anthropic" | "ollama" | "demo"
+    model: str
+    duration_s: float
+    prompt_tokens: int           # 0 when unknown
+    completion_tokens: int
+    usd_cost: float              # 0 for local engines
     ts: float = field(default_factory=time)
 
 

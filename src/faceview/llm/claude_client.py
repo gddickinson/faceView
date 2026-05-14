@@ -56,6 +56,10 @@ class AnthropicEngine:
         self.api_key = api_key
         self.model = model
         self._client = None  # lazy
+        # Set by stream_reply after each final response so the
+        # telemetry recorder can read real token counts. None when no
+        # call has been made yet.
+        self.last_usage: tuple[int, int] | None = None
 
     def _ensure_client(self):
         if self._client is None:
@@ -118,6 +122,13 @@ class AnthropicEngine:
                 final = stream.get_final_message()
             log.info("anthropic.stream_done", step=_step,
                      stop_reason=str(final.stop_reason))
+            # Capture token usage from the last response so the
+            # telemetry recorder can pick it up after the loop.
+            try:
+                from faceview.llm.telemetry import extract_anthropic_usage
+                self.last_usage = extract_anthropic_usage(final)
+            except Exception:  # noqa: BLE001
+                self.last_usage = None
             if final.stop_reason != "tool_use":
                 return
             # Append the assistant turn (text + tool_use blocks) and
@@ -360,6 +371,34 @@ class ClaudeClient:
         except Exception as exc:  # noqa: BLE001
             log.warning("memory.record_failed", error=str(exc))
 
+    def _record_telemetry(
+        self, user_text: str, assistant_text: str, duration_s: float,
+    ) -> None:
+        """Hand the turn's wall-time + token counts to TelemetryRecorder.
+
+        Real token counts come from ``engine.last_usage`` when the
+        engine exposes them (Anthropic, Ollama). Demo engine doesn't,
+        so we fall back to word-count estimates."""
+        try:
+            from faceview.llm.telemetry import TelemetryRecorder
+            usage = getattr(self.engine, "last_usage", None) or (0, 0)
+            in_tok, out_tok = usage
+            # Best guess at the model name for cost lookup.
+            model = (getattr(self.engine, "model", None)
+                     or self._engine_name
+                     or "demo")
+            TelemetryRecorder.shared().record(
+                engine=self._engine_name or "demo",
+                model=str(model),
+                duration_s=duration_s,
+                prompt_text=user_text,
+                completion_text=assistant_text,
+                prompt_tokens=in_tok,
+                completion_tokens=out_tok,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("telemetry.record_failed", error=str(exc))
+
     def stop(self) -> None:
         self._q.put(None)
 
@@ -385,6 +424,7 @@ class ClaudeClient:
                     except Exception:  # noqa: BLE001
                         pass
                 chunks: list[str] = []
+                t0 = time.time()
                 try:
                     for tok in self.engine.stream_reply(self.conversation, user_text):
                         chunks.append(str(tok))
@@ -396,8 +436,10 @@ class ClaudeClient:
                         except Exception:  # noqa: BLE001
                             pass
                 final = "".join(chunks)
+                duration_s = time.time() - t0
                 self.conversation.add_assistant(final)
                 self._record_turn(user_text, final)
+                self._record_telemetry(user_text, final, duration_s)
                 self.bus.publish(EventType.LLM_REPLY, ChatMessage("assistant", final))
                 # TTS_SPEAK is routed via MainWindow's set_tts_enabled
                 # subscription (conditional on the TTS worker being on);
