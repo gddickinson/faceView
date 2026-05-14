@@ -35,7 +35,17 @@ faceView/
 │   │   └── errors.py            FaceViewError hierarchy
 │   │
 │   ├── gui/
-│   │   ├── main_window.py       MainWindow — assembles panels + owns workers
+│   │   ├── main_window.py       MainWindow facade — panels + menu + layout;
+│   │   │                        delegates worker lifecycle to controllers
+│   │   ├── controllers/         Per-concern lifecycle controllers
+│   │   │   ├── camera_ctrl.py     Webcam + presence/mouth/emotion/identity/
+│   │   │   │                       scene/gestures/objects/captioner
+│   │   │   ├── audio_ctrl.py      Mic + VAD + STT + echo-gate + push-to-speak
+│   │   │   ├── tts_ctrl.py        TTS worker + LLM_REPLY→TTS_SPEAK bridge
+│   │   │   ├── avatar_ctrl.py     Avatar worker + persona swap + cognition rebind
+│   │   │   ├── test_mode_ctrl.py  Dual-LLM test mode + partner-persona picker
+│   │   │   ├── enrollment_ctrl.py Owner enrollment flow (N-frame capture)
+│   │   │   └── monitor_ctrl.py    Audio/emotion/mouth/transcript monitor windows
 │   │   ├── layout.py            LayoutManager — wraps panels in QDockWidgets;
 │   │   │                        Save/Reset layout via QSettings
 │   │   ├── chat_panel.py        Chat history + input + Send + push-to-talk
