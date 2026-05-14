@@ -57,6 +57,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Exception as exc:  # noqa: BLE001
         log.warning("theme.apply_failed", error=str(exc))
 
+    # I4 — discover user plugins under ~/.faceview/plugins.
+    try:
+        from faceview.llm.plugins import discover_and_load_plugins
+        n = discover_and_load_plugins()
+        if n:
+            log.info("plugins.discovered", count=n)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("plugins.discover_failed", error=str(exc))
+
     window = MainWindow()
 
     # Wire LLM client to chat events. Stash on the window so the config
@@ -77,6 +86,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Load persistent memory for the current persona so chats build up
     # context across sessions (and across LLM engines).
     window._bind_memory_for_current_persona()
+    # C8 — user-emotion → persona-emotion feedback loop. Singleton
+    # subscribes to EMOTION events; we attach the client so it can
+    # reach the live cognition store.
+    try:
+        from faceview.vision.emotion_feedback import EmotionFeedback
+        EmotionFeedback.shared().attach(client)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("emotion_feedback.attach_failed", error=str(exc))
     # Show the actual engine on the LLM pill from boot, not just the
     # initial label baked into StatusPanel.__init__ (which assumes
     # anthropic-or-demo).

@@ -34,7 +34,9 @@ import numpy as np
 from faceview.config import settings
 from faceview.core.errors import MissingDependency
 from faceview.core.event_bus import get_bus
-from faceview.core.events import EventType, Identity
+from faceview.core.events import (
+    EventType, IdentitiesMulti, Identity, IdentityHit,
+)
 from faceview.core.logger import get_logger
 from faceview.vision.people import PeopleStore
 
@@ -119,18 +121,45 @@ class IdentityRecognizer:
             return
         self._last_emit = now
         try:
-            emb = self.embed(frame)
+            faces = self._app.get(frame) or []
         except Exception as exc:  # noqa: BLE001
             log.warning("identity.error", error=str(exc))
             return
-        if emb is None:
+        if not faces:
             return
-        name, sim, is_known = self._people.match(emb)
-        # is_owner is preserved as a meaningful flag for downstream
-        # UI: it lights the StatusPanel's identity pill blue rather
-        # than grey, and gates owner-only memory writes.
-        is_owner = is_known and name.lower() == "owner"
+        # Largest-first ordering so the back-compat IDENTITY event
+        # keeps reporting "the most prominent face".
+        faces.sort(
+            key=lambda f: -(
+                (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])
+            )
+        )
+        hits: list[IdentityHit] = []
+        for f in faces:
+            emb = getattr(f, "normed_embedding", None)
+            if emb is None:
+                continue
+            name, sim, is_known = self._people.match(emb)
+            is_owner = is_known and name.lower() == "owner"
+            bbox = (
+                int(f.bbox[0]), int(f.bbox[1]),
+                int(f.bbox[2] - f.bbox[0]), int(f.bbox[3] - f.bbox[1]),
+            )
+            hits.append(IdentityHit(
+                is_owner=is_owner, similarity=sim, label=name, bbox=bbox,
+            ))
+        if not hits:
+            return
+        # P6 — full list of recognised faces.
+        get_bus().publish(
+            EventType.IDENTITIES_MULTI,
+            IdentitiesMulti(hits=list(hits)),
+        )
+        # Back-compat IDENTITY (single, largest face).
+        top = hits[0]
         get_bus().publish(
             EventType.IDENTITY,
-            Identity(is_owner=is_owner, similarity=sim, label=name),
+            Identity(is_owner=top.is_owner,
+                     similarity=top.similarity,
+                     label=top.label),
         )

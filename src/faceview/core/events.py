@@ -54,6 +54,7 @@ class EventType(Enum):
     ROOM_MAP = auto()        # 2-D plan-view positions of detected items
     AUDIO_AMPLITUDE = auto() # TTS playback envelope (0..1), ~30 ms cadence
     SCREEN_FRAME = auto()    # screen-capture frame (BGR ndarray, like FRAME)
+    IDENTITIES_MULTI = auto() # list-of-faces identity (P6)
 
     # Lifecycle / generic
     SCREENSHOT_TAKEN = auto()
@@ -220,6 +221,26 @@ class SceneCaption:
     text: str
     model: str = ""              # which VLM produced it (e.g. "moondream")
     latency_s: float = 0.0       # round-trip seconds (logged + shown)
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class IdentityHit:
+    """One face's identity within a multi-face frame (P6)."""
+    is_owner: bool
+    similarity: float
+    label: str
+    bbox: tuple[int, int, int, int]  # x, y, w, h
+
+
+@dataclass
+class IdentitiesMulti:
+    """All recognised faces in the latest frame.
+
+    Published alongside the existing single-face IDENTITY event
+    (which keeps reporting just the largest face for back-compat).
+    Subscribers that want full multi-person awareness use this."""
+    hits: list[IdentityHit] = field(default_factory=list)
     ts: float = field(default_factory=time)
 
 

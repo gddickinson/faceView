@@ -162,12 +162,17 @@ class OllamaEngine:
             tool_set.append(LOOK_TOOL_OLLAMA)
         if tools_on:
             # Tier 1 (without look_at_camera, that's added above only
-            # when a VLM is installed) + Tier 2/3.
+            # when a VLM is installed) + Tier 2/3 + plugins.
             for t in TIER1_TOOLS_OLLAMA:
                 if t is LOOK_TOOL_OLLAMA:
                     continue
                 tool_set.append(t)
             tool_set.extend(TIER23_TOOLS_OLLAMA)
+            try:
+                from faceview.llm.plugins import ollama_tool_dicts
+                tool_set.extend(ollama_tool_dicts())
+            except Exception:  # noqa: BLE001
+                pass
         use_tools = bool(tool_set)
         grabber = FrameGrabber.shared() if use_tools else None
 
@@ -324,8 +329,19 @@ class OllamaEngine:
                         limit=int(args.get("limit") or 1),
                     )
                 else:
-                    result = f"Unknown tool: {name}"
-                    log.warning("ollama.unknown_tool", tool=name)
+                    # Try plugin registry before giving up.
+                    try:
+                        from faceview.llm.plugins import (
+                            get_plugin_tool, run_plugin_tool,
+                        )
+                        if get_plugin_tool(name) is not None:
+                            result = run_plugin_tool(name, args or {})
+                        else:
+                            result = f"Unknown tool: {name}"
+                            log.warning("ollama.unknown_tool", tool=name)
+                    except Exception:  # noqa: BLE001
+                        result = f"Unknown tool: {name}"
+                        log.warning("ollama.unknown_tool", tool=name)
                 log.info("ollama.tool_result", tool=name,
                          result=result[:120])
                 messages.append({

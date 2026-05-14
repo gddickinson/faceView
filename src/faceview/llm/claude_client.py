@@ -93,8 +93,17 @@ class AnthropicEngine:
             run_forget_memory, run_look_at_screen_anthropic,
         )
         use_tools = vision_tool_enabled()
+        # I4 — plugin tools registered via .faceview/plugins/*.py
+        # auto-mix into the catalogue.
+        try:
+            from faceview.llm.plugins import anthropic_tool_dicts
+            plugin_tools = anthropic_tool_dicts()
+        except Exception:  # noqa: BLE001
+            plugin_tools = []
         tools_arg: list[dict] = (
-            list(TIER1_TOOLS_ANTHROPIC) + list(TIER23_TOOLS_ANTHROPIC)
+            list(TIER1_TOOLS_ANTHROPIC)
+            + list(TIER23_TOOLS_ANTHROPIC)
+            + list(plugin_tools)
             if use_tools else []
         )
         grabber = FrameGrabber.shared() if use_tools else None
@@ -237,11 +246,25 @@ class AnthropicEngine:
                         region=str(inp.get("region") or "full"),
                     )
                 else:
-                    content = [{"type": "text",
-                                "text": f"Unknown tool: {name}"}]
-                    log.warning("anthropic.unknown_tool", tool=name)
-                if log.isEnabledFor:
-                    log.info("anthropic.tool_dispatched", tool=name)
+                    # Try the plugin registry (I4) before giving up.
+                    try:
+                        from faceview.llm.plugins import (
+                            get_plugin_tool, run_plugin_tool,
+                        )
+                        plugin = get_plugin_tool(name)
+                    except Exception:  # noqa: BLE001
+                        plugin = None
+                    if plugin is not None:
+                        msg = run_plugin_tool(
+                            name, blk.get("input") or {},
+                        )
+                        content = [{"type": "text", "text": msg}]
+                        log.info("anthropic.plugin_dispatched", tool=name)
+                    else:
+                        content = [{"type": "text",
+                                    "text": f"Unknown tool: {name}"}]
+                        log.warning("anthropic.unknown_tool", tool=name)
+                log.info("anthropic.tool_dispatched", tool=name)
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu_id,
