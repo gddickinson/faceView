@@ -85,6 +85,14 @@ class MainWindow(QMainWindow):
         self.monitor_ctrl = MonitorController(self)
         self.enrollment_ctrl = EnrollmentController(self)
 
+        # Room-map worker — runs at ~1 Hz only while the map window is
+        # open. Lives here (not on a controller) since it has a single
+        # owner and a single consumer.
+        from faceview.vision.room_map import RoomMapWorker
+        self.room_map_worker = RoomMapWorker()
+        self.room_map_worker.start()
+        self.room_map_window = None
+
         self._build_layout()
         self._build_menu()
         self.setStatusBar(QStatusBar(self))
@@ -128,6 +136,10 @@ class MainWindow(QMainWindow):
         a_chars.setShortcut(QKeySequence("Ctrl+Shift+I"))
         a_chars.triggered.connect(self._open_character_editor)
         m_view.addAction(a_chars)
+        a_map = QAction("Room map…", self)
+        a_map.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        a_map.triggered.connect(self.open_room_map)
+        m_view.addAction(a_map)
 
         m_tools = self.menuBar().addMenu("&Tools")
         a_cfg = QAction("Configuration…", self)
@@ -226,6 +238,19 @@ class MainWindow(QMainWindow):
         self._char_editor.show()
         self._char_editor.raise_()
         self._char_editor.activateWindow()
+
+    def open_room_map(self) -> None:
+        """Open the top-down room-map window. Worker runs only while
+        the window is visible."""
+        from faceview.gui.room_map_panel import RoomMapWindow
+        if self.room_map_window is None:
+            self.room_map_window = RoomMapWindow(self)
+            # Place to the right of the avatar window when possible.
+            geo = self.geometry()
+            self.room_map_window.move(geo.x() + 80, geo.y() + 80)
+        self.room_map_window.show()
+        self.room_map_window.raise_()
+        self.room_map_window.activateWindow()
 
     def _open_persona_picker(self) -> None:
         from faceview.gui.persona_picker import PersonaPicker
@@ -386,6 +411,7 @@ class MainWindow(QMainWindow):
             lambda: self.tts_ctrl.set_enabled(False),
             self.avatar_ctrl.stop,
             self.monitor_ctrl.close_all,
+            self.room_map_worker.stop,
         ):
             try:
                 stopper()
@@ -393,4 +419,9 @@ class MainWindow(QMainWindow):
                 pass
         if self.avatar_window is not None:
             self.avatar_window.close()
+        if self.room_map_window is not None:
+            try:
+                self.room_map_window.close()
+            except Exception:  # noqa: BLE001
+                pass
         super().closeEvent(ev)

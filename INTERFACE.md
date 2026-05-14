@@ -37,6 +37,8 @@ faceView/
 │   ├── gui/
 │   │   ├── main_window.py       MainWindow facade — panels + menu + layout;
 │   │   │                        delegates worker lifecycle to controllers
+│   │   ├── room_map_panel.py    RoomMapWindow + RoomMapCanvas — top-down
+│   │   │                        plan view (View → Room map…, Ctrl+Shift+Z)
 │   │   ├── controllers/         Per-concern lifecycle controllers
 │   │   │   ├── camera_ctrl.py     Webcam + presence/mouth/emotion/identity/
 │   │   │   │                       scene/gestures/objects/captioner
@@ -98,6 +100,8 @@ faceView/
 │   │   ├── depth.py             MiDaS-small depth estimation (estimate_depth)
 │   │   ├── gaze_target.py       Heuristic gaze-target reader (gaze_target)
 │   │   ├── segment.py           GrabCut foreground mask (segment_object)
+│   │   ├── room_map.py          RoomMapWorker — MiDaS depth + projection
+│   │   │                        to top-down plan (~1 Hz when panel open)
 │   │   ├── mirror.py            MirrorState — user → avatar real-time mimic
 │   │   ├── sim_face.py          Procedural face renderer (FaceParams)
 │   │   ├── sim_camera.py        SimCameraWorker — synthetic frames; AVATAR_FRAME

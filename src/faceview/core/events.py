@@ -51,6 +51,7 @@ class EventType(Enum):
     OBJECTS = auto()         # MP Object Detector results
     PIXELS_LEAVING = auto()  # webcam frame being sent off-device (privacy)
     TURN_RECORDED = auto()   # one LLM turn's cost/latency telemetry
+    ROOM_MAP = auto()        # 2-D plan-view positions of detected items
 
     # Lifecycle / generic
     SCREENSHOT_TAKEN = auto()
@@ -217,6 +218,34 @@ class SceneCaption:
     text: str
     model: str = ""              # which VLM produced it (e.g. "moondream")
     latency_s: float = 0.0       # round-trip seconds (logged + shown)
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class RoomMapItem:
+    """One named object's plan-view position relative to the camera.
+
+    Coordinates are in "relative units" by default — until a metric
+    calibration (P16) is set, ``x`` and ``z`` are unitless but
+    consistent across frames. ``x`` is right of the camera, ``z`` is
+    forward. ``y`` (height) is not used by the top-down view but
+    kept on the payload for future side-views."""
+    label: str
+    x: float
+    z: float
+    y: float = 0.0
+    confidence: float = 0.0
+    last_seen_ts: float = field(default_factory=time)
+
+
+@dataclass
+class RoomMap:
+    """Snapshot of the camera-relative room layout."""
+    items: list[RoomMapItem] = field(default_factory=list)
+    frame_w: int = 0
+    frame_h: int = 0
+    hfov_deg: float = 65.0
+    units: str = "relative"      # "relative" | "metres"
     ts: float = field(default_factory=time)
 
 
