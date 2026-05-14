@@ -476,6 +476,13 @@ See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for the
 most common issues and fixes — camera/mic permissions, broken VLMs,
 demo-mode fallback, port conflicts, persona swap freezes, etc.
 
+### Choosing the right models
+
+See [`docs/MODELS.md`](docs/MODELS.md) for recommended Anthropic
++ Ollama model combos with measured first-token latencies on M-
+series hardware, plus the auto-picker's preference order for the
+chat / ambient-VLM / deep-VLM slots.
+
 ### Use faceView as a local OpenAI endpoint
 
 The HTTP server speaks OpenAI's `/v1/chat/completions` and `/v1/models`

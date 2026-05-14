@@ -1,0 +1,34 @@
+# pre-commit hooks for faceView.
+#
+# Install once per machine after cloning:
+#
+#     pip install pre-commit
+#     pre-commit install
+#
+# Then every `git commit` runs ruff (auto-fix) + pyright (warn-only)
+# on the staged Python files. Add `--no-verify` to bypass on a
+# specific commit if a hook flags something off-topic.
+#
+# Settings come from [tool.ruff] / [tool.pyright] in pyproject.toml.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+        # Auto-formatting is opt-in — turn this on once the codebase
+        # is rubber-stamped. For now, just check format would change
+        # things and report; don't actually rewrite.
+        args: [--check]
+
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.396
+    hooks:
+      - id: pyright
+        # We're in "basic" mode + a generous exclude list; pyright is
+        # advisory here, not a hard gate. Failures print but don't
+        # block (--warnings flag isn't a thing in pre-commit; use
+        # always_run=false so it only runs when relevant files change).
+        files: ^src/.*\.py$

@@ -81,3 +81,51 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
 qt_api = "pyside6"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src"]
+extend-exclude = ["docs", ".faceview", "owner_data"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "B",    # bugbear
+    "UP",   # pyupgrade
+]
+ignore = [
+    "E501", # line too long — many existing comments live with it
+    "E731", # do not assign a lambda
+    "B008", # function call in default arg (FastAPI Depends pattern)
+    "B904", # `raise ... from err` — many places already use bare raise
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011", "E402"]
+"tools/**" = ["E402"]
+
+[tool.pyright]
+include = ["src"]
+exclude = [
+    "**/__pycache__",
+    "**/.faceview",
+    "**/docs",
+    "**/owner_data",
+    "src/faceview/vision/anatomy_overlay.py",  # legacy renderer, drifted
+    "src/faceview/vision/effects.py",
+    "src/faceview/vision/effects_post.py",
+    "src/faceview/vision/effects_pre.py",
+    "src/faceview/vision/effects_runtime.py",
+]
+pythonVersion = "3.11"
+pythonPlatform = "Darwin"
+typeCheckingMode = "basic"
+# Heavy ML deps are lazy-imported; pyright can't see them without
+# pulling the env, so silence missing-import where it doesn't matter.
+reportMissingImports = "warning"
+reportMissingTypeStubs = false
+reportPrivateImportUsage = false
