@@ -52,6 +52,7 @@ class EventType(Enum):
     PIXELS_LEAVING = auto()  # webcam frame being sent off-device (privacy)
     TURN_RECORDED = auto()   # one LLM turn's cost/latency telemetry
     ROOM_MAP = auto()        # 2-D plan-view positions of detected items
+    AUDIO_AMPLITUDE = auto() # TTS playback envelope (0..1), ~30 ms cadence
 
     # Lifecycle / generic
     SCREENSHOT_TAKEN = auto()
@@ -218,6 +219,20 @@ class SceneCaption:
     text: str
     model: str = ""              # which VLM produced it (e.g. "moondream")
     latency_s: float = 0.0       # round-trip seconds (logged + shown)
+    ts: float = field(default_factory=time)
+
+
+@dataclass
+class AudioAmplitude:
+    """Envelope sample from the active TTS utterance.
+
+    ``amplitude`` in [0, 1] — normalised RMS of one ~30 ms window.
+    Emitted at ~33 Hz while the TTS subprocess is playing; a final
+    sample with ``amplitude=0.0`` is emitted when playback ends so
+    consumers can close the avatar's mouth cleanly. Future: a
+    high-quality audio-driven lip-sync path (A47) consumes this to
+    override the text-phoneme-driven jaw_open during playback."""
+    amplitude: float
     ts: float = field(default_factory=time)
 
 

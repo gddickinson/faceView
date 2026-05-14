@@ -28,6 +28,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from faceview.core.event_bus import get_bus
+from faceview.core.events import AudioAmplitude, EventType
 from faceview.core.logger import get_logger
 from faceview.utils.paths import data_dir
 
@@ -179,16 +181,36 @@ class KokoroEngine:
         os.close(fd)
         try:
             sf.write(path, samples, int(sr))
+            # A47 — compute amplitude envelope ahead of time so we can
+            # emit AUDIO_AMPLITUDE events in lock-step with playback.
+            envelope = _compute_envelope(samples, int(sr))
             proc = subprocess.Popen(
                 ["afplay", path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
             self._proc = proc
+            stop_evt = threading.Event()
+            env_thread = threading.Thread(
+                target=_emit_envelope,
+                args=(envelope, stop_evt),
+                name="kokoro-envelope",
+                daemon=True,
+            )
+            env_thread.start()
             try:
                 proc.wait()
             finally:
                 self._proc = None
+                stop_evt.set()
+                # Final zero sample so avatar closes the mouth.
+                try:
+                    get_bus().publish(
+                        EventType.AUDIO_AMPLITUDE,
+                        AudioAmplitude(amplitude=0.0),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
         finally:
             try:
                 os.unlink(path)
@@ -210,6 +232,67 @@ class KokoroEngine:
 
     def set_speed(self, speed: float) -> None:
         self.speed = max(0.5, min(2.0, float(speed)))
+
+
+# ── envelope helpers (A47) ────────────────────────────────────────
+
+
+def _compute_envelope(
+    samples, sample_rate: int, window_ms: float = 30.0,
+) -> list[tuple[float, float]]:
+    """Return ``[(t_seconds, amplitude_0_to_1), ...]`` chunks of the
+    audio. Cheap RMS in fixed-size windows; no external deps."""
+    try:
+        import numpy as np
+    except ImportError:
+        return []
+    if sample_rate <= 0:
+        return []
+    arr = np.asarray(samples, dtype=np.float32).reshape(-1)
+    if arr.size == 0:
+        return []
+    win = max(1, int(sample_rate * window_ms / 1000.0))
+    out: list[tuple[float, float]] = []
+    # RMS per window.
+    n = arr.size
+    rms_max = 1e-6
+    rmss: list[float] = []
+    for i in range(0, n, win):
+        chunk = arr[i:i + win]
+        rms = float(np.sqrt(np.mean(chunk * chunk))) if chunk.size else 0.0
+        rms_max = max(rms_max, rms)
+        rmss.append(rms)
+    # Normalise to [0, 1] using the loudest window so quieter
+    # utterances still open the mouth properly.
+    for i, r in enumerate(rmss):
+        t = (i * win) / float(sample_rate)
+        out.append((t, min(1.0, r / rms_max)))
+    return out
+
+
+def _emit_envelope(
+    envelope: list[tuple[float, float]], stop_evt: threading.Event,
+) -> None:
+    """Walk the envelope and publish AudioAmplitude events at the
+    right wall-clock times. Stops cleanly when ``stop_evt`` fires
+    (i.e. the user interrupted TTS) or the list is exhausted."""
+    if not envelope:
+        return
+    t0 = time.time()
+    for t_target, amp in envelope:
+        if stop_evt.is_set():
+            return
+        wait = (t0 + t_target) - time.time()
+        if wait > 0:
+            if stop_evt.wait(timeout=min(wait, 0.5)):
+                return
+        try:
+            get_bus().publish(
+                EventType.AUDIO_AMPLITUDE,
+                AudioAmplitude(amplitude=float(amp)),
+            )
+        except Exception:  # noqa: BLE001
+            return
 
 
 # ── CLI entry: `python -m faceview.speech.tts_kokoro --download` ─────

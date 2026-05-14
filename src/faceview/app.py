@@ -50,6 +50,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     argv = argv if argv is not None else sys.argv
     app = QApplication.instance() or QApplication(argv)
 
+    # U6 — restore persisted theme before any widget paints.
+    try:
+        from faceview.gui.theme import apply_theme, load_persisted
+        apply_theme(load_persisted())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("theme.apply_failed", error=str(exc))
+
     window = MainWindow()
 
     # Wire LLM client to chat events. Stash on the window so the config

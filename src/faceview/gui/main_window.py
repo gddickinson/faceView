@@ -148,6 +148,19 @@ class MainWindow(QMainWindow):
         a_cfg.setShortcut(QKeySequence("Ctrl+,"))
         a_cfg.triggered.connect(self._open_config_dialog)
         m_tools.addAction(a_cfg)
+        # Theme submenu (U6) — Dark / Light / System.
+        m_theme = m_tools.addMenu("Theme")
+        for label, key in (
+            ("Dark", "dark"),
+            ("Light", "light"),
+            ("System default", "system"),
+        ):
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.triggered.connect(
+                lambda _checked=False, k=key: self.set_theme(k)
+            )
+            m_theme.addAction(act)
         a_cam = QAction("Toggle camera", self)
         a_cam.setShortcut(QKeySequence("Ctrl+Shift+C"))
         a_cam.triggered.connect(
@@ -350,6 +363,13 @@ class MainWindow(QMainWindow):
 
     def open_monitor(self, kind: str) -> None:
         self.monitor_ctrl.open(kind)
+
+    # Theme (U6) — global Qt-palette switcher.
+    def set_theme(self, mode: str) -> None:
+        from faceview.gui.theme import apply_theme
+        apply_theme(mode if mode in ("dark", "light", "system")
+                    else "system")
+        self.statusBar().showMessage(f"Theme: {mode}")
 
     # Incognito mode (C6) — class-level flag on CognitionStore.
     def incognito_running(self) -> bool:
