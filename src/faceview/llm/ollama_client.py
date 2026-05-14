@@ -135,7 +135,7 @@ class OllamaEngine:
             run_describe_color, run_describe_pose, run_face_attributes,
             run_scan_qr, run_estimate_depth, run_gaze_target,
             run_segment_object, run_describe_room_layout,
-            run_forget_memory,
+            run_forget_memory, run_look_at_screen_ollama,
             vision_tool_enabled,
         )
 
@@ -295,6 +295,13 @@ class OllamaEngine:
                     )
                 elif name == "describe_room_layout":
                     result = run_describe_room_layout()
+                elif (name == "look_at_screen"
+                        and grabber is not None and vlm is not None):
+                    result = run_look_at_screen_ollama(
+                        vlm, host=self.host,
+                        question=str(args.get("question") or ""),
+                        region=str(args.get("region") or "full"),
+                    )
                 elif name == "forget_memory":
                     # ClaudeClient instance owns .memory but engines
                     # don't see it directly — reach via the

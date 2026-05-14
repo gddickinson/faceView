@@ -90,7 +90,7 @@ class AnthropicEngine:
             run_describe_color, run_describe_pose, run_face_attributes,
             run_scan_qr, run_estimate_depth, run_gaze_target,
             run_segment_object, run_describe_room_layout,
-            run_forget_memory,
+            run_forget_memory, run_look_at_screen_anthropic,
         )
         use_tools = vision_tool_enabled()
         tools_arg: list[dict] = (
@@ -230,6 +230,12 @@ class AnthropicEngine:
                         limit=int(inp.get("limit") or 1),
                     )
                     content = [{"type": "text", "text": msg}]
+                elif name == "look_at_screen":
+                    inp = blk.get("input") or {}
+                    content = run_look_at_screen_anthropic(
+                        question=str(inp.get("question") or ""),
+                        region=str(inp.get("region") or "full"),
+                    )
                 else:
                     content = [{"type": "text",
                                 "text": f"Unknown tool: {name}"}]

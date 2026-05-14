@@ -53,6 +53,7 @@ class EventType(Enum):
     TURN_RECORDED = auto()   # one LLM turn's cost/latency telemetry
     ROOM_MAP = auto()        # 2-D plan-view positions of detected items
     AUDIO_AMPLITUDE = auto() # TTS playback envelope (0..1), ~30 ms cadence
+    SCREEN_FRAME = auto()    # screen-capture frame (BGR ndarray, like FRAME)
 
     # Lifecycle / generic
     SCREENSHOT_TAKEN = auto()

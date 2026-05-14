@@ -95,6 +95,14 @@ class MainWindow(QMainWindow):
         RoomMapStore.shared()
         self.room_map_window = None
 
+        # P10 — Screen-capture worker. Default OFF; toggled from the
+        # View menu. The ScreenFrameGrabber subscribes immediately
+        # so the look_at_screen tool can see frames as soon as
+        # capture is enabled.
+        from faceview.vision.screen import ScreenFrameGrabber
+        ScreenFrameGrabber.shared()
+        self._screen_worker = None
+
         self._build_layout()
         self._build_menu()
         self.setStatusBar(QStatusBar(self))
@@ -142,6 +150,13 @@ class MainWindow(QMainWindow):
         a_map.setShortcut(QKeySequence("Ctrl+Shift+Z"))
         a_map.triggered.connect(self.open_room_map)
         m_view.addAction(a_map)
+        a_screen = QAction("Screen capture", self)
+        a_screen.setShortcut(QKeySequence("Ctrl+Shift+W"))
+        a_screen.setCheckable(True)
+        a_screen.setChecked(False)
+        a_screen.toggled.connect(self.set_screen_capture_enabled)
+        m_view.addAction(a_screen)
+        self._screen_action = a_screen
 
         m_tools = self.menuBar().addMenu("&Tools")
         a_cfg = QAction("Configuration…", self)
@@ -364,6 +379,39 @@ class MainWindow(QMainWindow):
     def open_monitor(self, kind: str) -> None:
         self.monitor_ctrl.open(kind)
 
+    # Screen-capture lifecycle (P10).
+    def screen_capture_running(self) -> bool:
+        w = self._screen_worker
+        return w is not None and w.is_running()
+
+    def set_screen_capture_enabled(self, on: bool) -> None:
+        if on and self._screen_worker is None:
+            try:
+                from faceview.vision.screen import ScreenCaptureWorker
+                w = ScreenCaptureWorker()
+                w.start()
+                self._screen_worker = w
+                self.statusBar().showMessage(
+                    "Screen capture started — frames publishing on bus"
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("screen.start_failed", error=str(exc))
+                self.statusBar().showMessage(
+                    f"Screen capture unavailable: {exc}"
+                )
+                self._screen_worker = None
+                try:
+                    self._screen_action.setChecked(False)
+                except Exception:  # noqa: BLE001
+                    pass
+        elif not on and self._screen_worker is not None:
+            try:
+                self._screen_worker.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._screen_worker = None
+            self.statusBar().showMessage("Screen capture stopped")
+
     # Theme (U6) — global Qt-palette switcher.
     def set_theme(self, mode: str) -> None:
         from faceview.gui.theme import apply_theme
@@ -459,6 +507,7 @@ class MainWindow(QMainWindow):
             self.avatar_ctrl.stop,
             self.monitor_ctrl.close_all,
             self.room_map_worker.stop,
+            lambda: self.set_screen_capture_enabled(False),
         ):
             try:
                 stopper()

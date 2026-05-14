@@ -478,6 +478,39 @@ DESCRIBE_ROOM_LAYOUT_TOOL_ANTHROPIC: dict = {
                     "since boot for the map to have data."),
     "input_schema": {"type": "object", "properties": {}},
 }
+LOOK_AT_SCREEN_TOOL_ANTHROPIC: dict = {
+    "name": "look_at_screen",
+    "description": (
+        "Take a single still snapshot from the user's SCREEN (not "
+        "the webcam) and look at it. Use when the user asks about "
+        "their code, slides, browser, document, or anything else "
+        "visible on their monitor. Requires screen capture to be on "
+        "(View → Screen capture). Optional 'question' steers the "
+        "VLM; optional 'region' crops to a part of the screen "
+        "before captioning. NOTE: this is a different surface from "
+        "look_at_camera — pick whichever matches what the user "
+        "actually wants you to look at."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "question": {"type": "string",
+                         "description": _QUESTION_DESCRIPTION},
+            "region": {"type": "string",
+                       "description": _REGION_DESCRIPTION},
+        },
+    },
+}
+LOOK_AT_SCREEN_TOOL_OLLAMA: dict = {
+    "type": "function",
+    "function": {
+        "name": "look_at_screen",
+        "description": LOOK_AT_SCREEN_TOOL_ANTHROPIC["description"],
+        "parameters": LOOK_AT_SCREEN_TOOL_ANTHROPIC["input_schema"],
+    },
+}
+
+
 FORGET_MEMORY_TOOL_ANTHROPIC: dict = {
     "name": "forget_memory",
     "description": (
@@ -579,6 +612,108 @@ def run_describe_room_layout() -> str:
     """Tool executor — read RoomMapStore + format as prose."""
     from faceview.vision.room_map import describe_room_layout
     return describe_room_layout()
+
+
+def run_look_at_screen_anthropic(
+    question: str = "", region: str = "full",
+) -> list[dict]:
+    """Anthropic-side look_at_screen — reads from ScreenFrameGrabber
+    instead of the webcam FrameGrabber and returns the image as a
+    content block. Falls back to a text-only apology if no screen
+    capture has been seen yet."""
+    from faceview.vision.screen import ScreenFrameGrabber
+    grabber = ScreenFrameGrabber.shared()
+    with grabber._lock:
+        raw = grabber._latest
+    if raw is None:
+        return [{"type": "text",
+                 "text": ("No screen-capture frame yet — turn on "
+                          "View → Screen capture first.")}]
+    cropped = _crop_to_region(raw, region)
+    b64 = _encode_jpeg(cropped, max_dim=1280)
+    if b64 is None:
+        return [{"type": "text",
+                 "text": "Couldn't encode the screen frame."}]
+    _signal_pixels(True, destination="anthropic",
+                   tool="look_at_screen")
+    bits = ["screen snapshot"]
+    if region and region != "full":
+        bits.append(f"region: {region}")
+    if question:
+        bits.append(f"focus: {question}")
+    return [
+        {"type": "image",
+         "source": {"type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": b64}},
+        {"type": "text", "text": "(" + "; ".join(bits) + ")"},
+    ]
+
+
+def run_look_at_screen_ollama(
+    vlm_model: str,
+    host: str = "http://127.0.0.1:11434",
+    timeout: float = 60.0,
+    question: str = "",
+    region: str = "full",
+) -> str:
+    """Ollama-side look_at_screen. Mirror of run_look_ollama but
+    sourcing from ScreenFrameGrabber."""
+    import json as _json
+    import urllib.error as _ue
+    import urllib.request as _ur
+    from faceview.vision.screen import ScreenFrameGrabber
+
+    grabber = ScreenFrameGrabber.shared()
+    with grabber._lock:
+        raw = grabber._latest
+    if raw is None:
+        return ("No screen-capture frame yet — turn on View → "
+                "Screen capture first.")
+    cropped = _crop_to_region(raw, region)
+    b64 = _encode_jpeg(cropped, max_dim=1280)
+    if b64 is None:
+        return "Couldn't encode the screen frame."
+    if question.strip():
+        prompt = (
+            f"Look at this screenshot from the user's monitor and "
+            f"answer this question directly and concisely: "
+            f"{question.strip()}"
+        )
+    else:
+        prompt = ("Describe what's visible on this user's screen in "
+                  "one short paragraph. Mention what's on the screen "
+                  "(code, browser, document, video, app) and any "
+                  "salient text. Be specific.")
+    _signal_pixels(True, destination=f"ollama:{vlm_model}",
+                   tool="look_at_screen")
+    body = _json.dumps({
+        "model": vlm_model,
+        "prompt": prompt,
+        "images": [b64],
+        "stream": False,
+        "options": {"num_predict": 250},
+    }).encode("utf-8")
+    req = _ur.Request(
+        f"{host}/api/generate",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            data = _json.loads(resp.read())
+        text = (data.get("response") or "").strip()
+        _signal_pixels(False, destination=f"ollama:{vlm_model}",
+                       tool="look_at_screen")
+        if not text:
+            return "(The vision model returned no description.)"
+        return text
+    except (_ue.URLError, ConnectionError, TimeoutError, OSError,
+            ValueError) as exc:
+        _signal_pixels(False, destination=f"ollama:{vlm_model}",
+                       tool="look_at_screen")
+        log.warning("vision.tool.screen_failed", error=str(exc))
+        return f"(Screen lookup failed: {exc})"
 
 
 def run_forget_memory(
@@ -917,6 +1052,7 @@ TIER23_TOOLS_ANTHROPIC = [
     SEGMENT_OBJECT_TOOL_ANTHROPIC,
     DESCRIBE_ROOM_LAYOUT_TOOL_ANTHROPIC,
     FORGET_MEMORY_TOOL_ANTHROPIC,
+    LOOK_AT_SCREEN_TOOL_ANTHROPIC,
 ]
 
 TIER1_TOOLS_OLLAMA = [
@@ -931,6 +1067,7 @@ TIER23_TOOLS_OLLAMA = [
     SEGMENT_OBJECT_TOOL_OLLAMA,
     DESCRIBE_ROOM_LAYOUT_TOOL_OLLAMA,
     FORGET_MEMORY_TOOL_OLLAMA,
+    LOOK_AT_SCREEN_TOOL_OLLAMA,
 ]
 
 
