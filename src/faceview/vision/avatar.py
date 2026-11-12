@@ -33,7 +33,7 @@ from typing import Optional
 from faceview.vision.expressions import apply_expression
 from faceview.vision.face_state import AU_IDS, FaceState, face_state_to_params
 from faceview.vision.personas import Persona, apply_persona, load_persona
-from faceview.vision.sim_face import FaceParams
+from faceview.vision.face_params import FaceParams
 from faceview.vision.speech import (
     SpeechEngine, TimedViseme, tongue_pose_at, viseme_at, viseme_blend_at,
 )

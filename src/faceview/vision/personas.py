@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Iterable
 
 from faceview.assets import assets_dir
-from faceview.vision.sim_face import FaceParams
+from faceview.vision.face_params import FaceParams
 
 
 @dataclass

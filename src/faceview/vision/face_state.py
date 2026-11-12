@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from faceview.vision.sim_face import FaceParams
+from faceview.vision.face_params import FaceParams
 
 
 # Canonical AU identifier list (matches assets/config/au_definitions.json).
