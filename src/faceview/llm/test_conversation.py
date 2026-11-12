@@ -44,36 +44,11 @@ if TYPE_CHECKING:
 log = get_logger("test_conversation")
 
 
-SEED_PROMPTS = [
-    "Hi! Can you see me on your side?",
-    "Yes — and can you see me? What expression am I making?",
-    "I think you look curious. Want to play a word game?",
-    "Sure. Say a word and I'll respond with an emotion.",
-    "Sunshine.",
-    "Happy. Storm.",
-    "Anxious. Library.",
-    "Calm. Your turn — give me a feeling.",
-    "Hope. What does hope look like for you?",
-    "A small light at the end of a long hallway. Yours?",
-    "The first sentence of a book you can't put down.",
-]
-
-
-_EMOTION_KEYWORDS = {
-    "happy":    ["sunshine", "smile", "play", "joy", "hope", "calm", "fun", "great"],
-    "sad":      ["alone", "lost", "sorry", "miss", "rain", "dark", "regret"],
-    "surprise": ["wow", "really", "?", "what", "sudden", "storm", "amazing"],
-    "neutral":  [],
-}
-
-
-def _guess_emotion(text: str) -> str:
-    t = text.lower()
-    for label, words in _EMOTION_KEYWORDS.items():
-        for w in words:
-            if w in t:
-                return label
-    return "neutral"
+from faceview.llm.canned_lines import (  # noqa: E402  (Qt-free; shared with the web demo)
+    SEED_PROMPTS,
+    _EMOTION_KEYWORDS,
+    _guess_emotion,
+)
 
 
 _DEFAULT_SYSTEM_A = (
