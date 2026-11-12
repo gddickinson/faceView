@@ -31,6 +31,12 @@ static export (`scripts/build_static.py`, `.github/workflows/pages.yml`, publish
 * Tests: `pytest tests` 246 passed, 43 skipped; `tests/test_web.py` 22 passed (21 + 1 Qt skip in a
   web-only env); node test 16,565 checks.
 
+* **Follow-up fixes:** the 14 Body-tab pose/limb effect buttons with no handler are now disabled with a
+  "not implemented yet" tooltip (`effects.is_implemented`; Camera/Body tabs split to `gui/effects_panel_tabs.py`);
+  default `FACEVIEW_MODEL` is `claude-sonnet-5-5` (env override kept; max_tokens 1024 -> 16000 because Sonnet 5.5
+  thinks by default and thinking counts toward the cap; listed in config dialog; priced in telemetry); absolute
+  `/Users/george` paths removed from README and two tools. `pytest tests`: 254 passed, 43 skipped.
+
 ## 2026-05-13 — Session: Three tiers of on-demand image-analysis tools
 
 User: *"Once they are done plan and implement all three tiers."* —
