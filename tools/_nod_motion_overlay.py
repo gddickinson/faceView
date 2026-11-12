@@ -59,7 +59,7 @@ def install_override():
 
 
 def render_with_mode(mode_name, pitch, size=(720, 960)):
-    sys.path.insert(0, "/Users/george/claude_test/faceView/tools")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tools/
     from _neck_base_sweep import CONFIGS
     cfg = next(c for c in CONFIGS if c.name == mode_name)
     os.environ["_FACEVIEW_NOD_OVERRIDE"] = json.dumps({

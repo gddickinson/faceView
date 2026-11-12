@@ -35,7 +35,10 @@ MODES = [
     ("head_block_long_neck",        "head_block_long_neck"),
 ]
 
-DOCS = "/Users/george/claude_test/faceView/docs"
+# docs/ next to tools/ (override with FACEVIEW_DOCS_DIR).
+DOCS = os.environ.get(
+    "FACEVIEW_DOCS_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs"))
 
 
 def classify_pixels(img: np.ndarray, erode_thin_edges: int = 3):

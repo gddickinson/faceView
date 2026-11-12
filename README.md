@@ -166,7 +166,7 @@ holding three memory layers + a relationship score:
 ```bash
 $ python tools/faceview_monitor.py memory
 ╭─ cognition · ict_xray_young (Claude) ──
-│ path:        /Users/george/claude_test/faceView/.faceview/memory/ict_xray_young.json
+│ path:        <repo>/.faceview/memory/ict_xray_young.json
 │ first_seen:  2026-05-13   session #4
 │ user_name:   George
 │ relationship Lv 2 · Familiar  (score 38)
