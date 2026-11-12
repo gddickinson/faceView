@@ -49,3 +49,6 @@ src/faceview/assets/anatomy_meshes/
 # ICT-FaceKit npz — 23 MB, generated from a local clone via
 # `python -m tools.build_ict_blendshapes /path/to/ICT-FaceKit/`.
 src/faceview/assets/data/ict/
+
+# Static web export (scripts/build_static.py)
+site/

@@ -21,11 +21,11 @@ GUI from outside.
 
 ## Highlights
 
-- **Eight characters, one engine-agnostic memory** — pick your default
+- **Seven characters, one engine-agnostic memory** — pick your default
   Claude (max-capability, ICT 3D face, British female voice) or swap to
-  one of seven authored personas: Iris the neuroscience PhD, Bayard the
-  retired guitarist, Niko the indie dev, Soraya the ER nurse, Theo the
-  bookshop owner, playful cartoon Claude, or Iris on x-ray. Each has a
+  one of six authored personas: Iris the neuroscience PhD (on the x-ray
+  ICT face), Bayard the retired guitarist, Niko the indie dev, Soraya the
+  ER nurse, Theo the bookshop owner, or playful cartoon Claude. Each has a
   full character sheet (Big Five traits, backstory, catchphrases, goals,
   preferred voice) and their own persistent memory file.
 - **Natural neural voice** — Kokoro-onnx local TTS runs in real time on
@@ -264,6 +264,46 @@ operations as native Claude Code tools.
 
 ---
 
+## Web interface and static site
+
+The avatar's face also runs in a browser: **https://gddickinson.github.io/faceView/** (once Pages is enabled).
+The FACS expression model, idle blinks / breathing / saccades, text-to-viseme lip-sync and the stylised
+renderer are ported to JavaScript + canvas from `src/faceview/vision/` and checked against the Python code
+(a seeded avatar matches frame by frame; the Verify page re-runs the checks in the browser). Everything the
+static site says is a **scripted line** from the repository (test mode's canned prompts and the characters'
+catchphrases): no model is called there.
+
+<p align="center">
+  <img src="docs/img/home.png" alt="Web interface home page with the animated face" width="49%">
+  <img src="docs/img/lipsync.png" alt="Lip-sync page: text to visemes on the face" width="49%">
+</p>
+<p align="center">
+  <img src="docs/img/studio.png" alt="Expression studio with Action Unit sliders" width="32%">
+  <img src="docs/img/duet.png" alt="Two-bot test mode replaying the canned lines" width="32%">
+  <img src="docs/img/verify.png" alt="Python vs JavaScript verification page" width="32%">
+</p>
+
+Pages: Expression studio (12 presets, every AU on a slider, stylised personas), Lip-sync (phonemes, viseme
+strip, mouth-AU curves), Visemes, Two-bot test mode (canned), Chat, Characters, Desktop renders, Verify, About.
+
+### Run the web app
+
+```bash
+pip install -r requirements-web.txt
+python run_web.py                         # http://127.0.0.1:8199
+```
+
+The local web app adds a Python cross-check of each lip-sync timeline and **live chat**: with
+`ANTHROPIC_API_KEY` set in the server's environment (and `pip install anthropic`), the Chat page gets a reply in
+the chosen character's voice (model: `FACEVIEW_MODEL`) and the face speaks it. The key never leaves the Python
+process; without it the page says so. Voice, microphone, webcam and memory stay in the desktop app.
+`python scripts/build_static.py` exports the static site (`site/`); `.github/workflows/pages.yml` publishes it on
+push to `main`. JS-vs-Python fixtures: `python scripts/make_face_fixture.py` (needs PySide6 for the colour and
+render references); tests: `python -m pytest -q tests/test_web.py` (runs the node test
+`src/faceview/web/static/face_engine.test.mjs` too).
+
+---
+
 ## Installation
 
 Conda-based, Python 3.11, Apple Silicon (M1/M2/M3/M4). Other macOS
@@ -294,7 +334,7 @@ FACEVIEW_TEST_MODE=1 \
   FACEVIEW_TEST_ENGINE=ollama \
   FACEVIEW_TEST_MODEL=llama3:latest \
   faceview                                # boot straight into two-bot test mode
-pytest                                    # 158 tests
+pytest                                    # test suite
 ```
 
 If you store your API key in macOS Keychain, the recommended pattern:
@@ -385,12 +425,13 @@ HTTP / MCP ─► Service ─► _GuiBridge slots ─► MainWindow handlers
 
 ```
 $ pytest -q
-158 passed in 65.7s
+246 passed, 43 skipped in 16s
 ```
 
 GitHub Actions runs the full suite + the headless smoke screenshot on
 every push, archiving the PNG as a build artefact. ML libs are
-lazy-loaded so CI doesn't need them installed.
+lazy-loaded so CI doesn't need them installed. Skipped tests need optional
+models or locally built data (ICT-FaceKit, moderngl, ...).
 
 ---
 

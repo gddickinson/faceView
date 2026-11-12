@@ -103,7 +103,8 @@ faceView/
 │   │   ├── room_map.py          RoomMapWorker — MiDaS depth + projection
 │   │   │                        to top-down plan (~1 Hz when panel open)
 │   │   ├── mirror.py            MirrorState — user → avatar real-time mimic
-│   │   ├── sim_face.py          Procedural face renderer (FaceParams)
+│   │   ├── face_params.py       FaceParams dataclass (Qt-free; sim_face re-exports it)
+│   │   ├── sim_face.py          Procedural face renderer (stylised QPainter + mode dispatch)
 │   │   ├── sim_camera.py        SimCameraWorker — synthetic frames; AVATAR_FRAME
 │   │   ├── face_state.py        12 FACS AUs → FaceParams bridge
 │   │   ├── expressions.py       Loads expression presets from JSON
@@ -146,6 +147,7 @@ faceView/
 │   │   ├── cognition.py         CognitionStore (episodic + semantic +
 │   │   │                        emotional + relationship); JSON-persisted
 │   │   │                        per-persona at .faceview/memory/<p>.json
+│   │   ├── canned_lines.py      Test-mode SEED_PROMPTS + keyword mood guess (Qt-free)
 │   │   └── test_conversation.py Two-bot orchestrator (canned or LLM-driven)
 │   │
 │   ├── server/
@@ -154,6 +156,16 @@ faceView/
 │   │   ├── openai_compat.py     /v1/chat/completions + /v1/models shim —
 │   │   │                        faceView as a drop-in local OpenAI endpoint
 │   │   └── mcp_server.py        stdio MCP server adapter
+│   │
+│   ├── web/                     Browser interface (FastAPI + ES modules; static Pages export)
+│   │   ├── app.py               Routes: read-only JSON API (STATIC_ENDPOINTS), POST /api/speech,
+│   │   │                        POST /api/chat (local only, key from env); port 8199
+│   │   ├── data.py              API payloads from the Qt-free vision/llm modules + bundled JSON
+│   │   ├── chat.py              One in-character Claude reply (Anthropic SDK, FACEVIEW_MODEL)
+│   │   └── static/              Front end: face_engine.js / avatar_engine.js / mt19937.js / qcolor.js
+│   │                            (JS ports, node-tested by face_engine.test.mjs via verify_core.js),
+│   │                            face_render.js + face_parts.js (canvas port of the stylised
+│   │                            renderer), one module per page, ref/ (Python reference renders)
 │   │
 │   ├── utils/
 │   │   ├── headless.py          QT_QPA_PLATFORM=offscreen helpers
@@ -165,21 +177,28 @@ faceView/
 │       │   ├── expressions.json        12 emotion presets
 │       │   ├── expression_muscles.json 43 expression muscles
 │       │   ├── personas.json           41 bundled appearance presets
-│       │   ├── characters.json         8 character personalities
+│       │   ├── characters.json         7 character personalities
 │       │   │                           (name + backstory + Big Five +
 │       │   │                           voice + goals + relationship levels)
 │       │   └── anatomy/                Faceforge head-anatomy configs
 │       ├── body_part_labels_{male,female}.npz   Baked BPF labels for rig
 │       └── data/
-│           └── cmu_dict_compact.json   CMU pronouncing dict (150 words)
+│           └── cmu_dict_compact.json   CMU pronouncing dict (108 words)
 │
-├── tests/                       pytest + pytest-qt suite (158 tests)
+├── tests/                       pytest + pytest-qt suite (289 tests; optional-data ones skip)
 │   ├── conftest.py
 │   ├── test_event_bus.py
 │   ├── test_conversation.py
 │   ├── test_screenshot.py
 │   ├── test_service*.py
 │   └── test_smoke_headless.py
+│
+├── scripts/                     Web interface tooling
+│   ├── make_face_fixture.py     Python reference values -> tests/fixtures/*.json + static/ref/*.png
+│   ├── build_static.py          Export the static site (site/) for GitHub Pages
+│   └── screenshots.py           Playwright smoke test + README shots (docs/img/)
+├── run_web.py                   Start the web app (http://127.0.0.1:8199)
+├── requirements-web.txt         Pinned deps for the web app / Pages workflow
 │
 └── tools/
     ├── faceview_monitor.py      Read-only CLI: status / chat / events /
@@ -197,6 +216,13 @@ faceView/
 
 CI: `.github/workflows/test.yml` runs pytest + the headless smoke on
 every push, archiving the screenshot as a build artefact.
+`.github/workflows/pages.yml` runs `tests/test_web.py` (incl. the node test)
+and publishes the static site to GitHub Pages on push to main.
+
+`faceview.core`, `faceview.llm` and `faceview.vision` resolve their
+re-exports lazily, so the pure modules (face_params, face_state,
+expressions, visemes, speech, personas, avatar, character, conversation,
+canned_lines, config) import without PySide6 — the web app relies on it.
 
 ## Key types
 

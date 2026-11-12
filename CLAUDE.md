@@ -10,7 +10,12 @@ so a Claude Code session can drive the GUI itself.
 
 ## Conventions
 - **Entry points**: `python -m faceview` (live), `python -m tools.run_headless`
-  (offscreen smoke), `python -m tools.capture_gui_screenshots` (README shots).
+  (offscreen smoke), `python -m tools.capture_gui_screenshots` (README shots),
+  `python run_web.py` (web interface, 127.0.0.1:8199; static export via
+  `scripts/build_static.py`). The web app imports only Qt-free modules — keep
+  `face_params`/`face_state`/`speech`/`avatar`/`character`/`canned_lines` free of
+  PySide6, and rerun `scripts/make_face_fixture.py` after changing the
+  animation code (tests/test_web.py checks the fixture is current).
 - **Threading**: GUI thread owns Qt widgets; one `QThread` per heavy stage
   (audio, video, STT, vision, LLM, server). Cross-thread comms via
   `core.event_bus.EventBus` Qt signals (`Qt.QueuedConnection`).

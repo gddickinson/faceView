@@ -1,5 +1,36 @@
 # faceView — Session Log
 
+## 2026-11-12 — Session: Web interface + static GitHub Pages site
+
+Added `src/faceview/web/` (FastAPI on 127.0.0.1:8199 via `run_web.py`, plain ES modules, no build step) and a
+static export (`scripts/build_static.py`, `.github/workflows/pages.yml`, publishes on push to main).
+
+* **Ported to JS, node-tested against Python** (`static/face_engine.test.mjs`, fixtures from
+  `scripts/make_face_fixture.py`): face_state/expressions/visemes/speech/personas (`face_engine.js`),
+  TalkingAvatar with AutoBlink/Breathing/Saccade (`avatar_engine.js`) on a CPython-compatible Mersenne Twister
+  (`mt19937.js`) so a seeded avatar matches frame by frame (300 frames, max err 1e-16), and QColor's
+  HSV/darker/lighter (`qcolor.js`, exact 8-bit match). The stylised QPainter renderer is ported to canvas
+  (`face_render.js`, `face_parts.js`); the Verify page diffs it against Python PNGs (mean |diff| ~0.5/255).
+* **Pages:** home (live face speaking scripted catchphrases), Expression studio, Lip-sync (Python timeline
+  cross-check on the local app), Visemes, Two-bot test mode (canned SEED_PROMPTS replay), Chat, Characters,
+  Desktop renders, Verify, About. Everything spoken on the static site is a scripted line from the repo.
+* **Chat** (local only): `web/chat.py` sends the character sheet + history to the Anthropic API with the
+  key from the server environment and `FACEVIEW_MODEL`; 503 without a key. Never called in tests/CI.
+* **Refactors (no behaviour change):** FaceParams moved to Qt-free `vision/face_params.py` (re-exported by
+  sim_face); `core/`, `llm/`, `vision/` `__init__` exports are lazy; test-mode canned lines moved to
+  `llm/canned_lines.py`.
+* **Fixes:** idle saccades only reached 10-20% of their target (target state rebuilt every tick; regression
+  test in test_avatar.py); body-rig regression tests now skip without the git-ignored ICT data (34 failures
+  in clean clones/CI before).
+* **Docs corrected:** README "eight characters" -> seven (characters.json has 7), test counts; INTERFACE
+  CMU dict 150 -> 108 words, characters 8 -> 7.
+* **Open for George:** the limb/body effects in the Effects panel (`arms_up`, `wave_left`, `kick_left`,
+  `body_lean_left`, ...) have no spec or handler anywhere in the repository (not on the remote branches
+  either), so those buttons do nothing and tests/test_body_rig_regression.py will fail on "no handler" where
+  the ICT data exists. Probably uncommitted local code.
+* Tests: `pytest tests` 246 passed, 43 skipped; `tests/test_web.py` 22 passed (21 + 1 Qt skip in a
+  web-only env); node test 16,565 checks.
+
 ## 2026-05-13 — Session: Three tiers of on-demand image-analysis tools
 
 User: *"Once they are done plan and implement all three tiers."* —
