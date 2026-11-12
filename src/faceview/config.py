@@ -40,7 +40,7 @@ class Settings:
         default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY")
     )
     anthropic_model: str = field(
-        default_factory=lambda: os.environ.get("FACEVIEW_MODEL", "claude-sonnet-4-6")
+        default_factory=lambda: os.environ.get("FACEVIEW_MODEL", "claude-sonnet-5-5")
     )
 
     # Server

@@ -110,7 +110,10 @@ class AnthropicEngine:
         for _step in range(4):
             kwargs: dict = {
                 "model": active_model,
-                "max_tokens": 1024,
+                # Room for adaptive thinking (on by default on Sonnet 5.5,
+                # and it counts toward max_tokens); reply length is set by
+                # the prompt, not this cap. Streaming, so no timeout risk.
+                "max_tokens": 16000,
                 "system": system,
                 "messages": messages,
             }

@@ -41,6 +41,7 @@ _PRICES_PER_MILLION: list[tuple[str, float, float]] = [
     ("opus-4-7",        15.0, 75.0),
     ("opus-4-6",        15.0, 75.0),
     ("opus-4",          15.0, 75.0),
+    ("sonnet-5-5",       2.0, 10.0),
     ("sonnet-4-6",       3.0, 15.0),
     ("sonnet-4-5",       3.0, 15.0),
     ("sonnet-4",         3.0, 15.0),

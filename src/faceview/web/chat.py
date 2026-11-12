@@ -60,7 +60,7 @@ def reply(persona: str, history: list[dict]) -> dict:
     try:
         resp = client.messages.create(
             model=settings.anthropic_model,
-            max_tokens=1024,  # replies are 1-3 spoken sentences
+            max_tokens=16000,  # room for adaptive thinking; length is set by the prompt
             system=conv.effective_system(),
             messages=messages,
         )
