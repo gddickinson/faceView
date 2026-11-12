@@ -184,3 +184,17 @@ def get_spec(name: str) -> Optional[EffectSpec]:
         if e.name == name:
             return e
     return None
+
+
+def is_implemented(name: str) -> bool:
+    """True if ``name`` has a spec *and* a handler for its stage.
+
+    The GUI disables buttons for anything else (e.g. the planned body
+    pose / limb effects, which have no spec or handler yet), so no
+    control silently does nothing.
+    """
+    spec = get_spec(name)
+    if spec is None:
+        return False
+    handlers = PRE_HANDLERS if spec.stage == Stage.PRE else POST_HANDLERS
+    return name in handlers

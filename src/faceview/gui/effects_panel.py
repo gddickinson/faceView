@@ -20,7 +20,8 @@ from PySide6.QtWidgets import (
     QTabWidget, QVBoxLayout, QWidget,
 )
 
-from faceview.vision.effects import REGISTRY, specs_by_category
+from faceview.vision.effects import REGISTRY, is_implemented, specs_by_category
+from faceview.gui.effects_panel_tabs import CameraBodyTabsMixin
 from faceview.vision.effects_runtime import get_runtime
 
 
@@ -41,7 +42,7 @@ class _TriggerButton(QPushButton):
         self.name = name
 
 
-class EffectsPanel(QDialog):
+class EffectsPanel(CameraBodyTabsMixin, QDialog):
     """Main effects-control dialog."""
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -87,6 +88,24 @@ class EffectsPanel(QDialog):
 
     # ── helpers ────────────────────────────────────────────────
 
+    def _effect_button(self, label: str, name: str, *, tooltip: str = "",
+                       use_intensity: bool = False) -> QPushButton:
+        """Trigger button for effect ``name``; disabled with a tooltip when
+        the effect has no handler yet (see ``effects.is_implemented``)."""
+        btn = _TriggerButton(name, label)
+        btn.setProperty("effect_name", name)
+        if not is_implemented(name):
+            btn.setEnabled(False)
+            btn.setToolTip(f"{name}: not implemented yet")
+            return btn
+        btn.setToolTip(tooltip or name)
+        if use_intensity:
+            btn.clicked.connect(lambda _c=False, n=name:
+                                self.runtime.trigger(n, intensity=self._intensity))
+        else:
+            btn.clicked.connect(lambda _c=False, n=name: self.runtime.trigger(n))
+        return btn
+
     def _build_category_tab(self, category: str, specs: list) -> QWidget:
         w = QWidget(self)
         scroll = QScrollArea(self)
@@ -96,12 +115,10 @@ class EffectsPanel(QDialog):
         grid.setSpacing(8)
         for i, spec in enumerate(specs):
             r, c = divmod(i, 3)
-            btn = _TriggerButton(spec.name, spec.label)
+            btn = self._effect_button(spec.label, spec.name,
+                                      tooltip=spec.description or spec.name,
+                                      use_intensity=True)
             btn.setMinimumHeight(48)
-            btn.setToolTip(spec.description or spec.name)
-            btn.clicked.connect(lambda _checked=False, n=spec.name:
-                                  self.runtime.trigger(
-                                      n, intensity=self._intensity))
             grid.addWidget(btn, r, c)
         inner.setLayout(grid)
         scroll.setWidget(inner)
@@ -197,101 +214,6 @@ class EffectsPanel(QDialog):
 
     # ── Camera tab ─────────────────────────────────────────────
 
-    def _build_camera_tab(self) -> QWidget:
-        w = QWidget(self)
-        layout = QVBoxLayout(w)
-        form = QFormLayout()
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-
-        info = QLabel(
-            "Camera orbit — rotates the whole head around its centre at\n"
-            "fixed distance, independent of the head's own talking-pose.")
-        info.setStyleSheet("color: #888; font-style: italic;")
-        layout.addWidget(info)
-
-        self._cam_sliders = []  # so reset can re-set them
-        for key, label, lo, hi, step, default in [
-            ("camera_yaw", "Camera yaw (orbit ↺ ↻)", -3.14, 3.14, 0.05, 0.0),
-            ("camera_pitch", "Camera pitch (above ↕ below)", -1.2, 1.2, 0.05, 0.0),
-            ("camera_zoom", "Camera zoom (out ↔ in)", 0.3, 5.0, 0.05, 1.0),
-            ("camera_focus_y", "Focus offset (down ↕ up)", -1.0, 1.0, 0.02, 0.0),
-        ]:
-            slider, value_label, default_val = self._labelled_slider(
-                key, lo, hi, step, default, "{:.2f}",
-            )
-            wrap = QWidget(self)
-            row = QHBoxLayout(wrap)
-            row.setContentsMargins(0, 0, 0, 0)
-            row.addWidget(slider, 1)
-            row.addWidget(value_label)
-            form.addRow(label, wrap)
-            self._cam_sliders.append((slider, default_val))
-
-        layout.addLayout(form)
-
-        # Snap-zoom buttons — preset (zoom, focus_y) combinations
-        # for common framings. Each pushes values into the runtime
-        # AND moves the corresponding sliders so they stay in sync.
-        snaps_label = QLabel("Frame:")
-        snaps_label.setStyleSheet("color: #888; font-style: italic;")
-        layout.addWidget(snaps_label)
-        snap_row = QHBoxLayout()
-        for label, zoom, focus_y in [
-            ("Head", 4.5, 0.78),
-            ("Portrait", 2.5, 0.40),
-            ("Full body", 1.0, 0.0),
-        ]:
-            btn = QPushButton(label)
-            btn.clicked.connect(
-                lambda _checked=False, z=zoom, fy=focus_y:
-                    self._snap_zoom(z, fy)
-            )
-            snap_row.addWidget(btn)
-        layout.addLayout(snap_row)
-
-        # View-angle buttons — preset (yaw, pitch) for common camera
-        # angles. Front / back / left / right circle the avatar; top
-        # and bottom look down / up at it.
-        import math as _math
-        angles_label = QLabel("View:")
-        angles_label.setStyleSheet("color: #888; font-style: italic;")
-        layout.addWidget(angles_label)
-        angle_row1 = QHBoxLayout()
-        for label, yaw, pitch in [
-            ("Front",   0.0,           0.0),
-            ("Back",    _math.pi,      0.0),
-            ("Left",   -_math.pi / 2,  0.0),
-            ("Right",   _math.pi / 2,  0.0),
-        ]:
-            btn = QPushButton(label)
-            btn.clicked.connect(
-                lambda _c=False, y=yaw, p=pitch:
-                    self._snap_view(y, p)
-            )
-            angle_row1.addWidget(btn)
-        layout.addLayout(angle_row1)
-        angle_row2 = QHBoxLayout()
-        for label, yaw, pitch in [
-            ("Top",    0.0,  -1.0),
-            ("Bottom", 0.0,   1.0),
-        ]:
-            btn = QPushButton(label)
-            btn.clicked.connect(
-                lambda _c=False, y=yaw, p=pitch:
-                    self._snap_view(y, p)
-            )
-            angle_row2.addWidget(btn)
-        layout.addLayout(angle_row2)
-
-        # Reset view button.
-        reset_view = QPushButton("Reset view (front)")
-        reset_view.clicked.connect(self._reset_camera)
-        layout.addWidget(reset_view)
-        layout.addStretch(1)
-        return w
-
-    # ── Colours tab ────────────────────────────────────────────
-
     def _build_colours_tab(self) -> QWidget:
         w = QWidget(self)
         layout = QVBoxLayout(w)
@@ -350,99 +272,6 @@ class EffectsPanel(QDialog):
         return w
 
     # ── Body tab ───────────────────────────────────────────────
-
-    def _build_body_tab(self) -> QWidget:
-        w = QWidget(self)
-        layout = QVBoxLayout(w)
-        form = QFormLayout()
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-
-        info = QLabel(
-            "Full-body avatar (CC0 from MakeHuman base mesh bundle).\n"
-            "Toggle on to attach a body below the head. The Body sex\n"
-            "slider blends body topology only; the head has its own\n"
-            "Head sex slider on the Sliders tab so you can mix-and-\n"
-            "match (or set both for a coherent look). The head still\n"
-            "tracks expression / pose; the body rotates with the\n"
-            "camera only.")
-        info.setStyleSheet("color: #888; font-style: italic;")
-        layout.addWidget(info)
-
-        for key, label, lo, hi, step, default in [
-            ("show_body",  "Show body (off ↔ on)",     0.0, 1.0, 1.0, 0.0),
-            ("body_morph", "Body sex (♀ ↔ ♂)",         -1.0, 1.0, 2.0, 1.0),
-        ]:
-            slider, value_label, _ = self._labelled_slider(
-                key, lo, hi, step, default, "{:.2f}",
-            )
-            wrap = QWidget(self)
-            row = QHBoxLayout(wrap)
-            row.setContentsMargins(0, 0, 0, 0)
-            row.addWidget(slider, 1)
-            row.addWidget(value_label)
-            form.addRow(label, wrap)
-
-        layout.addLayout(form)
-
-        # Body pose effects — full-figure rigging.
-        pose_label = QLabel("Pose effects (transient):")
-        pose_label.setStyleSheet("color: #888; font-style: italic;")
-        layout.addWidget(pose_label)
-        pose_row1 = QHBoxLayout()
-        for label, name in [
-            ("Bow",        "body_bow"),
-            ("Lean back",  "body_lean_back"),
-            ("Sway",       "body_sway"),
-        ]:
-            btn = QPushButton(label)
-            btn.clicked.connect(
-                lambda _c=False, n=name: self.runtime.trigger(n))
-            pose_row1.addWidget(btn)
-        layout.addLayout(pose_row1)
-        pose_row2 = QHBoxLayout()
-        for label, name in [
-            ("Lean L",   "body_lean_left"),
-            ("Lean R",   "body_lean_right"),
-            ("Twist L",  "body_twist_left"),
-            ("Twist R",  "body_twist_right"),
-        ]:
-            btn = QPushButton(label)
-            btn.clicked.connect(
-                lambda _c=False, n=name: self.runtime.trigger(n))
-            pose_row2.addWidget(btn)
-        layout.addLayout(pose_row2)
-
-        limbs_label = QLabel("Limb effects:")
-        limbs_label.setStyleSheet("color: #888; font-style: italic;")
-        layout.addWidget(limbs_label)
-        limb_row1 = QHBoxLayout()
-        for label, name in [
-            ("Wave L",  "wave_left"),
-            ("Wave R",  "wave_right"),
-            ("Arms up", "arms_up"),
-            ("Arms out","arms_out"),
-        ]:
-            btn = QPushButton(label)
-            btn.clicked.connect(
-                lambda _c=False, n=name: self.runtime.trigger(n))
-            limb_row1.addWidget(btn)
-        layout.addLayout(limb_row1)
-        limb_row2 = QHBoxLayout()
-        for label, name in [
-            ("Kick L",  "kick_left"),
-            ("Kick R",  "kick_right"),
-            ("Squat",   "squat"),
-        ]:
-            btn = QPushButton(label)
-            btn.clicked.connect(
-                lambda _c=False, n=name: self.runtime.trigger(n))
-            limb_row2.addWidget(btn)
-        layout.addLayout(limb_row2)
-
-        layout.addStretch(1)
-        return w
-
-    # ── Tongue tab ─────────────────────────────────────────────
 
     def _build_tongue_tab(self) -> QWidget:
         w = QWidget(self)

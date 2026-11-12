@@ -59,6 +59,9 @@ faceView/
 │   │   ├── config_dialog.py     Tabbed config (General / LLM / Avatar)
 │   │   ├── character_editor.py  Edit assets/config/characters.json live
 │   │   ├── persona_picker.py    Tabbed avatar-style picker (41 personas)
+│   │   ├── effects_panel.py     Effects dialog (FX triggers, sliders, colours, tongue);
+│   │   │                        buttons without a handler are disabled
+│   │   ├── effects_panel_tabs.py Camera + Body tabs (mixin for EffectsPanel)
 │   │   ├── screenshotter.py     widget.grab() → PNG, live + offscreen
 │   │   └── monitors/
 │   │       ├── audio.py         Rolling waveform + VAD pill
