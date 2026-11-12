@@ -98,7 +98,12 @@ class AutoBreathing:
 
 
 class AutoSaccade:
-    """Periodic small gaze shifts (max ±0.3 in eye_look_x/y)."""
+    """Periodic small gaze shifts (max ±0.3 in eye_look_x/y).
+
+    The current gaze offset is kept here (``_cur_x/_cur_y``) because the
+    avatar rebuilds its target FaceState from the baseline every tick; the
+    offset is added on top of whatever gaze the baseline carries.
+    """
 
     def __init__(self, rng: random.Random) -> None:
         self.rng = rng
@@ -106,6 +111,8 @@ class AutoSaccade:
         self._timer = 0.0
         self._target_x = 0.0
         self._target_y = 0.0
+        self._cur_x = 0.0
+        self._cur_y = 0.0
 
     def update(self, state: FaceState, dt: float) -> None:
         self._timer += dt
@@ -116,8 +123,10 @@ class AutoSaccade:
             self._next_at = self.rng.uniform(1.2, 2.6)
         # Ease toward the target — fast settling so saccades look saccadic.
         k = min(1.0, dt * 6.0)
-        state.eye_look_x += (self._target_x - state.eye_look_x) * k
-        state.eye_look_y += (self._target_y - state.eye_look_y) * k
+        self._cur_x += (self._target_x - self._cur_x) * k
+        self._cur_y += (self._target_y - self._cur_y) * k
+        state.eye_look_x += self._cur_x
+        state.eye_look_y += self._cur_y
 
 
 # ── Utterance ────────────────────────────────────────────────────────────

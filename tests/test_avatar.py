@@ -147,3 +147,27 @@ def test_au_ids_are_canonical():
         "AU1", "AU2", "AU4", "AU5", "AU6", "AU9",
         "AU12", "AU15", "AU20", "AU22", "AU25", "AU26",
     ]
+
+
+# ── idle gaze (AutoSaccade) ─────────────────────────────────────────────
+
+
+def _settled_gaze(fps: int) -> float:
+    """Hold one saccade target and return how far the rendered gaze gets."""
+    av = TalkingAvatar(seed=3)
+    av.saccade._next_at = 0.0          # fire a saccade on the first tick
+    av.blink._next = 1e9               # keep the eyes open
+    t = 0.0
+    for _ in range(fps):               # one second: long enough to settle
+        av.tick(t)
+        av.saccade._timer = 0.0        # no new saccade during the hold
+        t += 1.0 / fps
+    return av.state.eye_look_x / av.saccade._target_x
+
+
+def test_saccade_reaches_its_target_at_any_frame_rate():
+    # Regression: the target FaceState is rebuilt from the baseline every tick,
+    # so easing it toward the saccade target only ever covered dt*6 of the way
+    # (20% at 30 fps, 10% at 60 fps) instead of settling on the target.
+    for fps in (30, 60):
+        assert abs(_settled_gaze(fps) - 1.0) < 0.02, fps
