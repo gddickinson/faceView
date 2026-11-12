@@ -19,6 +19,19 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+
+def _ict_data_present() -> bool:
+    from faceview.vision.ict_face import _data_path
+    return _data_path().exists()
+
+
+# The rig is exercised through the ICT-FaceKit renderer, whose 23 MB blendshape
+# npz is git-ignored (built locally by tools/build_ict_blendshapes.py); skip like
+# tests/test_ict_face.py does when it is absent (fresh clones, CI).
+pytestmark = pytest.mark.skipif(
+    not _ict_data_present(),
+    reason="ICT-FaceKit data not built (python -m tools.build_ict_blendshapes)")
+
 ARM_LABELS = {4, 5, 6, 7, 8, 9}
 LEG_LABELS = {10, 11, 12, 13, 14, 15}
 DISP_THRESHOLD = 1.0  # units (ICT-frame); rest-pose median NN ≈ 0.74
